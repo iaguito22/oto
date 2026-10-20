@@ -3,6 +3,8 @@ package io.github.iaguito22.oto.ui.menu
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -31,11 +33,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -120,8 +124,11 @@ private data class Nav(val view: View, val depth: Int)
 /** Una canción mantenida pulsada. [list]: la lista tuya en la que está, si es una. */
 private data class Held(val song: SongItem, val list: String? = null)
 
-/** Pedir un nombre: para una lista nueva o para renombrar [rename]. */
-private data class Naming(val rename: LocalPlaylist? = null)
+/** Pedir un nombre: para una lista nueva, para renombrar [rename] o para renombrar la carpeta [folder]. */
+private data class Naming(val rename: LocalPlaylist? = null, val folder: String? = null, val newFolder: Boolean = false)
+
+/** El id con el que una carpeta suena como una lista (y se vuelve a abrir desde lo que suena). */
+const val FOLDER_PREFIX = "folder:"
 
 /**
  * Lo que sale al subir la gota: pestañas Tu música | Explorar, el buscador abajo (al alcance del pulgar) y los
@@ -141,6 +148,7 @@ fun MenuSheet(
     val history by prefs.history.collectAsStateWithLifecycle(initialValue = null)
     val playlists by prefs.playlists.collectAsStateWithLifecycle(initialValue = null)
     val liked by prefs.likedList.collectAsStateWithLifecycle(initialValue = null)
+    val pinned by prefs.pinned.collectAsStateWithLifecycle(initialValue = emptySet())
     LaunchedEffect(history, liked, playlists) {
         vm.taste = withContext(Dispatchers.Default) {
             Taste.of(history.orEmpty().asSequence() + liked?.songs.orEmpty() + playlists.orEmpty().asSequence().flatMap { it.songs })
@@ -156,6 +164,11 @@ fun MenuSheet(
     var held by remember { mutableStateOf<Held?>(null) }
     var naming by remember { mutableStateOf<Naming?>(null) }
     var listMenu by remember { mutableStateOf<LocalPlaylist?>(null) }
+    var moving by remember { mutableStateOf<LocalPlaylist?>(null) }
+    var folderMenu by remember { mutableStateOf<String?>(null) }
+    var creating by remember { mutableStateOf(false) }
+    var filling by remember { mutableStateOf<String?>(null) }
+    val folders by prefs.folders.collectAsStateWithLifecycle(initialValue = emptySet())
     var saving by remember { mutableStateOf<Saving?>(null) }
     var importing by remember { mutableStateOf(false) }
     var accounting by remember { mutableStateOf(false) }
@@ -179,7 +192,9 @@ fun MenuSheet(
         }
     }
     // Después del de arriba: con algo flotando, atrás lo cierra primero.
-    BackHandler(held != null || naming != null || listMenu != null || saving != null) { held = null; naming = null; listMenu = null; saving = null }
+    BackHandler(held != null || naming != null || listMenu != null || saving != null || moving != null || folderMenu != null || creating || filling != null) {
+        held = null; naming = null; listMenu = null; saving = null; moving = null; folderMenu = null; creating = false; filling = null
+    }
 
     val play: (SongItem) -> Unit = { focus.clearFocus(); connection.play(it); onClose() }
     val hold: (SongItem, String?) -> Unit = { song, list ->
@@ -227,10 +242,15 @@ fun MenuSheet(
             ) { nav ->
                 when (nav.view) {
                     View.Tabs -> HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
-                        if (page == 0) YourMusic(history, liked, playlists, currentId, play, onHold = { hold(it, null) }, onOpen = vm::openLocal, onNew = { naming = Naming() })
+                        if (page == 0) YourMusic(history, liked, playlists, pinned, folders, currentId, play, onHold = { hold(it, null) }, onOpen = vm::openLocal, onFolder = vm::openFolder, onNew = { creating = true },
+                            onListMenu = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); listMenu = it },
+                            onFolderMenu = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); folderMenu = it })
                         else Explore(s, currentId, play, onHold = { hold(it, null) }, onOpen = vm::open, onRetry = vm::loadHome)
                     }
-                    View.Search -> Results(s, currentId, play, onHold = { hold(it, null) }, onOpen = { focus.clearFocus(); vm.open(it) })
+                    View.Search -> Column {
+                        Filters(s.filter, vm::onFilter)
+                        Results(s, currentId, play, onHold = { hold(it, null) }, onOpen = { focus.clearFocus(); vm.open(it) })
+                    }
                     View.Page -> when (val p = s.pages.getOrNull(nav.depth - 1)) {
                         is Page.Remote -> if (p.item is ArtistItem) ArtistView(
                             p, currentId, onBack = vm::closeDetail,
@@ -243,8 +263,15 @@ fun MenuSheet(
                         )
                         is Page.Local -> LocalView(
                             if (p.id == LIKED_ID) liked else playlists?.firstOrNull { it.id == p.id }, currentId, onBack = vm::closeDetail,
-                            onPlay = { list, i -> connection.playLocal(list, i); onClose() },
+                            onPlay = { list, i, newest -> connection.playLocal(list, i, newest); onClose() },
                             onHold = { song -> hold(song, p.id) }, onMenu = { listMenu = it },
+                        )
+                        is Page.Folder -> FolderView(
+                            p.name, playlists.orEmpty().filter { it.folder == p.name }, onBack = vm::closeDetail, onOpen = vm::openLocal,
+                            onPlay = { lists -> connection.playLocal(LocalPlaylist(FOLDER_PREFIX + p.name, p.name, lists.flatMap { it.songs }.distinctBy { it.id }), null, false); onClose() },
+                            onMenu = { folderMenu = p.name },
+                            onAdd = { filling = p.name },
+                            onListMenu = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); listMenu = it },
                         )
                         null -> Unit
                     }
@@ -300,7 +327,10 @@ fun MenuSheet(
         Floating(listMenu, onDismiss = { listMenu = null }) { list ->
             ListActions(
                 list,
+                pinned = list.id in pinned,
+                onPin = { listMenu = null; scope.launch { prefs.togglePin(list.id) } },
                 onRename = { listMenu = null; naming = Naming(rename = list) },
+                onMove = { listMenu = null; moving = list },
                 onDelete = {
                     listMenu = null
                     vm.closeDetail()
@@ -309,11 +339,43 @@ fun MenuSheet(
                 },
             )
         }
+        Floating(moving, onDismiss = { moving = null }) { list ->
+            MoveTo(list, (playlists.orEmpty().mapNotNull { it.folder } + folders).distinct(), onPick = { folder ->
+                moving = null
+                scope.launch { prefs.moveToFolder(list.id, folder) }
+                notice = if (folder == null) "«${list.name}» fuera de la carpeta" else "«${list.name}» en «$folder»"
+            })
+        }
+        Floating(creating.takeIf { it }, onDismiss = { creating = false }) {
+            Text("Nueva", style = OtoType.title, color = Oto.colors.text, modifier = Modifier.padding(Space.md))
+            ActionRow(R.drawable.ic_queue_music, "Lista") { creating = false; naming = Naming() }
+            ActionRow(R.drawable.ic_create_new_folder, "Carpeta") { creating = false; naming = Naming(newFolder = true) }
+        }
+        Floating(filling, onDismiss = { filling = null }) { folder ->
+            FillFolder(folder, playlists.orEmpty()) { list, inside -> scope.launch { prefs.moveToFolder(list.id, if (inside) folder else null) } }
+        }
+        Floating(folderMenu, onDismiss = { folderMenu = null }) { folder ->
+            FolderActions(
+                folder,
+                pinned = "d:$folder" in pinned,
+                onPin = { folderMenu = null; scope.launch { prefs.togglePin("d:$folder") } },
+                onAdd = { folderMenu = null; filling = folder },
+                onRename = { folderMenu = null; naming = Naming(folder = folder) },
+                onUngroup = {
+                    folderMenu = null
+                    vm.closeDetail()
+                    scope.launch { prefs.ungroup(folder) }
+                    notice = "Carpeta «$folder» deshecha"
+                },
+            )
+        }
         Floating(naming, onDismiss = { naming = null }) { n ->
             NameField(n, onDone = { name ->
                 naming = null
                 scope.launch {
-                    if (n.rename != null) prefs.renamePlaylist(n.rename.id, name)
+                    if (n.newFolder) { prefs.createFolder(name); vm.openFolder(name.trim()) }
+                    else if (n.folder != null) { prefs.renameFolder(n.folder, name); vm.renameFolder(n.folder, name.trim()) }
+                    else if (n.rename != null) prefs.renamePlaylist(n.rename.id, name)
                     // Una lista vacía se abre: así se ve qué hacer para llenarla.
                     else vm.openLocal(prefs.createPlaylist(name))
                 }
@@ -466,6 +528,27 @@ private fun Card(item: YTItem, current: Boolean, onClick: () -> Unit, onLongClic
     }
 }
 
+/** Todo · Canciones · Artistas · Álbumes · Listas, en una fila que se desliza. */
+@Composable
+private fun Filters(selected: Filter, onSelect: (Filter) -> Unit) {
+    val c = Oto.colors
+    LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.xs), modifier = Modifier.padding(bottom = Space.xs)) {
+        items(Filter.entries, key = { it.name }) { f ->
+            val on = f == selected
+            val bg by animateColorAsState(if (on) c.accent.copy(alpha = 0.22f) else c.field, tween(Motion.EFFECTS), label = "filterBg")
+            val fg by animateColorAsState(if (on) c.accent else c.textMuted, tween(Motion.EFFECTS), label = "filterFg")
+            Text(
+                f.label, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = fg,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(bg)
+                    .clickable(remember { MutableInteractionSource() }, ripple(color = c.text)) { onSelect(f) }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
 @Composable
 private fun Results(s: MenuState, currentId: String?, play: (SongItem) -> Unit, onHold: (SongItem) -> Unit, onOpen: (YTItem) -> Unit) {
     when {
@@ -493,6 +576,32 @@ private fun kind(item: YTItem) = when (item) {
     else -> ""
 }
 
+/** Un botón redondo junto a «Reproducir». [on]: encendido (con el color de acento). */
+@Composable
+fun RoundAction(icon: Int, description: String, on: Boolean = false, onClick: () -> Unit) {
+    val c = Oto.colors
+    val bg by animateColorAsState(if (on) c.accent.copy(alpha = 0.22f) else c.field, tween(Motion.EFFECTS), label = "roundBg")
+    val tint by animateColorAsState(if (on) c.accent else c.text, tween(Motion.EFFECTS), label = "roundTint")
+    Box(
+        Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(bg)
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(painterResource(icon), description, Modifier.size(22.dp), tint = tint)
+    }
+}
+
+/** Aleatorio sí o no, como el de Spotify: vale para lo que se ponga y, si suena una lista, la rebaraja ya. */
+@Composable
+fun ShuffleButton() {
+    val connection = (LocalContext.current.applicationContext as OtoApp).player
+    val on by connection.shuffle.collectAsStateWithLifecycle()
+    RoundAction(R.drawable.ic_shuffle, "Aleatorio", on) { connection.setShuffle(!on) }
+}
+
 /** La cabecera de una página: atrás, la carátula, el nombre, una línea de datos y los botones. */
 @Composable
 private fun PageHeader(onBack: () -> Unit, art: @Composable () -> Unit, title: String, sub: String?, actions: @Composable () -> Unit) {
@@ -517,7 +626,7 @@ private fun DetailView(
     d: Page.Remote,
     currentId: String?,
     onBack: () -> Unit,
-    onPlay: (List<SongItem>, Int) -> Unit,
+    onPlay: (List<SongItem>, Int?) -> Unit,
     onHold: (SongItem) -> Unit,
     onSave: (List<SongItem>) -> Unit,
 ) {
@@ -531,20 +640,11 @@ private fun DetailView(
             }
             PageHeader(onBack, { Art(d.item.thumbnail, 112.dp, Radius.md) }, d.item.title, sub) {
                 if (!songs.isNullOrEmpty()) {
-                    Pill("Reproducir", { onPlay(songs, 0) }, icon = R.drawable.ic_play_arrow)
+                    Pill("Reproducir", { onPlay(songs, null) }, icon = R.drawable.ic_play_arrow)
+                    ShuffleButton()
                     // El álbum entero a Me gusta o a una lista tuya (o a una nueva con su nombre). Redondo: al lado
                     // de «Reproducir» no cabe otra píldora con texto.
-                    val c = Oto.colors
-                    Box(
-                        Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(c.field)
-                            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text)) { onSave(songs) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(painterResource(R.drawable.ic_add), "Guardar", Modifier.size(22.dp), tint = c.text)
-                    }
+                    RoundAction(R.drawable.ic_add, "Guardar") { onSave(songs) }
                 }
             }
         }
@@ -564,7 +664,7 @@ private fun ArtistView(
     d: Page.Remote,
     currentId: String?,
     onBack: () -> Unit,
-    onPlay: (List<SongItem>, Int) -> Unit,
+    onPlay: (List<SongItem>, Int?) -> Unit,
     play: (SongItem) -> Unit,
     onOpen: (YTItem) -> Unit,
     onHold: (SongItem) -> Unit,
@@ -583,7 +683,10 @@ private fun ArtistView(
                     if (!d.sub.isNullOrEmpty()) Text(d.sub, style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
                     if (!songs.isNullOrEmpty()) {
                         Spacer(Modifier.height(Space.md))
-                        Pill("Reproducir", { onPlay(songs, 0) }, icon = R.drawable.ic_play_arrow)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
+                            Pill("Reproducir", { onPlay(songs, null) }, icon = R.drawable.ic_play_arrow)
+                            ShuffleButton()
+                        }
                     }
                 }
             }
@@ -611,10 +714,13 @@ private fun LocalView(
     list: LocalPlaylist?,
     currentId: String?,
     onBack: () -> Unit,
-    onPlay: (LocalPlaylist, Int) -> Unit,
+    onPlay: (LocalPlaylist, Int?, Boolean) -> Unit,
     onHold: (SongItem) -> Unit,
     onMenu: (LocalPlaylist) -> Unit,
 ) {
+    val prefs = (LocalContext.current.applicationContext as OtoApp).prefs
+    val flipped by prefs.sortFlipped.collectAsStateWithLifecycle(initialValue = emptySet())
+    val scope = rememberCoroutineScope()
     if (list == null) {
         Column(Modifier.fillMaxSize().padding(horizontal = Space.sm)) {
             RoundIcon(R.drawable.ic_arrow_back, onClick = onBack)
@@ -623,10 +729,17 @@ private fun LocalView(
         return
     }
     val likes = list.id == LIKED_ID
+    // Me gusta se guarda con lo último arriba y las demás en el orden en que entraron; volteada, al revés.
+    val turned = list.id in flipped
+    val newest = likes != turned
+    val shown = remember(list, turned) { if (turned) list.copy(songs = list.songs.asReversed()) else list }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
         item(key = "head") {
             PageHeader(onBack, { if (likes) LikedArt(112.dp) else Mosaic(list.songs, 112.dp) }, list.name, count(list.songs.size)) {
-                if (list.songs.isNotEmpty()) Pill("Reproducir", { onPlay(list, 0) }, icon = R.drawable.ic_play_arrow)
+                if (list.songs.isNotEmpty()) {
+                    Pill("Reproducir", { onPlay(shown, null, newest) }, icon = R.drawable.ic_play_arrow)
+                    ShuffleButton()
+                }
                 // Me gusta no se renombra ni se borra.
                 if (!likes) RoundIcon(R.drawable.ic_more_horiz) { onMenu(list) }
             }
@@ -640,8 +753,32 @@ private fun LocalView(
                 "Mantén pulsada cualquier canción, aquí o en Explorar, y elige «Guardar en…». O mantén pulsada la carátula de lo que suena.", Modifier.height(260.dp),
             )
         }
-        itemsIndexed(list.songs, key = { _, it -> it.id }) { i, h ->
-            SongRow(h.title, h.artist, h.artwork, h.id == currentId, onClick = { onPlay(list, i) }, onLongClick = { onHold(h.toSong()) }, modifier = Modifier.animateItem())
+        if (list.songs.size > 1) item(key = "sort") {
+            SortRow(newest) { scope.launch { prefs.flipSort(list.id) } }
+        }
+        itemsIndexed(shown.songs, key = { _, it -> it.id }) { i, h ->
+            SongRow(h.title, h.artist, h.artwork, h.id == currentId, onClick = { onPlay(shown, i, newest) }, onLongClick = { onHold(h.toSong()) }, modifier = Modifier.animateItem())
+        }
+    }
+}
+
+/** «Lo último que añadiste» o «Lo primero que añadiste» arriba; tocar le da la vuelta. */
+@Composable
+private fun SortRow(newest: Boolean, onFlip: () -> Unit) {
+    val c = Oto.colors
+    val turn by animateFloatAsState(if (newest) 0f else 180f, spring(dampingRatio = 0.7f, stiffness = 500f), label = "sortTurn")
+    Row(
+        Modifier
+            .padding(start = Space.xs, bottom = Space.xs)
+            .clip(CircleShape)
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onFlip)
+            .padding(horizontal = Space.sm, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(painterResource(R.drawable.ic_swap_vert), null, Modifier.size(18.dp).graphicsLayer { rotationX = turn }, tint = c.textMuted)
+        Spacer(Modifier.width(6.dp))
+        AnimatedContent(newest, transitionSpec = { fadeIn(tween(Motion.EFFECTS)) togetherWith fadeOut(tween(Motion.EFFECTS_FAST)) }, label = "sortLabel") { n ->
+            Text(if (n) "Lo último que añadiste, arriba" else "Lo primero que añadiste, arriba", style = OtoType.rowSub, color = c.textMuted)
         }
     }
 }
@@ -695,11 +832,16 @@ private fun YourMusic(
     history: List<Heard>?,
     liked: LocalPlaylist?,
     playlists: List<LocalPlaylist>?,
+    pinned: Set<String>,
+    folders: Set<String>,
     currentId: String?,
     play: (SongItem) -> Unit,
     onHold: (SongItem) -> Unit,
     onOpen: (String) -> Unit,
+    onFolder: (String) -> Unit,
     onNew: () -> Unit,
+    onListMenu: (LocalPlaylist) -> Unit,
+    onFolderMenu: (String) -> Unit,
 ) {
     if (history == null || playlists == null || liked == null) return
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = Space.lg)) {
@@ -710,12 +852,28 @@ private fun YourMusic(
                 if (playlists.isNotEmpty()) Box(Modifier.padding(top = Space.sm)) { Pill("Nueva", onNew, filled = false, icon = R.drawable.ic_add) }
             }
         }
-        item(key = "lists") {
+        // Dos filas: arriba Me gusta y lo fijado; abajo, el resto. Una carpeta ocupa el sitio de la primera de sus listas.
+        // Las carpetas aún vacías van delante, como lo recién creado.
+        val used = playlists.mapNotNullTo(HashSet()) { it.folder }
+        val shelf = folders.filter { it !in used }.sorted().map { Shelved(it, emptyList()) } +
+            playlists.groupBy { it.folder ?: "\u0000" + it.id }.values.map { g -> Shelved(g.first().folder, g) }
+        val (top, rest) = shelf.partition { it.key in pinned }
+        val card: @Composable LazyItemScope.(Shelved) -> Unit = { e ->
+            // Mantener la carátula: sus opciones, sin tener que abrirla.
+            if (e.folder == null) PlaylistCard(e.lists.first(), onClick = { onOpen(e.lists.first().id) }, onLongClick = { onListMenu(e.lists.first()) }, modifier = Modifier.animateItem())
+            else FolderCard(e.folder, e.lists, onClick = { onFolder(e.folder) }, onLongClick = { onFolderMenu(e.folder) }, modifier = Modifier.animateItem())
+        }
+        item(key = "pinned") {
             LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                 // Me gusta va siempre la primera, aunque esté vacía: así se sabe que existe.
                 item(key = LIKED_ID) { PlaylistCard(liked, onClick = { onOpen(LIKED_ID) }) }
-                items(playlists, key = { it.id }) { p -> PlaylistCard(p, onClick = { onOpen(p.id) }, modifier = Modifier.animateItem()) }
+                items(top, key = { it.key }, itemContent = card)
                 if (playlists.isEmpty()) item(key = "new") { NewListCard(onNew) }
+            }
+        }
+        if (rest.isNotEmpty()) item(key = "rest") {
+            LazyRow(Modifier.padding(top = Space.xs), contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                items(rest, key = { it.key }, itemContent = card)
             }
         }
         item(key = "historyTitle") { SectionTitle("Oído hace poco") }
@@ -730,13 +888,13 @@ private fun YourMusic(
 }
 
 @Composable
-private fun PlaylistCard(p: LocalPlaylist, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun PlaylistCard(p: LocalPlaylist, onClick: () -> Unit, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null) {
     val c = Oto.colors
     Column(
         modifier
             .width(140.dp + Space.md)
             .clip(RoundedCornerShape(Radius.lg))
-            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
+            .combinedClickable(remember { MutableInteractionSource() }, ripple(color = c.text), onLongClick = onLongClick, onClick = onClick)
             .padding(Space.xs + 2.dp),
     ) {
         if (p.id == LIKED_ID) LikedArt(140.dp) else Mosaic(p.songs, 140.dp)
@@ -744,6 +902,144 @@ private fun PlaylistCard(p: LocalPlaylist, onClick: () -> Unit, modifier: Modifi
         Text(p.name, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(count(p.songs.size), style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
     }
+}
+
+/** Lo que va en Tus listas: una lista suelta o una carpeta ([folder]) con las suyas. */
+private data class Shelved(val folder: String?, val lists: List<LocalPlaylist>) {
+    val key get() = folder?.let { "d:$it" } ?: lists.first().id
+}
+
+/** Una carpeta: las portadas de sus primeras listas, con la marca de carpeta. */
+@Composable
+private fun FolderCard(name: String, lists: List<LocalPlaylist>, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier = Modifier) {
+    val c = Oto.colors
+    Column(
+        modifier
+            .width(140.dp + Space.md)
+            .clip(RoundedCornerShape(Radius.lg))
+            .combinedClickable(remember { MutableInteractionSource() }, ripple(color = c.text), onLongClick = onLongClick, onClick = onClick)
+            .padding(Space.xs + 2.dp),
+    ) {
+        FolderArt(lists, 140.dp)
+        Spacer(Modifier.height(Space.sm))
+        Text(name, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(folderCount(lists.size), style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
+    }
+}
+
+/** Cuatro listas en cuadrícula (cada una, su primera carátula) y la carpeta en una esquina. */
+@Composable
+private fun FolderArt(lists: List<LocalPlaylist>, size: Dp) {
+    val c = Oto.colors
+    // Vacía, solo la carpeta, grande.
+    if (lists.none { it.songs.isNotEmpty() }) {
+        Box(Modifier.size(size).clip(RoundedCornerShape(if (size < 64.dp) Radius.sm else Radius.md)).background(c.field), contentAlignment = Alignment.Center) {
+            Icon(painterResource(R.drawable.ic_folder), null, Modifier.size(size * 0.3f), tint = c.textFaint)
+        }
+        return
+    }
+    Box(Modifier.size(size)) {
+        Mosaic(lists.mapNotNull { l -> l.songs.firstOrNull { it.artwork != null } }, size)
+        Box(
+            Modifier
+                .align(Alignment.BottomStart)
+                .padding(size * 0.06f)
+                .size(size * 0.24f)
+                .clip(CircleShape)
+                .background(c.base.copy(alpha = 0.78f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(painterResource(R.drawable.ic_folder), null, Modifier.size(size * 0.13f), tint = c.text)
+        }
+    }
+}
+
+private fun folderCount(n: Int) = if (n == 1) "Carpeta · 1 lista" else "Carpeta · $n listas"
+
+/** Dentro de una carpeta: sus listas, para abrirlas, y sonar todas seguidas. */
+@Composable
+private fun FolderView(
+    name: String,
+    lists: List<LocalPlaylist>,
+    onBack: () -> Unit,
+    onOpen: (String) -> Unit,
+    onPlay: (List<LocalPlaylist>) -> Unit,
+    onMenu: () -> Unit,
+    onAdd: () -> Unit,
+    onListMenu: (LocalPlaylist) -> Unit,
+) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
+        item(key = "head") {
+            PageHeader(onBack, { FolderArt(lists, 112.dp) }, name, folderCount(lists.size)) {
+                if (lists.any { it.songs.isNotEmpty() }) {
+                    Pill("Reproducir", { onPlay(lists) }, icon = R.drawable.ic_play_arrow)
+                    ShuffleButton()
+                } else Pill("Añadir listas", onAdd, icon = R.drawable.ic_add)
+                RoundIcon(R.drawable.ic_more_horiz, onClick = onMenu)
+            }
+        }
+        if (lists.isEmpty()) item(key = "empty") {
+            Empty(R.drawable.ic_folder, "Está vacía", "Añade listas con el botón de arriba, o desde el menú (···) de cada lista.", Modifier.height(220.dp))
+        }
+        items(lists, key = { it.id }) { l ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(Radius.lg))
+                    .combinedClickable(remember { MutableInteractionSource() }, ripple(color = Oto.colors.text), onLongClick = { onListMenu(l) }) { onOpen(l.id) }
+                    .padding(horizontal = Space.sm, vertical = 6.dp)
+                    .animateItem(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Mosaic(l.songs, 52.dp)
+                Spacer(Modifier.width(Space.md))
+                Column(Modifier.weight(1f)) {
+                    Text(l.name, style = OtoType.rowTitle, color = Oto.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(count(l.songs.size), style = OtoType.rowSub, color = Oto.colors.textMuted, maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+/** Qué listas van en [folder]: todas las tuyas con su marca; las de otra carpeta dicen cuál. */
+@Composable
+private fun ColumnScope.FillFolder(folder: String, lists: List<LocalPlaylist>, onToggle: (LocalPlaylist, Boolean) -> Unit) {
+    val c = Oto.colors
+    Text(folder, style = OtoType.title, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(Space.md))
+    if (lists.isEmpty()) Text("Aún no tienes listas.", style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm))
+    LazyColumn(Modifier.heightIn(max = 420.dp)) {
+        items(lists, key = { it.id }) { l ->
+            val inside = l.folder == folder
+            ToggleRow({ Mosaic(l.songs, 40.dp) }, l.name, l.folder?.takeIf { !inside }?.let { "En «$it»" } ?: count(l.songs.size), inside) { onToggle(l, !inside) }
+        }
+    }
+}
+
+/** A qué carpeta va una lista: una de las que hay, una nueva o ninguna. */
+@Composable
+private fun ColumnScope.MoveTo(list: LocalPlaylist, folders: List<String>, onPick: (String?) -> Unit) {
+    val c = Oto.colors
+    Text(list.name, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(Space.md))
+    folders.forEach { f ->
+        ActionRow(R.drawable.ic_folder, f, trailing = if (f == list.folder) { { Icon(painterResource(R.drawable.ic_check), null, Modifier.size(20.dp), tint = c.accent) } } else null) {
+            onPick(f)
+        }
+    }
+    if (list.folder != null) ActionRow(R.drawable.ic_close, "Sacarla de «${list.folder}»") { onPick(null) }
+    Box(Modifier.padding(horizontal = Space.xs)) {
+        NewListRow("", label = "Nueva carpeta…", icon = R.drawable.ic_create_new_folder) { onPick(it) }
+    }
+}
+
+@Composable
+private fun ColumnScope.FolderActions(folder: String, pinned: Boolean, onPin: () -> Unit, onAdd: () -> Unit, onRename: () -> Unit, onUngroup: () -> Unit) {
+    Text(folder, style = OtoType.rowTitle, color = Oto.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(Space.md))
+    ActionRow(R.drawable.ic_keep, if (pinned) "Quitar de arriba" else "Fijar arriba", onClick = onPin)
+    ActionRow(R.drawable.ic_add, "Añadir o quitar listas", onClick = onAdd)
+    ActionRow(R.drawable.ic_edit, "Cambiar el nombre", onClick = onRename)
+    // Sus listas se quedan, fuera de ella.
+    ActionRow(R.drawable.ic_folder, "Deshacer la carpeta", onClick = onUngroup)
 }
 
 /** Aún sin listas: un hueco con el borde suave que invita a crear la primera. */
@@ -818,13 +1114,16 @@ private fun ColumnScope.SongActions(
 }
 
 @Composable
-private fun ColumnScope.ListActions(list: LocalPlaylist, onRename: () -> Unit, onDelete: () -> Unit) {
+private fun ColumnScope.ListActions(list: LocalPlaylist, pinned: Boolean, onPin: () -> Unit, onRename: () -> Unit, onMove: () -> Unit, onDelete: () -> Unit) {
     val c = Oto.colors
     // Borrar pide un segundo toque: no hay deshacer.
     var confirm by remember(list) { mutableStateOf(false) }
     LaunchedEffect(confirm) { if (confirm) { delay(3000); confirm = false } }
     Text(list.name, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(Space.md))
+    // Dentro de una carpeta, lo que se fija es la carpeta.
+    if (list.folder == null) ActionRow(R.drawable.ic_keep, if (pinned) "Quitar de arriba" else "Fijar arriba", onClick = onPin)
     ActionRow(R.drawable.ic_edit, "Cambiar el nombre", onClick = onRename)
+    ActionRow(R.drawable.ic_folder, if (list.folder == null) "Meter en una carpeta" else "Cambiar de carpeta", onClick = onMove)
     ActionRow(R.drawable.ic_delete, if (confirm) "Toca otra vez para borrarla" else "Borrar la lista", tint = if (confirm) Color(0xFFFF8A80) else c.text) {
         if (confirm) onDelete() else confirm = true
     }
@@ -833,12 +1132,12 @@ private fun ColumnScope.ListActions(list: LocalPlaylist, onRename: () -> Unit, o
 @Composable
 private fun ColumnScope.NameField(n: Naming, onDone: (String) -> Unit) {
     val c = Oto.colors
-    var name by remember(n) { mutableStateOf(n.rename?.name.orEmpty()) }
+    var name by remember(n) { mutableStateOf(n.folder ?: n.rename?.name.orEmpty()) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(n) { delay(120); focus.requestFocus() }
     val ok = name.isNotBlank()
     Text(
-        if (n.rename != null) "Cambiar el nombre" else "Nueva lista",
+        when { n.rename != null || n.folder != null -> "Cambiar el nombre"; n.newFolder -> "Nueva carpeta"; else -> "Nueva lista" },
         style = OtoType.title, color = c.text, modifier = Modifier.padding(start = Space.md, top = Space.md, end = Space.md),
     )
     Spacer(Modifier.height(Space.md))

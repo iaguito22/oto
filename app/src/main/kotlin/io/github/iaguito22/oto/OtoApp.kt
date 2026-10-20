@@ -22,7 +22,7 @@ import java.util.Locale
 
 class OtoApp : Application() {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    val player by lazy { PlayerConnection(this) }
+    val player by lazy { PlayerConnection(this, prefs, scope) }
     val prefs by lazy { Prefs(this) }
     val importer by lazy { Importer(prefs, scope) }
     val account by lazy { Account(this, prefs, scope) }

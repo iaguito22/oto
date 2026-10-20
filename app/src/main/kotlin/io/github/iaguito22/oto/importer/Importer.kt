@@ -85,7 +85,7 @@ class Importer(private val prefs: Prefs, private val scope: CoroutineScope) {
                 val ok = heard.filterNotNull()
                 when {
                     l.liked -> prefs.addLikedAll(ok)
-                    ok.isNotEmpty() -> prefs.importPlaylist(l.id, l.name, ok, at = saved++)
+                    ok.isNotEmpty() -> prefs.importPlaylist(l.id, l.name, ok, at = saved++, folder = l.folder)
                 }
                 songs += ok.size
             }

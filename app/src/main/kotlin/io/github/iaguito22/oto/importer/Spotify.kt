@@ -19,6 +19,8 @@ data class SourceList(
     val own: Boolean = true,
     val image: String? = null,
     val partial: Boolean = false,
+    /** La carpeta en la que la tenías en Spotify. */
+    val folder: String? = null,
 )
 
 /** De dónde salen las listas: el archivo de la extensión de Spicetify o el enlace de una lista pública. */
@@ -40,6 +42,7 @@ object Spotify {
                 liked = l.optBoolean("liked"),
                 own = l.optBoolean("own", true),
                 image = image(l.optString("image")),
+                folder = l.optString("folder").takeIf { it.isNotEmpty() && it != "null" },
                 tracks = (0 until tracks.length()).map { j ->
                     val t = tracks.getJSONObject(j)
                     val a = t.optJSONArray("a") ?: JSONArray()

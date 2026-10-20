@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.iaguito22.oto.playback.Source
 import io.github.iaguito22.oto.playback.StreamInfo
+import io.github.iaguito22.oto.ui.menu.FOLDER_PREFIX
 import io.github.iaguito22.oto.ui.menu.MenuViewModel
 import kotlin.math.tanh
 import androidx.compose.animation.AnimatedContent
@@ -178,7 +179,10 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
         haptics.performHapticFeedback(HapticFeedbackType.Confirm)
         when {
             src?.item != null -> { menu.open(src.item); sheet.open(SheetKind.Menu, origin) }
-            src?.local != null -> { menu.openLocal(src.local); sheet.open(SheetKind.Menu, origin) }
+            src?.local != null -> {
+                if (src.local.startsWith(FOLDER_PREFIX)) menu.openFolder(src.local.removePrefix(FOLDER_PREFIX)) else menu.openLocal(src.local)
+                sheet.open(SheetKind.Menu, origin)
+            }
             else -> sheet.open(SheetKind.Queue, origin)
         }
     }

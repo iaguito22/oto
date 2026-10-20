@@ -37,12 +37,16 @@ sealed interface Page {
 
     /** Una lista tuya, por su id: el contenido se lee de Prefs, que es quien la cambia. */
     data class Local(val id: String) : Page
+
+    /** Una carpeta de listas tuyas, por su nombre. */
+    data class Folder(val name: String) : Page
 }
 
 data class MenuState(
     val query: String = "",
     val searching: Boolean = false,
     val results: List<YTItem> = emptyList(),
+    val filter: Filter = Filter.All,
     val searchError: String? = null,
     val shelves: List<Shelf>? = null,
     val homeError: String? = null,
@@ -60,17 +64,23 @@ class MenuViewModel : ViewModel() {
     init {
         loadHome()
         viewModelScope.launch {
-            _state.map { it.query.trim() }
+            // Cambiar de filtro busca al momento; escribir, al parar un poco.
+            _state.map { it.query.trim() to it.filter }
                 .distinctUntilChanged()
-                .debounce(SEARCH_DEBOUNCE_MS)
-                .filter { it.length >= 2 }
-                .collect(::search)
+                .debounce { (q, f) -> if (q == lastQuery && f != lastFilter) 0L else SEARCH_DEBOUNCE_MS }
+                .filter { it.first.length >= 2 }
+                .collect { (q, f) -> search(q, f) }
         }
     }
 
     fun onQuery(q: String) = _state.update {
-        if (q.isBlank()) it.copy(query = q, results = emptyList(), searchError = null, searching = false) else it.copy(query = q, searchError = null)
+        if (q.isBlank()) it.copy(query = q, results = emptyList(), searchError = null, searching = false, filter = Filter.All) else it.copy(query = q, searchError = null)
     }
+
+    fun onFilter(f: Filter) = _state.update { it.copy(filter = f, results = emptyList(), searchError = null) }
+
+    private var lastQuery = ""
+    private var lastFilter = Filter.All
 
     fun loadHome() {
         _state.update { it.copy(homeError = null) }
@@ -102,6 +112,13 @@ class MenuViewModel : ViewModel() {
 
     fun openLocal(id: String) = _state.update { it.copy(pages = it.pages + Page.Local(id)) }
 
+    fun openFolder(name: String) = _state.update { it.copy(pages = it.pages + Page.Folder(name)) }
+
+    /** La carpeta abierta cambió de nombre: la página la sigue. */
+    fun renameFolder(old: String, name: String) = _state.update { s ->
+        s.copy(pages = s.pages.map { if (it is Page.Folder && it.name == old) Page.Folder(name) else it })
+    }
+
     /** Atrás: la página anterior. */
     fun closeDetail() = _state.update { it.copy(pages = it.pages.dropLast(1)) }
 
@@ -130,10 +147,12 @@ class MenuViewModel : ViewModel() {
         return r.getOrElse { e -> Page.Remote(item, error = e.message ?: e::class.simpleName) }
     }
 
-    private suspend fun search(q: String) {
+    private suspend fun search(q: String, f: Filter) {
+        lastQuery = q
+        lastFilter = f
         _state.update { it.copy(searching = true, searchError = null) }
-        val result = withContext(Dispatchers.IO) { Search.run(q, taste) }
-        if (_state.value.query.trim() != q) return
+        val result = withContext(Dispatchers.IO) { Search.run(q, taste, f) }
+        if (_state.value.query.trim() != q || _state.value.filter != f) return
         result
             .onSuccess { r -> _state.update { it.copy(searching = false, results = r) } }
             .onFailure { e -> _state.update { it.copy(searching = false, searchError = e.message ?: e::class.simpleName) } }

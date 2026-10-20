@@ -38,6 +38,13 @@ private val PLAYLISTS = stringPreferencesKey("playlists")
 private val REMAINING = booleanPreferencesKey("show_remaining")
 private val LIKED = stringPreferencesKey("liked")
 private val LIKES_SENT = stringSetPreferencesKey("likes_sent")
+private val SHUFFLE = booleanPreferencesKey("shuffle")
+private val SORT_FLIPPED = stringSetPreferencesKey("sort_flipped")
+private val PINNED = stringSetPreferencesKey("pinned")
+private val FOLDERS = stringSetPreferencesKey("folders")
+
+/** Lo que se fija arriba en Tus listas: el id de una lista o «d:» y el nombre de una carpeta. */
+fun pinKey(list: LocalPlaylist) = list.folder?.let { "d:$it" } ?: list.id
 
 /** El id con el que «Me gusta» se abre y suena como si fuera una lista tuya más. */
 const val LIKED_ID = "liked"
@@ -50,7 +57,7 @@ fun Heard.toSong() = SongItem(id = id, title = title, artists = listOf(Artist(ar
 fun SongItem.toHeard() = Heard(id, title, artists.joinToString { it.name }, thumbnail, artists.firstOrNull()?.id)
 
 /** Una lista tuya, guardada en el móvil. [from]: la lista de Spotify de la que se importó, si viene de una. */
-data class LocalPlaylist(val id: String, val name: String, val songs: List<Heard>, val from: String? = null)
+data class LocalPlaylist(val id: String, val name: String, val songs: List<Heard>, val from: String? = null, val folder: String? = null)
 
 /** Lo que la app recuerda entre sesiones. */
 class Prefs(private val context: Context) {
@@ -65,6 +72,36 @@ class Prefs(private val context: Context) {
 
     suspend fun setShowRemaining(on: Boolean) {
         context.store.edit { it[REMAINING] = on }
+    }
+
+    /** Aleatorio, como el botón de Spotify: vale para todo lo que se ponga hasta quitarlo. */
+    val shuffle: Flow<Boolean> = context.store.data.map { it[SHUFFLE] ?: false }.distinctUntilChanged()
+
+    suspend fun setShuffle(on: Boolean) {
+        context.store.edit { it[SHUFFLE] = on }
+    }
+
+    /**
+     * Las listas que se ven al revés de lo normal. Lo normal: Me gusta, lo último que te gustó arriba; las demás, en el
+     * orden en que entraron (como en Spotify).
+     */
+    val sortFlipped: Flow<Set<String>> = context.store.data.map { it[SORT_FLIPPED].orEmpty() }.distinctUntilChanged()
+
+    suspend fun flipSort(id: String) {
+        context.store.edit { p -> p[SORT_FLIPPED] = p[SORT_FLIPPED].orEmpty().let { if (id in it) it - id else it + id } }
+    }
+
+    val pinned: Flow<Set<String>> = context.store.data.map { it[PINNED].orEmpty() }.distinctUntilChanged()
+
+    suspend fun togglePin(key: String) {
+        context.store.edit { p -> p[PINNED] = p[PINNED].orEmpty().let { if (key in it) it - key else it + key } }
+    }
+
+    private suspend fun renamePin(old: String, new: String?) {
+        context.store.edit { p ->
+            val set = p[PINNED].orEmpty()
+            if (old in set) p[PINNED] = set - old + listOfNotNull(new)
+        }
     }
 
     val history: Flow<List<Heard>> = context.store.data.map { decode(it[HISTORY]) }
@@ -153,15 +190,53 @@ class Prefs(private val context: Context) {
      * Una lista traída de Spotify. Si ya se importó antes (mismo [from]), se rehace en su sitio con lo nuevo; si no,
      * entra en la posición [at], para que un lote quede en el mismo orden que en Spotify.
      */
-    suspend fun importPlaylist(from: String, name: String, songs: List<Heard>, at: Int) = editLists { l ->
+    suspend fun importPlaylist(from: String, name: String, songs: List<Heard>, at: Int, folder: String? = null) = editLists { l ->
         val clean = songs.distinctBy { it.id }
-        if (l.any { it.from == from }) l.map { if (it.from == from) it.copy(name = name, songs = clean) else it }
-        else l.toMutableList().apply { add(at.coerceIn(0, size), LocalPlaylist(UUID.randomUUID().toString(), name, clean, from)) }
+        if (l.any { it.from == from }) l.map { if (it.from == from) it.copy(name = name, songs = clean, folder = folder ?: it.folder) else it }
+        else l.toMutableList().apply { add(at.coerceIn(0, size), LocalPlaylist(UUID.randomUUID().toString(), name, clean, from, folder)) }
     }
 
     suspend fun renamePlaylist(id: String, name: String) = editLists { l -> l.map { if (it.id == id) it.copy(name = name.trim()) else it } }
 
-    suspend fun deletePlaylist(id: String) = editLists { l -> l.filter { it.id != id } }
+    suspend fun deletePlaylist(id: String) {
+        editLists { l -> l.filter { it.id != id } }
+        renamePin(id, null)
+    }
+
+    // ---- Carpetas: una carpeta es un nombre que comparten varias listas ----
+
+    /** Las carpetas creadas con «Nueva → Carpeta»: así existen aunque aún no tengan listas. */
+    val folders: Flow<Set<String>> = context.store.data.map { it[FOLDERS].orEmpty() }.distinctUntilChanged()
+
+    suspend fun createFolder(name: String) {
+        context.store.edit { p -> p[FOLDERS] = p[FOLDERS].orEmpty() + name.trim() }
+    }
+
+    private suspend fun forgetFolder(old: String, new: String?) {
+        context.store.edit { p -> p[FOLDERS] = p[FOLDERS].orEmpty() - old + listOfNotNull(new) }
+    }
+
+    /** A la carpeta [folder] (null: fuera de cualquiera). Entra la primera de las suyas. */
+    suspend fun moveToFolder(id: String, folder: String?) = editLists { l ->
+        val p = l.firstOrNull { it.id == id } ?: return@editLists l
+        val rest = l.filter { it.id != id }
+        val moved = p.copy(folder = folder?.trim()?.ifEmpty { null })
+        val at = rest.indexOfFirst { it.folder == moved.folder && moved.folder != null }
+        rest.toMutableList().apply { if (at >= 0) add(at, moved) else add(0, moved) }
+    }
+
+    suspend fun renameFolder(old: String, name: String) {
+        editLists { l -> l.map { if (it.folder == old) it.copy(folder = name.trim()) else it } }
+        renamePin("d:$old", "d:${name.trim()}")
+        forgetFolder(old, name.trim())
+    }
+
+    /** Deshace la carpeta: sus listas vuelven a Tus listas, no se borra ninguna. */
+    suspend fun ungroup(folder: String) {
+        editLists { l -> l.map { if (it.folder == folder) it.copy(folder = null) else it } }
+        renamePin("d:$folder", null)
+        forgetFolder(folder, null)
+    }
 
     /** Las que falten, al final y en orden. */
     suspend fun addAllToPlaylist(id: String, songs: List<Heard>) = editLists { l ->
@@ -198,14 +273,14 @@ class Prefs(private val context: Context) {
     }
 
     private fun encodeLists(list: List<LocalPlaylist>) = JSONArray().apply {
-        list.forEach { put(JSONObject().put("id", it.id).put("n", it.name).put("s", JSONArray(encode(it.songs))).put("f", it.from)) }
+        list.forEach { put(JSONObject().put("id", it.id).put("n", it.name).put("s", JSONArray(encode(it.songs))).put("f", it.from).put("d", it.folder)) }
     }.toString()
 
     private fun decodeLists(s: String?): List<LocalPlaylist> = runCatching {
         val a = JSONArray(s ?: return emptyList())
         (0 until a.length()).map { i ->
             val o = a.getJSONObject(i)
-            LocalPlaylist(o.getString("id"), o.optString("n"), decode(o.optJSONArray("s")?.toString()), o.optString("f").ifEmpty { null })
+            LocalPlaylist(o.getString("id"), o.optString("n"), decode(o.optJSONArray("s")?.toString()), o.optString("f").ifEmpty { null }, o.optString("d").ifEmpty { null })
         }
     }.getOrDefault(emptyList())
 

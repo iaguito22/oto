@@ -187,7 +187,7 @@ private fun Check(on: Boolean) {
 
 /** «Nueva lista…» se convierte en el campo del nombre sin salir de la tarjeta. */
 @Composable
-private fun NewListRow(suggested: String, onCreate: (String) -> Unit) {
+fun NewListRow(suggested: String, label: String = "Nueva lista…", icon: Int = R.drawable.ic_add, onCreate: (String) -> Unit) {
     val c = Oto.colors
     var naming by remember { mutableStateOf(false) }
     AnimatedContent(
@@ -204,10 +204,10 @@ private fun NewListRow(suggested: String, onCreate: (String) -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.size(40.dp).clip(RoundedCornerShape(Radius.md)).background(c.accent.copy(alpha = 0.22f)), contentAlignment = Alignment.Center) {
-                Icon(painterResource(R.drawable.ic_add), null, Modifier.size(22.dp), tint = c.accent)
+                Icon(painterResource(icon), null, Modifier.size(22.dp), tint = c.accent)
             }
             Spacer(Modifier.width(Space.md))
-            Text("Nueva lista…", style = OtoType.rowTitle, color = c.accent)
+            Text(label, style = OtoType.rowTitle, color = c.accent)
         } else {
             // Con nombre propuesto, el cursor al final: lo normal es dejarlo o añadirle algo.
             var name by remember { mutableStateOf(TextFieldValue(suggested, TextRange(suggested.length))) }

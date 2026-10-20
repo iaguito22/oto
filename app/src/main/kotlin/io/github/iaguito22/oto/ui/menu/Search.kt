@@ -34,7 +34,26 @@ data class Taste(val artists: Set<String> = emptySet(), val songs: Set<String> =
  * canciones, artistas y álbumes. YouTube Music da el resultado principal y unas pocas de cada tipo; la búsqueda solo de
  * canciones, en paralelo, alarga la lista. La misma canción como canción y como vídeo sale una vez, como canción.
  */
+/** Los filtros de arriba de los resultados, como en Spotify. */
+enum class Filter(val label: String) { All("Todo"), Songs("Canciones"), Artists("Artistas"), Albums("Álbumes"), Lists("Listas") }
+
 object Search {
+    /** Con un filtro, solo de ese tipo y más resultados; las canciones, con lo tuyo delante igual que en «Todo». */
+    suspend fun run(q: String, taste: Taste, filter: Filter): Result<List<YTItem>> = when (filter) {
+        Filter.All -> run(q, taste)
+        Filter.Songs -> YouTube.search(q, YouTube.SearchFilter.FILTER_SONG).map { r ->
+            rank(q, null, r.items.filterIsInstance<SongItem>(), taste)
+        }
+        Filter.Artists -> YouTube.search(q, YouTube.SearchFilter.FILTER_ARTIST).map { r -> r.items.filter { it is ArtistItem && !it.isProfile } }
+        Filter.Albums -> YouTube.search(q, YouTube.SearchFilter.FILTER_ALBUM).map { r -> r.items.filterIsInstance<AlbumItem>() }
+        Filter.Lists -> coroutineScope {
+            val community = async { YouTube.search(q, YouTube.SearchFilter.FILTER_COMMUNITY_PLAYLIST) }
+            YouTube.search(q, YouTube.SearchFilter.FILTER_FEATURED_PLAYLIST).map { r ->
+                (r.items + community.await().getOrNull()?.items.orEmpty()).filterIsInstance<PlaylistItem>().distinctBy { it.id }
+            }
+        }
+    }
+
     suspend fun run(q: String, taste: Taste): Result<List<YTItem>> = coroutineScope {
         val songs = async { YouTube.search(q, YouTube.SearchFilter.FILTER_SONG) }
         val summary = YouTube.searchSummary(q)
@@ -90,7 +109,7 @@ object Search {
         val rest = songs.filter { it.id != top?.id }
         return (listOfNotNull(top) + rest.take(3) + artists + albums + playlists + rest.drop(3))
             .distinctBy { it.id }
-            .take(MAX)
+            .take(if (page == null) MAX * 2 else MAX)
     }
 
     private const val MAX = 30

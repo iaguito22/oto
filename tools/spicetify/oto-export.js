@@ -26,8 +26,9 @@
         d: t.duration?.milliseconds ?? null,
     });
 
-    const flatten = (items, out = []) => {
-        for (const i of items) i.type === "folder" ? flatten(i.items, out) : out.push(i);
+    // Oto tiene un solo nivel de carpetas: una lista dentro de carpetas anidadas va a la de más fuera.
+    const flatten = (items, out = [], folder = null) => {
+        for (const i of items) i.type === "folder" ? flatten(i.items, out, folder ?? i.name) : out.push({ ...i, folder });
         return out;
     };
 
@@ -49,6 +50,7 @@
                 id: p.uri,
                 name: p.name,
                 own: !!p.isOwnedBySelf,
+                folder: p.folder,
                 image: image(p.images),
                 tracks: c.items.filter((t) => t.type === "track").map(track),
             });

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -23,6 +24,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.iaguito22.oto.R
 import io.github.iaguito22.oto.playback.PlayerConnection
 import io.github.iaguito22.oto.ui.menu.Empty
+import io.github.iaguito22.oto.ui.menu.ShuffleButton
 import io.github.iaguito22.oto.ui.menu.SongRow
 import io.github.iaguito22.oto.ui.theme.Oto
 import io.github.iaguito22.oto.ui.theme.OtoType
@@ -49,7 +51,15 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
     val queue by connection.queue.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize()) {
         Grab()
-        Header("A continuación", if (queue.isEmpty()) null else if (queue.size == 1) "1 canción" else "${queue.size} canciones")
+        val source by connection.source.collectAsStateWithLifecycle()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) {
+                Header("A continuación", if (queue.isEmpty()) null else if (queue.size == 1) "1 canción" else "${queue.size} canciones")
+            }
+            // Una lista se puede barajar o volver a su orden; la radio ya va a su aire.
+            val list = source != null && source?.kind != "Radio"
+            if (list) Box(Modifier.padding(end = Space.lg, top = Space.sm)) { ShuffleButton() }
+        }
         if (queue.isEmpty()) {
             Empty(R.drawable.ic_queue_music, "No hay nada detrás", "Pon una canción y la radio irá llenando esto sola.")
         } else {
