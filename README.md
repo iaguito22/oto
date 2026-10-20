@@ -8,18 +8,6 @@ En construcción. Uso personal: se instala desde el APK, no está en Play Store.
 - [InnerTubeX](https://github.com/MetrolistGroup/innertubex) para la extracción de streams
 - El módulo `innertube/` viene de [Metrolist](https://github.com/MetrolistGroup/Metrolist) (GPL-3.0)
 
-## Compilar
-
-El PoToken necesita la clave pública de la web de YouTube (la misma que usa Metrolist). Va en
-`local.properties`, que no se sube:
-
-```properties
-GOOGLE_API_KEY=AIza…
-```
-
-```sh
-JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :app:assembleDebug
-```
 
 ## Licencia
 
