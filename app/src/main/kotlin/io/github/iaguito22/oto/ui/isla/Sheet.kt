@@ -88,6 +88,7 @@ class SheetState(private val scope: CoroutineScope) {
 
     fun close() {
         if (kind == null) return
+        toDrop()
         settle?.cancel()
         val from = drag
         settle = scope.launch { animate(from, 0f, animationSpec = CLOSE) { v, _ -> drag = v } }
@@ -95,6 +96,15 @@ class SheetState(private val scope: CoroutineScope) {
             morph.animateTo(0f, CLOSE)
             kind = null
         }
+    }
+
+    /**
+     * Abierta desde arriba (el origen), se cierra igual que todas: encogiéndose en la gota. Se cambia con la hoja
+     * aún (casi) abierta del todo, donde las dos formas coinciden, así no salta; cerrada a medio abrir, vuelve por
+     * donde vino.
+     */
+    internal fun toDrop() {
+        if (morph.value > 0.85f) origin = null
     }
 
     internal fun dragBy(dy: Float) {
@@ -140,6 +150,7 @@ fun SheetHost(
     val bright = lerp(Color.White, c.accent, 0.82f)
 
     PredictiveBackHandler(enabled = true) { progress ->
+        state.toDrop()
         try {
             progress.collect { e -> state.morph.snapTo(1f - 0.16f * (1f - (1f - e.progress) * (1f - e.progress))) }
             state.close()

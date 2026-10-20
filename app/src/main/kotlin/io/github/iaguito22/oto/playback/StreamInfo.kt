@@ -31,3 +31,7 @@ object StreamInfo {
 
     fun put(id: String, q: Quality) = _quality.update { if (it[id] == q) it else it + (id to q) }
 }
+
+// Lo que se guarda con cada canción en la caché (y en las descargas): su calidad y el formato exacto (itag).
+const val QUALITY_KEY = "oto_quality"
+const val ITAG_KEY = "oto_itag"

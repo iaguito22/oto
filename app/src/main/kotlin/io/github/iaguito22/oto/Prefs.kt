@@ -45,6 +45,10 @@ private val FOLDERS = stringSetPreferencesKey("folders")
 private val CLOUD = stringPreferencesKey("cloud")
 private val QUALITY = stringPreferencesKey("audio_quality")
 private val DATA_SAVER = booleanPreferencesKey("data_saver")
+private val LOOP = booleanPreferencesKey("loop")
+private val ROMANIZE = booleanPreferencesKey("romanize")
+private val DOWNLOAD_LISTS = stringSetPreferencesKey("download_lists")
+private val DOWNLOAD_SONGS = stringPreferencesKey("download_songs")
 
 /** Lo que se fija arriba en Tus listas: el id de una lista o «d:» y el nombre de una carpeta. */
 fun pinKey(list: LocalPlaylist) = list.folder?.let { "d:$it" } ?: list.id
@@ -104,6 +108,43 @@ class Prefs(private val context: Context) {
 
     suspend fun setShuffle(on: Boolean) {
         context.store.edit { it[SHUFFLE] = on }
+    }
+
+    /** Una lista que acaba vuelve a empezar; si no, siguen canciones parecidas (como la reproducción automática). */
+    val loop: Flow<Boolean> = context.store.data.map { it[LOOP] ?: false }.distinctUntilChanged()
+
+    suspend fun setLoop(on: Boolean) {
+        context.store.edit { it[LOOP] = on }
+    }
+
+    /** La letra en otra escritura (japonés, coreano…) lleva debajo cómo se lee. */
+    val romanize: Flow<Boolean> = context.store.data.map { it[ROMANIZE] ?: true }.distinctUntilChanged()
+
+    suspend fun setRomanize(on: Boolean) {
+        context.store.edit { it[ROMANIZE] = on }
+    }
+
+    // ---- Descargas (ver Downloads): lo que pediste tener sin conexión ----
+
+    /** Las listas descargadas (también [LIKED_ID]): lo que entre en ellas se descarga también. */
+    val downloadLists: Flow<Set<String>> = context.store.data.map { it[DOWNLOAD_LISTS].orEmpty() }.distinctUntilChanged()
+
+    suspend fun setDownloadList(id: String, on: Boolean) {
+        context.store.edit { p -> p[DOWNLOAD_LISTS] = p[DOWNLOAD_LISTS].orEmpty().let { if (on) it + id else it - id } }
+    }
+
+    /** Las canciones descargadas una a una, la última primero. */
+    val downloadSongs: Flow<List<Heard>> = context.store.data.map { it[DOWNLOAD_SONGS] }.distinctUntilChanged().map(::decode)
+
+    suspend fun setDownloadSong(h: Heard, on: Boolean) {
+        context.store.edit { p ->
+            val rest = decode(p[DOWNLOAD_SONGS]).filter { it.id != h.id }
+            p[DOWNLOAD_SONGS] = encode(if (on) listOf(h) + rest else rest)
+        }
+    }
+
+    suspend fun clearDownloads() {
+        context.store.edit { it.remove(DOWNLOAD_LISTS); it.remove(DOWNLOAD_SONGS) }
     }
 
     /**
@@ -230,6 +271,7 @@ class Prefs(private val context: Context) {
     suspend fun deletePlaylist(id: String) {
         editLists { l -> l.filter { it.id != id } }
         renamePin(id, null)
+        setDownloadList(id, false)
     }
 
     // ---- Carpetas: una carpeta es un nombre que comparten varias listas ----

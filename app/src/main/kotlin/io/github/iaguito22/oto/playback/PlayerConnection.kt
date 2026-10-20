@@ -48,7 +48,7 @@ data class NowPlaying(
 data class Source(val kind: String, val title: String, val item: YTItem? = null, val local: String? = null)
 
 /** Una canción de la cola; [index] es su posición en la lista del reproductor. */
-data class QueueEntry(val index: Int, val id: String, val title: String, val artist: String, val artwork: String?)
+data class QueueEntry(val index: Int, val id: String, val title: String, val artist: String, val artwork: String?, val auto: Boolean = false)
 
 /**
  * La interfaz habla con [PlaybackService] a través de un MediaController, igual que la notificación o los auriculares.
@@ -75,6 +75,10 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     private val _shuffle = MutableStateFlow(false)
     val shuffle: StateFlow<Boolean> = _shuffle.asStateFlow()
 
+    private val _loop = MutableStateFlow(false)
+    /** Las listas en bucle (ver [Prefs.loop]). */
+    val loop: StateFlow<Boolean> = _loop.asStateFlow()
+
     // Lo que el aleatorio tiene en cuenta, siempre a mano.
     @Volatile private var liked = emptySet<String>()
     @Volatile private var heard = emptySet<String>()
@@ -88,6 +92,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
 
     init {
         scope.launch { prefs.shuffle.collect { _shuffle.value = it } }
+        scope.launch { prefs.loop.collect { _loop.value = it } }
         scope.launch { prefs.likedIds.collect { liked = it } }
         scope.launch { prefs.history.collect { h -> heard = h.mapTo(HashSet()) { it.id } } }
     }
@@ -119,6 +124,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     fun play(song: SongItem) = withController {
         _source.value = Source("Radio", song.title)
         original = null
+        it.repeatMode = Player.REPEAT_MODE_OFF
         it.setMediaItem(song.toMediaItem())
         it.prepare()
         it.play()
@@ -133,7 +139,10 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     /** Una lista tuya, tal y como se ve ([newestFirst]: lo último que entró, arriba). */
     fun playLocal(list: LocalPlaylist, start: Int?, newestFirst: Boolean) {
         if (list.songs.isEmpty()) return
-        _source.value = Source(if (list.id.startsWith("folder:")) "Tu carpeta" else "Tu lista", list.name, local = list.id)
+        _source.value = Source(
+            when { list.id.startsWith("folder:") -> "Tu carpeta"; list.id == "downloads" -> "Tus descargas"; else -> "Tu lista" },
+            list.name, local = list.id,
+        )
         val n = list.songs.size
         val age = { i: Int -> if (n == 1) 0f else (if (newestFirst) i else n - 1 - i) / (n - 1f) }
         playList(list.songs.map { h -> h.toSong().toMediaItem() }, List(n) { age(it) }, start)
@@ -144,6 +153,8 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         original = items
         ages = itemAges
         val order = if (_shuffle.value) Shuffle.order(shuffleItems(items.indices.toList()), start, liked, heard) else null
+        // Antes que la cola: el servicio mira el bucle al recibirla para decidir si seguirá con parecidas.
+        it.repeatMode = if (_loop.value) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
         it.setMediaItems(order?.map(items::get) ?: items, if (order != null) 0 else start ?: 0, 0)
         it.prepare()
         it.play()
@@ -166,6 +177,13 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         }
     }
 
+    /** Pone o quita el bucle; si suena una lista, vale ya (si no, desde la próxima). */
+    fun setLoop(on: Boolean) {
+        _loop.value = on
+        scope.launch { prefs.setLoop(on) }
+        if (original != null) withController { it.repeatMode = if (on) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF }
+    }
+
     private fun shuffleItems(indices: List<Int>) = indices.map { i ->
         val m = original!![i]
         Shuffle.Item(m.mediaId, m.mediaMetadata.artist?.toString().orEmpty(), ages.getOrNull(i))
@@ -179,6 +197,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         val before = _source.value
         _source.value = Source("DJ", "Mezcla para ti")
         original = null
+        c.repeatMode = Player.REPEAT_MODE_OFF
         val result = c.sendCustomCommand(SessionCommand(DJ_COMMAND, Bundle.EMPTY), Bundle.EMPTY)
         result.addListener({
             if (runCatching { result.get().resultCode }.getOrNull() != SessionResult.RESULT_SUCCESS) {
@@ -210,7 +229,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             publish(player)
-            if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION)) publishQueue(player)
+            if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_REPEAT_MODE_CHANGED)) publishQueue(player)
         }
     }
 
@@ -240,7 +259,9 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     }
 
     private fun publishQueue(p: Player) {
-        _queue.value = (p.currentMediaItemIndex + 1 until p.mediaItemCount).map { entry(p, it) }
+        // En bucle, detrás de la última vuelve la primera.
+        val wrap = if (p.repeatMode == Player.REPEAT_MODE_ALL) (0 until p.currentMediaItemIndex) else IntRange.EMPTY
+        _queue.value = ((p.currentMediaItemIndex + 1 until p.mediaItemCount) + wrap).map { entry(p, it) }
         _previous.value = (p.currentMediaItemIndex - 1).takeIf { it >= 0 }?.let { entry(p, it) }
     }
 
@@ -252,6 +273,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
             title = item.mediaMetadata.title?.toString().orEmpty(),
             artist = item.mediaMetadata.artist?.toString().orEmpty(),
             artwork = item.mediaMetadata.artworkUri?.toString(),
+            auto = item.isAuto,
         )
     }
 }

@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.iaguito22.oto.playback.Source
 import io.github.iaguito22.oto.playback.StreamInfo
+import io.github.iaguito22.oto.ui.menu.DOWNLOADS_ID
 import io.github.iaguito22.oto.ui.menu.FOLDER_PREFIX
 import io.github.iaguito22.oto.ui.menu.MenuViewModel
 import kotlin.math.tanh
@@ -177,10 +178,13 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
     val openSource: (Offset) -> Unit = { origin ->
         val src = connection.source.value
         haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+        // Solo esa página: atrás cierra la hoja, no vuelve a lo que quedara abierto de antes.
+        menu.closeAll()
         when {
             src?.item != null -> { menu.open(src.item); sheet.open(SheetKind.Menu, origin) }
             src?.local != null -> {
-                if (src.local.startsWith(FOLDER_PREFIX)) menu.openFolder(src.local.removePrefix(FOLDER_PREFIX)) else menu.openLocal(src.local)
+                if (src.local == DOWNLOADS_ID) menu.openDownloads()
+                else if (src.local.startsWith(FOLDER_PREFIX)) menu.openFolder(src.local.removePrefix(FOLDER_PREFIX)) else menu.openLocal(src.local)
                 sheet.open(SheetKind.Menu, origin)
             }
             else -> sheet.open(SheetKind.Queue, origin)
@@ -218,6 +222,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
     BackHandler(saving != null) { saving = null }
     val openArtist: (String, String, Offset) -> Unit = { id, name, origin ->
         haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+        menu.closeAll()
         menu.openArtist(id, name)
         sheet.open(SheetKind.Menu, origin)
     }
@@ -248,7 +253,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
     Box(Modifier.fillMaxSize().background(c.base)) {
         Backdrop(np.artwork)
         Stage(
-            np, connection, drop, lyrics, openSource, openArtist, saved, like, save, burst,
+            np, connection, drop, lyrics, openSource, openArtist, saved, like, save, burst, { flash = it },
             Modifier.graphicsLayer {
                 // Lo de detrás se aleja y se desenfoca mientras la hoja crece: hace de cristal sin capturar la pantalla.
                 val m = sheet.morph.value.coerceIn(0f, 1.2f)
@@ -348,6 +353,7 @@ private fun Stage(
     onLike: () -> Unit,
     onSave: () -> Unit,
     burst: Int,
+    onFlash: (CueLabel) -> Unit,
     modifier: Modifier,
 ) {
     val c = Oto.colors
@@ -403,7 +409,7 @@ private fun Stage(
                 contentAlignment = Alignment.Center,
                 label = "coverOrLyrics",
             ) { showLyrics ->
-                if (showLyrics) LyricsPanel(np, connection, side, side + LYRICS_EXTRA)
+                if (showLyrics) LyricsPanel(np, connection, side, side + LYRICS_EXTRA, onFlash)
                 else Box(
                     Modifier
                         .pullToOpen(canPull, pull, onOpen = { onSource(sourceCenter) })

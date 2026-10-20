@@ -40,6 +40,9 @@ sealed interface Page {
 
     /** Una carpeta de listas tuyas, por su nombre. */
     data class Folder(val name: String) : Page
+
+    /** Lo descargado. */
+    data object Downloads : Page
 }
 
 data class MenuState(
@@ -111,6 +114,9 @@ class MenuViewModel : ViewModel() {
         open(ArtistItem(id = id, title = name, thumbnail = null, shuffleEndpoint = null, radioEndpoint = null))
 
     fun openLocal(id: String) = _state.update { it.copy(pages = it.pages + Page.Local(id)) }
+
+    /** Las descargas, encima de lo que haya (o, si ya están arriba, nada). */
+    fun openDownloads() = _state.update { if (it.pages.lastOrNull() == Page.Downloads) it else it.copy(pages = it.pages + Page.Downloads) }
 
     fun openFolder(name: String) = _state.update { it.copy(pages = it.pages + Page.Folder(name)) }
 

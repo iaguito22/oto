@@ -56,12 +56,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import timber.log.Timber
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import kotlin.math.min
 import kotlin.math.pow
 
@@ -93,6 +91,10 @@ class PlaybackService : MediaSessionService() {
 
     private var radio: Radio? = null
     private var radioJob: Job? = null
+    // Lo que suena es una lista (un álbum, una tuya…) y no la radio de una canción ni el DJ.
+    private var list = false
+    // La radio de ahora es la que sigue a una lista acabada: lo que añade va marcado (ver [markAuto]).
+    private var autoplaying = false
     // Lo último que sonó (también en sesiones anteriores, desde el historial): la radio no lo vuelve a poner.
     // Por id y por título + artista, porque la misma canción suele estar como canción y como vídeo.
     private val recent = ArrayDeque<String>()
@@ -177,13 +179,14 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun dataSourceFactory(): DataSource.Factory {
-        val network = OkHttpDataSource.Factory(http)
+        val network = OkHttpDataSource.Factory(AUDIO_HTTP)
         val cached = CacheDataSource.Factory()
             .setCache(cache)
             // A trozos: de una vez, YouTube la frena a ~33 KB/s (ver [ChunkedDataSource]).
             .setUpstreamDataSourceFactory { ChunkedDataSource(network.createDataSource()) }
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-        return ResolvingDataSource.Factory(cached, ::resolve)
+        // Lo descargado, antes que nada: suena sin red y sin pedir la URL.
+        return OfflineFirstDataSource.Factory(app.downloads, ResolvingDataSource.Factory(cached, ::resolve))
     }
 
     /**
@@ -399,6 +402,28 @@ class PlaybackService : MediaSessionService() {
     private fun stopRadio() {
         radioJob?.cancel()
         radio = null
+        autoplaying = false
+    }
+
+    /**
+     * Una lista sin bucle, al acercarse a su final, sigue con canciones parecidas: la radio de la última, como la
+     * reproducción automática de Spotify. Con bucle, vuelve a empezar (eso lo hace ExoPlayer).
+     */
+    private fun autoplay() {
+        if (!list || radio != null || dj != null || player.repeatMode != Player.REPEAT_MODE_OFF || player.mediaItemCount == 0) return
+        if (player.mediaItemCount - player.currentMediaItemIndex - 1 > RADIO_AHEAD) return
+        radio = Radio(player.getMediaItemAt(player.mediaItemCount - 1).mediaId)
+        autoplaying = true
+        topUpRadio()
+    }
+
+    /** Se puso el bucle con las parecidas ya en la cola: fuera las que aún no han sonado. */
+    private fun dropAutoplay() {
+        if (!autoplaying) return
+        stopRadio()
+        for (i in player.mediaItemCount - 1 downTo player.currentMediaItemIndex + 1) {
+            if (player.getMediaItemAt(i).isAuto) player.removeMediaItem(i)
+        }
     }
 
     /** Cuando quedan [RADIO_AHEAD] canciones o menos por delante, añade la siguiente página de la radio. */
@@ -423,7 +448,7 @@ class PlaybackService : MediaSessionService() {
                     .filter { s -> s.id !in queued && s.id !in recent && sameSong(s.title, s.artists.joinToString { it.name }).let { it !in queued && it !in recent } }
                     .distinctBy { sameSong(it.title, it.artists.joinToString { a -> a.name }) }
                 if (fresh.isNotEmpty()) {
-                    player.addMediaItems(fresh.map { it.toMediaItem() })
+                    player.addMediaItems(fresh.map { if (autoplaying) it.toMediaItem().markAuto() else it.toMediaItem() })
                     Timber.d("radio: +%d", fresh.size)
                     return@launch
                 }
@@ -437,6 +462,7 @@ class PlaybackService : MediaSessionService() {
     private fun startDj(): ListenableFuture<SessionResult> {
         val done = SettableFuture.create<SessionResult>()
         stopRadio()
+        list = false
         djJob?.cancel()
         djJob = scope.launch {
             val d = withContext(Dispatchers.Default) {
@@ -518,6 +544,7 @@ class PlaybackService : MediaSessionService() {
             remember(id, sameSong(mediaItem.mediaMetadata.title?.toString().orEmpty(), mediaItem.mediaMetadata.artist?.toString().orEmpty()))
             applyLoudness()
             topUpRadio()
+            autoplay()
             topUpDj()
             countInHistory(id)
             showLike()
@@ -525,6 +552,10 @@ class PlaybackService : MediaSessionService() {
         }
 
         override fun onPlayerError(error: PlaybackException) = recover(error)
+
+        override fun onRepeatModeChanged(repeatMode: Int) {
+            if (repeatMode == Player.REPEAT_MODE_OFF) autoplay() else dropAutoplay()
+        }
 
         // Quitar o mover canciones de la cola cambia el índice de la que suena sin pasar a otra.
         override fun onTimelineChanged(timeline: Timeline, reason: Int) {
@@ -584,7 +615,9 @@ class PlaybackService : MediaSessionService() {
             // Poner una sola canción es pedir su radio detrás; una lista (álbum, playlist) suena tal cual.
             // Se lanza después de que la sesión aplique la cola nueva.
             stopDj()
-            if (items.size == 1) scope.launch(Dispatchers.Main) { startRadio(items[0].mediaId) } else stopRadio()
+            list = items.size > 1
+            // Una lista corta puede acabarse enseguida: se mira ya si toca seguir con parecidas.
+            if (items.size == 1) scope.launch(Dispatchers.Main) { startRadio(items[0].mediaId) } else { stopRadio(); scope.launch(Dispatchers.Main) { autoplay() } }
             return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(items, startIndex, startPositionMs))
         }
     }
@@ -608,15 +641,8 @@ class PlaybackService : MediaSessionService() {
         const val RADIO_PAGES = 3
         const val RECENT = 400
         const val HEARD_MS = 30_000L
-        const val QUALITY_KEY = "oto_quality"
-        const val ITAG_KEY = "oto_itag"
         const val STALL_MS = 6_000L
         const val STARTED_MS = 1_000L
-        // Con poca cobertura una respuesta tarda: mejor esperar algo más que cortar y volver a empezar la petición.
-        val http: OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
-            .build()
         const val DJ_KIND = "oto_dj"
         val LIKE = SessionCommand("io.github.iaguito22.oto.LIKE", Bundle.EMPTY)
         val DJ = SessionCommand(DJ_COMMAND, Bundle.EMPTY)

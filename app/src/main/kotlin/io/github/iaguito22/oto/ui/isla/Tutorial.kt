@@ -63,11 +63,11 @@ import kotlin.math.sin
 private class Step(val gestures: Set<Gesture>, val title: String, val body: String)
 
 private val STEPS = listOf(
-    Step(setOf(Gesture.Toggle), "Toca la gota", "Pausa y sigue."),
-    Step(setOf(Gesture.Next, Gesture.Previous), "Llévala a un lado", "A la derecha, la siguiente.\nA la izquierda, la anterior."),
+    Step(setOf(Gesture.Toggle), "Toca la gota", "Pausa la canción, o la sigue."),
+    Step(setOf(Gesture.Next, Gesture.Previous), "Llévala a un lado", "A la derecha, pasa a la siguiente canción.\nA la izquierda, vuelve a la anterior."),
     Step(setOf(Gesture.Menu), "Súbela", "El Menú: buscar, explorar y tu música."),
-    Step(setOf(Gesture.Queue), "Mantenla pulsada", "La cola: lo que suena después."),
-    Step(setOf(Gesture.Lyrics), "Bájala", "La letra de lo que suena."),
+    Step(setOf(Gesture.Queue), "Mantenla pulsada", "La cola: las canciones que vienen después."),
+    Step(setOf(Gesture.Lyrics), "Bájala", "La letra de la canción."),
 )
 
 /**

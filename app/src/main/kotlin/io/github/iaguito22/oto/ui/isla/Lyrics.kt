@@ -12,7 +12,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -60,6 +60,12 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.iaguito22.oto.OtoApp
+import io.github.iaguito22.oto.R
+import kotlinx.coroutines.launch
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
@@ -106,7 +112,7 @@ private data class Loaded(val id: String?, val lyrics: Lyrics?)
  * pronunciación debajo del japonés, chino, coreano y cirílico, y tres puntos en las pausas largas.
  */
 @Composable
-fun LyricsPanel(np: NowPlaying, connection: PlayerConnection, width: Dp, height: Dp) {
+fun LyricsPanel(np: NowPlaying, connection: PlayerConnection, width: Dp, height: Dp, onFlash: (CueLabel) -> Unit) {
     val loaded by produceState(Loaded(np.id, np.id?.let(cache::get)), np.id) {
         val id = np.id ?: run { value = Loaded(null, Lyrics.Missing); return@produceState }
         cache.get(id)?.let { value = Loaded(id, it); return@produceState }
@@ -158,7 +164,7 @@ fun LyricsPanel(np: NowPlaying, connection: PlayerConnection, width: Dp, height:
                     )
                 }
                 is Lyrics.Plain -> PlainLyrics(lyrics)
-                is Lyrics.Synced -> SyncedLyrics(id.orEmpty(), lyrics, np.playing, connection, height)
+                is Lyrics.Synced -> SyncedLyrics(id.orEmpty(), lyrics, np.playing, connection, height, onFlash)
             }
         }
     }
@@ -210,13 +216,26 @@ private fun rowsOf(lines: List<Line>): List<Row> = buildList {
 }
 
 @Composable
-private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connection: PlayerConnection, height: Dp) {
+private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connection: PlayerConnection, height: Dp, onFlash: (CueLabel) -> Unit) {
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
     val rows = remember(l) { rowsOf(l.lines) }
-    val rom by produceState(romCache.get(id), id, l) {
+    val fetched by produceState(romCache.get(id), id, l) {
         if (value != null || !LyricsSource.needsRomanization(l.lines)) return@produceState
         LyricsSource.romanize(l.lines, l.language)?.let { romCache.put(id, it); value = it }
+    }
+    // Se pide igual aunque esté quitada: así volver a ponerla es al momento.
+    val prefs = (LocalContext.current.applicationContext as OtoApp).prefs
+    val romanize by prefs.romanize.collectAsStateWithLifecycle(initialValue = true)
+    val rom = fetched?.takeIf { romanize }
+    // Mantener una línea quita o pone la romanización (solo si esta letra la tiene).
+    val toggleRom: (() -> Unit)? = if (fetched == null) null else {
+        {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            onFlash(CueLabel(R.drawable.ic_translate, if (romanize) "Sin romanización" else "Con romanización"))
+            scope.launch { prefs.setRomanize(!romanize) }
+        }
     }
 
     val clock = remember { LyricsClock() }
@@ -248,7 +267,8 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
 
     // Seguir a la línea activa: easeOutQuart de 620 ms (como en Spotify). El destino se recalcula en cada fotograma
     // porque una pausa que se abre o se cierra mueve las líneas mientras tanto. Tras arrastrar a mano, 2,5 s de calma.
-    LaunchedEffect(active, dragged, userAt, placed) {
+    // Quitar o poner la romanización cambia el alto de todas: también vuelve a buscar su sitio.
+    LaunchedEffect(active, dragged, userAt, placed, rom != null) {
         if (dragged || !placed) return@LaunchedEffect
         val wait = userAt + USER_HOLD_MS - System.currentTimeMillis()
         if (wait > 0) delay(wait)
@@ -288,7 +308,7 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
             ) {
                 when (row) {
                     is Row.Gap -> GapDots(row, dist == 0, clock)
-                    is Row.Sung -> SungLine(row.line, dist, i - max(firstActive, 0), rom?.get(row.line.text), clock) {
+                    is Row.Sung -> SungLine(row.line, dist, i - max(firstActive, 0), rom?.get(row.line.text), clock, toggleRom) {
                         haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                         connection.seekTo((row.line.start - LEAD_MS).coerceAtLeast(0))
                         userAt = 0
@@ -316,7 +336,7 @@ private fun Source(source: String, synced: Boolean) {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SungLine(line: Line, dist: Int, order: Int, rom: String?, clock: LyricsClock, onTap: () -> Unit) {
+private fun SungLine(line: Line, dist: Int, order: Int, rom: String?, clock: LyricsClock, onHold: (() -> Unit)?, onTap: () -> Unit) {
     val c = Oto.colors
     val dur = ((line.end - line.start) * 0.3).toInt().coerceIn(420, 1000)
     val alphaTarget = when {
@@ -351,7 +371,7 @@ private fun SungLine(line: Line, dist: Int, order: Int, rom: String?, clock: Lyr
                 scaleX = s; scaleY = s
                 transformOrigin = TransformOrigin(if (line.duet) 1f else 0f, 0.5f)
             }
-            .clickable(remember { MutableInteractionSource() }, null, onClick = onTap)
+            .combinedClickable(remember { MutableInteractionSource() }, null, onLongClick = onHold, onClick = onTap)
             .padding(vertical = 9.dp),
         horizontalAlignment = align,
     ) {

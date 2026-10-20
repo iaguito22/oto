@@ -63,6 +63,8 @@ fun SongRow(
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     round: Boolean = false,
+    downloaded: Boolean = false,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     val c = Oto.colors
     Row(
@@ -82,11 +84,22 @@ fun SongRow(
         Spacer(Modifier.width(Space.md))
         Column(Modifier.weight(1f)) {
             Text(title, style = OtoType.rowTitle, color = if (current) c.accent else c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(subtitle, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Descargada: una flecha pequeña delante, como en Spotify.
+                if (downloaded) {
+                    Icon(painterResource(io.github.iaguito22.oto.R.drawable.ic_download_for_offline), "Descargada", Modifier.size(14.dp), tint = c.accent)
+                    Spacer(Modifier.width(4.dp))
+                }
+                Text(subtitle, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         if (current) {
             Spacer(Modifier.width(Space.sm))
             Icon(painterResource(io.github.iaguito22.oto.R.drawable.ic_graphic_eq), null, Modifier.size(18.dp), tint = c.accent)
+        }
+        if (trailing != null) {
+            Spacer(Modifier.width(Space.xs))
+            trailing()
         }
     }
 }

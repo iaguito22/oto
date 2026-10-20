@@ -8,6 +8,8 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 import kotlin.math.min
 
 /**
@@ -88,3 +90,9 @@ class ChunkedDataSource(private val upstream: HttpDataSource, private val chunk:
         const val CHUNK_BYTES = 1L shl 20
     }
 }
+
+// Con poca cobertura una respuesta tarda: mejor esperar algo más que cortar y volver a empezar la petición.
+val AUDIO_HTTP: OkHttpClient = OkHttpClient.Builder()
+    .connectTimeout(15, TimeUnit.SECONDS)
+    .readTimeout(20, TimeUnit.SECONDS)
+    .build()

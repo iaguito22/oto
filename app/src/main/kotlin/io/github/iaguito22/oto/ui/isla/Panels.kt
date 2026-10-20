@@ -10,7 +10,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,6 +25,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.iaguito22.oto.R
 import io.github.iaguito22.oto.playback.PlayerConnection
 import io.github.iaguito22.oto.ui.menu.Empty
+import io.github.iaguito22.oto.ui.menu.LoopButton
 import io.github.iaguito22.oto.ui.menu.ShuffleButton
 import io.github.iaguito22.oto.ui.menu.SongRow
 import io.github.iaguito22.oto.ui.theme.Oto
@@ -45,6 +47,14 @@ private fun Header(title: String, sub: String?) {
     }
 }
 
+@Composable
+private fun Divider(text: String) {
+    Text(
+        text.uppercase(), style = OtoType.label, color = Oto.colors.textMuted,
+        modifier = Modifier.padding(start = Space.md, top = Space.lg, bottom = Space.xs),
+    )
+}
+
 /** Mantener la gota: lo que viene después. Tocar una salta a ella. */
 @Composable
 fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
@@ -56,16 +66,26 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
             Box(Modifier.weight(1f)) {
                 Header("A continuación", if (queue.isEmpty()) null else if (queue.size == 1) "1 canción" else "${queue.size} canciones")
             }
-            // Una lista se puede barajar o volver a su orden; la radio ya va a su aire.
+            // Una lista se puede barajar o volver a su orden, y poner en bucle; la radio ya va a su aire.
             val list = source != null && source?.kind != "Radio"
-            if (list) Box(Modifier.padding(end = Space.lg, top = Space.sm)) { ShuffleButton() }
+            if (list) Row(Modifier.padding(end = Space.lg, top = Space.sm), horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
+                if (source?.kind != "DJ") LoopButton()
+                ShuffleButton()
+            }
         }
         if (queue.isEmpty()) {
             Empty(R.drawable.ic_queue_music, "No hay nada detrás", "Pon una canción y la radio irá llenando esto sola.")
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
-                items(queue, key = { "${it.index}:${it.id}" }) { e ->
-                    SongRow(e.title, e.artist, e.artwork, current = false, onClick = { connection.skipTo(e.index); onClose() }, modifier = Modifier.animateItem())
+                // Dónde empieza lo que no es de la lista: las parecidas del final o, en bucle, la vuelta al principio.
+                val firstAuto = queue.indexOfFirst { it.auto }
+                val wrap = (1 until queue.size).firstOrNull { queue[it].index < queue[it - 1].index } ?: -1
+                itemsIndexed(queue, key = { _, e -> "${e.index}:${e.id}" }) { i, e ->
+                    Column(Modifier.animateItem()) {
+                        if (i == firstAuto) Divider("Al acabar la lista, parecidas")
+                        if (i == wrap) Divider("Y vuelve a empezar")
+                        SongRow(e.title, e.artist, e.artwork, current = false, onClick = { connection.skipTo(e.index); onClose() })
+                    }
                 }
             }
         }

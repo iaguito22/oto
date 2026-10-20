@@ -18,6 +18,7 @@ import io.github.iaguito22.oto.account.Cloud
 import io.github.iaguito22.oto.dj.Plays
 import io.github.iaguito22.oto.dj.YouTubeCatalog
 import io.github.iaguito22.oto.importer.Importer
+import io.github.iaguito22.oto.playback.Downloads
 import io.github.iaguito22.oto.playback.InnerTubeXPlayer
 import io.github.iaguito22.oto.playback.PlayerConnection
 import kotlinx.coroutines.CoroutineScope
@@ -42,8 +43,12 @@ class OtoApp : Application(), SingletonImageLoader.Factory {
     // Una SimpleCache por carpeta y proceso: vive aquí y no en el servicio, que puede recrearse.
     @get:OptIn(UnstableApi::class)
     val audioCache by lazy {
-        SimpleCache(File(cacheDir, "audio"), LeastRecentlyUsedCacheEvictor(Storage.AUDIO_BYTES), StandaloneDatabaseProvider(this))
+        SimpleCache(File(cacheDir, "audio"), LeastRecentlyUsedCacheEvictor(Storage.AUDIO_BYTES), database)
     }
+    // El índice de las cachés y de las descargas: una base de datos para todas.
+    @get:OptIn(UnstableApi::class)
+    val database by lazy { StandaloneDatabaseProvider(this) }
+    val downloads by lazy { Downloads(this) }
 
     override fun onCreate() {
         super.onCreate()
@@ -67,6 +72,7 @@ class OtoApp : Application(), SingletonImageLoader.Factory {
             }
         }
         cloud.start()
+        downloads.start(scope)
         scope.launch(Dispatchers.IO) { Storage.trimDj(File(cacheDir, "dj")) }
     }
 

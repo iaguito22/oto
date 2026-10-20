@@ -48,6 +48,15 @@ fun MediaItem.toHeard(): Heard {
 fun MediaItem.withPlaybackUri(): MediaItem =
     buildUpon().setUri(mediaId).setCustomCacheKey(mediaId).build()
 
+/** Puesta por la reproducción automática al acabarse una lista (ver PlaybackService), no por ti. */
+fun MediaItem.markAuto(): MediaItem {
+    val extras = Bundle(mediaMetadata.extras ?: Bundle.EMPTY).apply { putBoolean(AUTO, true) }
+    return buildUpon().setMediaMetadata(mediaMetadata.buildUpon().setExtras(extras).build()).build()
+}
+
+val MediaItem.isAuto get() = mediaMetadata.extras?.getBoolean(AUTO) == true
+
+const val AUTO = "oto_auto"
 const val ARTIST_NAMES = "oto_artist_names"
 const val ARTIST_IDS = "oto_artist_ids"
 
