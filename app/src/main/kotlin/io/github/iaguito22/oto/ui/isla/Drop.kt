@@ -19,7 +19,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ShaderBrush
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -158,7 +157,8 @@ fun Drop(
     }
 
     state.leanPx = with(density) { 96.dp.toPx() }
-    val shader = remember { RuntimeShader(DROP_AGSL) }
+    // La huella es el contorno de la misma gota: se estira, se parte y late igual, pero solo con un trazo fino.
+    val shader = remember(style) { RuntimeShader(if (style == DropStyle.Ring) RING_AGSL else DROP_AGSL) }
     val brush = remember(shader) { ShaderBrush(shader) }
     val px = remember(density) {
         with(density) { object {
@@ -178,8 +178,6 @@ fun Drop(
             val threshold = 52.dp.toPx()
             val kxIn = 92.dp.toPx(); val kxOut = 108.dp.toPx()
             val kyIn = 58.dp.toPx(); val kyOut = 68.dp.toPx()
-            val ring = 38.dp.toPx()
-            val ringBeat = 2.4.dp.toPx()
             val ringStroke = 3.dp.toPx()
         } }
     }
@@ -192,28 +190,23 @@ fun Drop(
             val cx = size.width / 2
             val cy = size.height / 2
             val s = state.press
-            if (style == DropStyle.Ring) {
-                // La huella: solo un aro. Va algo menos que el dedo (se nota que se lleva, sin despegarse de su sitio),
-                // late con el bombo y al pulsarlo crece y se afina un poco.
-                drawCircle(
-                    accent(),
-                    radius = (px.ring + px.ringBeat * state.pulse) * s,
-                    center = Offset(cx + state.px * 0.62f, cy + state.py * 0.62f),
-                    alpha = state.alpha * v,
-                    style = Stroke(px.ringStroke * (2f - s)),
-                )
-                return@drawBehind
-            }
+
             val wx = sin(state.phase * 1.6f) * px.wobbleX * state.wobble
             val wy = cos(state.phase * 1.3f) * px.wobbleY * state.wobble
             shader.setFloatUniform("b0", cx + state.px * 0.16f, cy + state.py * 0.16f, (px.body + px.bodyBeat * state.pulse) * s)
             shader.setFloatUniform("b1", cx + state.px * 0.52f, cy + state.py * 0.52f, px.mid * s)
             shader.setFloatUniform("b2", cx + state.px + wx, cy + state.py + wy, (px.core + px.coreBeat * state.pulse) * s)
             shader.setFloatUniform("k", px.smooth)
-            shader.setFloatUniform("soft", px.soft)
-            shader.setFloatUniform("shadowY", px.shadow)
             shader.setFloatUniform("alpha", state.alpha * v)
             val a = accent()
+            if (style == DropStyle.Ring) {
+                shader.setFloatUniform("width", px.ringStroke)
+                shader.setColorUniform("color", a.toArgb())
+                drawRect(brush, Offset(0f, -px.bleed), Size(size.width, size.height + 2 * px.bleed))
+                return@drawBehind
+            }
+            shader.setFloatUniform("soft", px.soft)
+            shader.setFloatUniform("shadowY", px.shadow)
             shader.setColorUniform("body", lerp(BodyBase, a, 0.26f).toArgb())
             shader.setColorUniform("bright", lerp(Color.White, a, 0.82f).toArgb())
             drawRect(brush, Offset(0f, -px.bleed), Size(size.width, size.height + 2 * px.bleed))
@@ -324,5 +317,28 @@ half4 main(float2 p) {
     float a = clamp(0.5 - d, 0.0, 1.0);
     half4 drop = half4(col * a, a);
     return (drop + half4(0.0, 0.0, 0.0, shade) * (1.0 - a)) * alpha;
+}
+"""
+
+/** El aro: el borde de la misma figura que [DROP_AGSL], con un trazo de [width] y sin relleno ni sombra. */
+private const val RING_AGSL = """
+uniform float3 b0;
+uniform float3 b1;
+uniform float3 b2;
+uniform float k;
+uniform float width;
+uniform float alpha;
+layout(color) uniform half4 color;
+
+float smin(float a, float b, float r) {
+    float h = max(r - abs(a - b), 0.0) / r;
+    return min(a, b) - h * h * r * 0.25;
+}
+float circle(float2 p, float3 c) { return length(p - c.xy) - c.z; }
+float field(float2 p) { return smin(smin(circle(p, b0), circle(p, b1), k), circle(p, b2), k); }
+
+half4 main(float2 p) {
+    float a = clamp(width * 0.5 - abs(field(p)) + 0.5, 0.0, 1.0) * alpha;
+    return color * a;
 }
 """
