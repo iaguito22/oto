@@ -386,6 +386,7 @@ private fun Stage(
     val titleShift = with(density) { 26.dp.roundToPx() }
     val screenW = LocalConfiguration.current.screenWidthDp.dp
     val paused by animateFloatAsState(if (np.id != null && !np.playing && !np.buffering) 1f else 0f, spring(dampingRatio = 0.62f, stiffness = 300f), label = "paused")
+    val beat by (LocalContext.current.applicationContext as OtoApp).prefs.coverBeat.collectAsStateWithLifecycle(initialValue = true)
     val source by connection.source.collectAsStateWithLifecycle()
     val next by connection.queue.collectAsStateWithLifecycle()
     val previous by connection.previousEntry.collectAsStateWithLifecycle()
@@ -448,6 +449,8 @@ private fun Stage(
                         },
                         modifier = Modifier.graphicsLayer {
                             drop.frame
+                            // El mismo latido que la gota, ya suavizado, pero mucho más pequeño.
+                            if (beat) (1f + COVER_BEAT * drop.pulse).let { scaleX = it; scaleY = it }
                             translationX = -drop.lean * side.toPx() * COVER_LEAN
                             translationY = COVER_PULL * pullOffset(pull.value, density)
                         },
@@ -909,6 +912,7 @@ private const val PEEK_SCALE = 0.86f
 // Cuánto se aparta la carátula al asomarse la de al lado, y cuánto baja con el tirón (el origen baja entero).
 private const val COVER_LEAN = 0.16f
 private const val COVER_PULL = 0.5f
+private const val COVER_BEAT = 0.022f
 // La letra es algo más alta que la carátula: debajo sobra sitio.
 private val LYRICS_EXTRA = 56.dp
 private val PROGRESS_H = 72.dp

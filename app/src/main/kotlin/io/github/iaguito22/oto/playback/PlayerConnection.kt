@@ -17,6 +17,7 @@ import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.Prefs
+import io.github.iaguito22.oto.dj.Smart
 import io.github.iaguito22.oto.toSong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -139,9 +140,11 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     /** Una lista tuya, tal y como se ve ([newestFirst]: lo último que entró, arriba). */
     fun playLocal(list: LocalPlaylist, start: Int?, newestFirst: Boolean) {
         if (list.songs.isEmpty()) return
+        // Las hechas con lo tuyo no se guardan: no hay a dónde volver desde lo que suena.
+        val smart = list.id.startsWith(Smart.PREFIX)
         _source.value = Source(
-            when { list.id.startsWith("folder:") -> "Tu carpeta"; list.id == "downloads" -> "Tus descargas"; else -> "Tu lista" },
-            list.name, local = list.id,
+            when { smart -> "Hecha con lo tuyo"; list.id.startsWith("folder:") -> "Tu carpeta"; list.id == "downloads" -> "Tus descargas"; else -> "Tu lista" },
+            list.name, local = list.id.takeUnless { smart },
         )
         val n = list.songs.size
         val age = { i: Int -> if (n == 1) 0f else (if (newestFirst) i else n - 1 - i) / (n - 1f) }

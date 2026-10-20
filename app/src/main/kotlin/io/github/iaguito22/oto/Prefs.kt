@@ -43,6 +43,7 @@ private val SHUFFLE = booleanPreferencesKey("shuffle")
 private val SORT_FLIPPED = stringSetPreferencesKey("sort_flipped")
 private val PINNED = stringSetPreferencesKey("pinned")
 private val FOLDERS = stringSetPreferencesKey("folders")
+private val SPOTS = stringPreferencesKey("shelf_spots")
 private val CLOUD = stringPreferencesKey("cloud")
 private val QUALITY = stringPreferencesKey("audio_quality")
 private val DATA_SAVER = booleanPreferencesKey("data_saver")
@@ -50,6 +51,7 @@ private val LOOP = booleanPreferencesKey("loop")
 private val CROSSFADE = intPreferencesKey("crossfade")
 private val ROMANIZE = booleanPreferencesKey("romanize")
 private val DROP_STYLE = stringPreferencesKey("drop_style")
+private val COVER_BEAT = booleanPreferencesKey("cover_beat")
 private val DOWNLOAD_LISTS = stringSetPreferencesKey("download_lists")
 private val DOWNLOAD_SONGS = stringPreferencesKey("download_songs")
 
@@ -149,6 +151,13 @@ class Prefs(private val context: Context) {
 
     suspend fun setDropStyle(style: DropStyle) {
         context.store.edit { it[DROP_STYLE] = style.name }
+    }
+
+    /** La carátula late un poco con los graves, como la gota. */
+    val coverBeat: Flow<Boolean> = context.store.data.map { it[COVER_BEAT] ?: true }.distinctUntilChanged()
+
+    suspend fun setCoverBeat(on: Boolean) {
+        context.store.edit { it[COVER_BEAT] = on }
     }
 
     // ---- Descargas (ver Downloads): lo que pediste tener sin conexión ----
@@ -293,6 +302,12 @@ class Prefs(private val context: Context) {
         else l.toMutableList().apply { add(at.coerceIn(0, size), LocalPlaylist(UUID.randomUUID().toString(), name, clean, from, folder)) }
     }
 
+    /** Tus listas en el orden de [ids] (las que no estén, detrás, como estaban). */
+    suspend fun orderLists(ids: List<String>) = editLists { l ->
+        val at = ids.withIndex().associate { (i, id) -> id to i }
+        l.sortedBy { at[it.id] ?: Int.MAX_VALUE }
+    }
+
     suspend fun renamePlaylist(id: String, name: String) = editLists { l -> l.map { if (it.id == id) it.copy(name = name.trim()) else it } }
 
     suspend fun deletePlaylist(id: String) {
@@ -305,6 +320,16 @@ class Prefs(private val context: Context) {
 
     /** Las carpetas creadas con «Nueva → Carpeta»: así existen aunque aún no tengan listas. */
     val folders: Flow<Set<String>> = context.store.data.map { it[FOLDERS].orEmpty() }.distinctUntilChanged()
+
+    /** Dónde van el DJ y Me gusta en la fila de arriba de Tus listas (por su clave); si no se han movido, delante. */
+    val spots: Flow<Map<String, Int>> = context.store.data.map { p ->
+        p[SPOTS]?.split(',')?.mapNotNull { e -> e.split(':').takeIf { it.size == 2 }?.let { (k, v) -> v.toIntOrNull()?.let { k to it } } }?.toMap()
+            ?: mapOf("dj" to 0, LIKED_ID to 1)
+    }.distinctUntilChanged()
+
+    suspend fun setSpots(spots: Map<String, Int>) {
+        context.store.edit { it[SPOTS] = spots.entries.joinToString(",") { (k, v) -> "$k:$v" } }
+    }
 
     suspend fun createFolder(name: String) {
         context.store.edit { p -> p[FOLDERS] = p[FOLDERS].orEmpty() + name.trim() }

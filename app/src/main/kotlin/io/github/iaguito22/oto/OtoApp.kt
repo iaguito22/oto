@@ -18,6 +18,7 @@ import io.github.iaguito22.oto.account.Cloud
 import io.github.iaguito22.oto.dj.Plays
 import io.github.iaguito22.oto.dj.YouTubeCatalog
 import io.github.iaguito22.oto.importer.Importer
+import io.github.iaguito22.oto.lyrics.LyricsStore
 import io.github.iaguito22.oto.playback.Downloads
 import io.github.iaguito22.oto.playback.InnerTubeXPlayer
 import io.github.iaguito22.oto.playback.PlayerConnection
@@ -39,6 +40,7 @@ class OtoApp : Application(), SingletonImageLoader.Factory {
     /** Lo que vas escuchando, para el DJ (lo escribe el servicio). */
     val plays by lazy { Plays(File(filesDir, "plays.jsonl")) }
     val djCatalog by lazy { YouTubeCatalog(File(cacheDir, "dj")) }
+    val lyrics by lazy { LyricsStore(File(cacheDir, "lyrics")) }
 
     // Una SimpleCache por carpeta y proceso: vive aquí y no en el servicio, que puede recrearse.
     @get:OptIn(UnstableApi::class)

@@ -1,7 +1,6 @@
 package io.github.iaguito22.oto.ui.isla
 
 import android.icu.text.BreakIterator
-import android.util.LruCache
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -102,10 +101,6 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
-// Ir y volver de la letra no vuelve a pedirla. Los fallos de red no se guardan.
-private val cache = LruCache<String, Lyrics>(48)
-private val romCache = LruCache<String, Map<String, String>>(48)
-
 /** La letra de una canción en concreto: así nunca se pinta la de la anterior mientras llega la nueva. */
 private data class Loaded(val id: String?, val lyrics: Lyrics?)
 
@@ -116,23 +111,25 @@ private data class Loaded(val id: String?, val lyrics: Lyrics?)
  */
 @Composable
 fun LyricsPanel(np: NowPlaying, connection: PlayerConnection, width: Dp, height: Dp, onFlash: (CueLabel) -> Unit) {
-    val loaded by produceState(Loaded(np.id, np.id?.let(cache::get)), np.id) {
+    // Casi siempre ya la ha pedido el servicio al empezar la canción ([LyricsStore]).
+    val store = (LocalContext.current.applicationContext as OtoApp).lyrics
+    val loaded by produceState(Loaded(np.id, np.id?.let(store::peek)), np.id) {
         val id = np.id ?: run { value = Loaded(null, Lyrics.Missing); return@produceState }
-        cache.get(id)?.let { value = Loaded(id, it); return@produceState }
+        store.peek(id)?.let { value = Loaded(id, it); return@produceState }
         value = Loaded(id, null)
         val q = LyricsQuery(id, np.title, np.artist, np.album, np.durationMs)
-        var r = LyricsSource.fetch(q)
+        var r = store.get(q)
         value = Loaded(id, r.lyrics ?: Lyrics.Missing)
         // Si alguna fuente no contestó (sin red, cupo agotado) se vuelve a preguntar un par de veces, y solo se
         // cambia si llega algo mejor: así no se queda sin sincronizar por un fallo pasajero.
         for (wait in RETRY_MS) {
             if (r.final) break
             delay(wait)
-            val again = LyricsSource.fetch(q)
+            val again = store.get(q)
             if (rank(again.lyrics) > rank(value.lyrics)) value = Loaded(id, again.lyrics)
             r = again
         }
-        if (r.final) value.lyrics?.let { cache.put(id, it) }
+        if (r.final) value.lyrics?.let { store.put(id, it) }
     }
     val current = if (loaded.id == np.id) loaded else Loaded(np.id, null)
     val c = Oto.colors
@@ -224,12 +221,13 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val rows = remember(l) { rowsOf(l.lines) }
-    val fetched by produceState(romCache.get(id), id, l) {
+    val app = LocalContext.current.applicationContext as OtoApp
+    val fetched by produceState(app.lyrics.peekRomanized(id), id, l) {
         if (value != null || !LyricsSource.needsRomanization(l.lines)) return@produceState
-        LyricsSource.romanize(l.lines, l.language)?.let { romCache.put(id, it); value = it }
+        app.lyrics.romanized(id, l)?.let { value = it }
     }
     // Se pide igual aunque esté quitada: así volver a ponerla es al momento.
-    val prefs = (LocalContext.current.applicationContext as OtoApp).prefs
+    val prefs = app.prefs
     val romanize by prefs.romanize.collectAsStateWithLifecycle(initialValue = true)
     // Mantener una línea quita o pone la romanización (solo si esta letra la tiene).
     val toggleRom: (() -> Unit)? = if (fetched == null) null else {

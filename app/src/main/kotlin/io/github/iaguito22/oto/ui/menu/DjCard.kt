@@ -2,7 +2,7 @@ package io.github.iaguito22.oto.ui.menu
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,13 +39,13 @@ import io.github.iaguito22.oto.ui.theme.Space
 
 /** El DJ en Tu música, junto a Me gusta: un disco que gira mientras pincha. */
 @Composable
-fun DjCard(spinning: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun DjCard(spinning: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null) {
     val c = Oto.colors
     Column(
         modifier
             .width(140.dp + Space.md)
             .clip(RoundedCornerShape(Radius.lg))
-            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
+            .combinedClickable(remember { MutableInteractionSource() }, ripple(color = c.text), onLongClick = onLongClick, onClick = onClick)
             .padding(Space.xs + 2.dp),
     ) {
         DjArt(140.dp, spinning)

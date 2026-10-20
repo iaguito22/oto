@@ -36,8 +36,8 @@ import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
-import io.github.iaguito22.oto.MainActivity
 import com.metrolist.innertube.YouTube
+import io.github.iaguito22.oto.MainActivity
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.QualityMode
 import io.github.iaguito22.oto.dj.Dj
@@ -47,6 +47,9 @@ import io.github.iaguito22.oto.dj.Play
 import io.github.iaguito22.oto.dj.Profile
 import io.github.iaguito22.oto.dj.Track
 import io.github.iaguito22.oto.importer.songKey
+import io.github.iaguito22.oto.lyrics.Lyrics
+import io.github.iaguito22.oto.lyrics.LyricsQuery
+import io.github.iaguito22.oto.lyrics.LyricsSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -587,6 +590,27 @@ class PlaybackService : MediaSessionService() {
 
     private fun sameSong(title: String, artist: String) = "~" + songKey(title, artist)
 
+    private var lyricsJob: Job? = null
+    private var lyricsFor: String? = null
+
+    /**
+     * La letra de la que suena, pedida ya (con la duración, que hace falta para no equivocarse de versión): abrirla
+     * luego es al momento. Tras un par de segundos, para no gastar el cupo de lyricsplus pasando canciones.
+     */
+    private fun fetchLyrics() {
+        val item = player.currentMediaItem ?: return
+        if (item.mediaId == lyricsFor) return
+        lyricsFor = item.mediaId
+        lyricsJob?.cancel()
+        val m = item.mediaMetadata
+        val q = LyricsQuery(item.mediaId, m.title?.toString().orEmpty(), m.artist?.toString().orEmpty(), m.albumTitle?.toString(), player.duration)
+        lyricsJob = scope.launch {
+            delay(LYRICS_DELAY_MS)
+            val l = runCatching { app.lyrics.get(q) }.getOrNull()?.lyrics
+            if (l is Lyrics.Synced && LyricsSource.needsRomanization(l.lines)) runCatching { app.lyrics.romanized(q.id, l) }
+        }
+    }
+
     private val listener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val id = mediaItem?.mediaId ?: return
@@ -625,7 +649,10 @@ class PlaybackService : MediaSessionService() {
         override fun onPlaybackStateChanged(state: Int) {
             val id = player.currentMediaItem?.mediaId ?: return
             if (state == Player.STATE_BUFFERING && player.currentPosition <= STARTED_MS) watchStart() else if (state != Player.STATE_BUFFERING) stallJob?.cancel()
-            if (state == Player.STATE_READY && player.duration > 0) durations[id] = player.duration
+            if (state == Player.STATE_READY && player.duration > 0) {
+                durations[id] = player.duration
+                fetchLyrics()
+            }
         }
 
         override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
@@ -705,6 +732,7 @@ class PlaybackService : MediaSessionService() {
         const val STARTED_MS = 1_000L
         const val AHEAD = 3
         const val PREFETCH_DELAY_MS = 4_000L
+        const val LYRICS_DELAY_MS = 2_000L
         // Un trozo ([ChunkedDataSource]): casi un minuto en alta, de sobra para que empiece al momento.
         const val HEAD_BYTES = ChunkedDataSource.CHUNK_BYTES
         const val DJ_KIND = "oto_dj"

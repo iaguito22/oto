@@ -3,6 +3,9 @@ package io.github.iaguito22.oto.lyrics
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.WatchEndpoint
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -14,6 +17,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.GZIPInputStream
 import kotlin.math.abs
 import kotlin.math.max
@@ -39,27 +43,35 @@ object LyricsSource {
     data class Fetched(val lyrics: Lyrics?, val final: Boolean)
 
     suspend fun fetch(q: LyricsQuery): Fetched = withContext(Dispatchers.IO) {
-        var transient = false
+        val transient = AtomicBoolean(false)
         suspend fun <T> attempt(name: String, block: suspend () -> T?): T? = try {
             block()
         } catch (e: IOException) {
             Timber.w(e, "Letra: $name no contesta")
-            transient = true
+            transient.set(true)
             null
         } catch (e: Exception) {
             Timber.w(e, "Letra: $name falló")
             null
         }
         val title = cleanTitle(q.title)
-        val lp = attempt("lyricsplus") { lyricsPlus(title, q) }
+        // Las tres a la vez: una tras otra eran hasta 15 s cuando lyricsplus no la tenía (LRCLIB tarda a veces 9).
+        // Se sigue eligiendo en el mismo orden; lo que sobra se descarta.
+        // Van en [background] porque una petición en curso no se puede cortar: así no hay que esperarlas.
+        val lpA = background.async { attempt("lyricsplus") { lyricsPlus(title, q) } }
+        val neA = background.async { attempt("netease") { netease(title, q) } }
+        val lrcA = background.async { attempt("lrclib") { lrclib(title, q) } }
+        val lp = lpA.await()
         if (lp.byWord()) return@withContext Fetched(lp, true)
-        val ne = attempt("netease") { netease(title, q) }
+        val ne = neA.await()
         if (ne.byWord()) return@withContext Fetched(ne, true)
-        val lrc = attempt("lrclib") { lrclib(title, q) }
-        listOf(lp, lrc, ne).firstOrNull { it is Lyrics.Synced }?.let { return@withContext Fetched(it, !transient) }
+        val lrc = lrcA.await()
+        listOf(lp, lrc, ne).firstOrNull { it is Lyrics.Synced }?.let { return@withContext Fetched(it, !transient.get()) }
         val plain = listOf(lp, lrc).firstOrNull { it is Lyrics.Plain } ?: attempt("youtube") { youtube(q.id) }
-        Fetched(plain ?: if (transient) null else Lyrics.Missing, !transient)
+        Fetched(plain ?: if (transient.get()) null else Lyrics.Missing, !transient.get())
     }
+
+    private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private fun Lyrics?.byWord() = this is Lyrics.Synced && wordByWord
 

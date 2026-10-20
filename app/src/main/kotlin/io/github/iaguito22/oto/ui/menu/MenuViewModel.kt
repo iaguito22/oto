@@ -8,6 +8,7 @@ import com.metrolist.innertube.models.ArtistItem
 import com.metrolist.innertube.models.PlaylistItem
 import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
+import io.github.iaguito22.oto.LocalPlaylist
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +44,9 @@ sealed interface Page {
 
     /** Lo descargado. */
     data object Downloads : Page
+
+    /** Una lista hecha con lo tuyo ([io.github.iaguito22.oto.dj.Smart]), tal y como estaba al abrirla. */
+    data class Smart(val list: LocalPlaylist) : Page
 }
 
 data class MenuState(
@@ -117,6 +121,8 @@ class MenuViewModel : ViewModel() {
 
     /** Las descargas, encima de lo que haya (o, si ya están arriba, nada). */
     fun openDownloads() = _state.update { if (it.pages.lastOrNull() == Page.Downloads) it else it.copy(pages = it.pages + Page.Downloads) }
+
+    fun openSmart(list: LocalPlaylist) = _state.update { it.copy(pages = it.pages + Page.Smart(list)) }
 
     fun openFolder(name: String) = _state.update { it.copy(pages = it.pages + Page.Folder(name)) }
 
