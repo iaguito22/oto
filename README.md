@@ -10,6 +10,13 @@ En construcción. Uso personal: se instala desde el APK, no está en Play Store.
 
 ## Compilar
 
+El PoToken necesita la clave pública de la web de YouTube (la misma que usa Metrolist). Va en
+`local.properties`, que no se sube:
+
+```properties
+GOOGLE_API_KEY=AIza…
+```
+
 ```sh
 JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :app:assembleDebug
 ```
