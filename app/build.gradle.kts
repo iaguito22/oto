@@ -6,6 +6,9 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// Claves que no van al repo: la del PoToken y la de firmar las releases.
+val local = Properties().apply { rootProject.file("local.properties").takeIf { it.exists() }?.reader()?.use(::load) }
+
 android {
     namespace = "io.github.iaguito22.oto"
     compileSdk = 37
@@ -16,12 +19,22 @@ android {
         minSdk = 33
         targetSdk = 36
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.1.0-beta"
 
         // La clave del PoToken va en local.properties (o en la variable de entorno), nunca en el repo.
-        val local = Properties().apply { rootProject.file("local.properties").takeIf { it.exists() }?.reader()?.use(::load) }
         val googleApiKey = local.getProperty("GOOGLE_API_KEY") ?: System.getenv("GOOGLE_API_KEY").orEmpty()
         buildConfigField("String", "GOOGLE_API_KEY", "\"$googleApiKey\"")
+    }
+
+    // Sin la clave (otro ordenador, CI), la release sale sin firmar.
+    val releaseKey = local.getProperty("OTO_KEYSTORE")?.let(::file)?.takeIf { it.exists() }
+    signingConfigs {
+        if (releaseKey != null) create("release") {
+            storeFile = releaseKey
+            storePassword = local.getProperty("OTO_KEYSTORE_PASSWORD")
+            keyAlias = local.getProperty("OTO_KEY_ALIAS")
+            keyPassword = local.getProperty("OTO_KEYSTORE_PASSWORD")
+        }
     }
 
     buildTypes {
@@ -32,6 +45,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
         // La release tal cual (R8 incluido) firmada con la clave de debug: para medir rendimiento en el móvil.
         create("bench") {
