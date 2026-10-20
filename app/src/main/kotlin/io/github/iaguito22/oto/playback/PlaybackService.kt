@@ -31,9 +31,16 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.SettableFuture
 import io.github.iaguito22.oto.MainActivity
 import com.metrolist.innertube.YouTube
 import io.github.iaguito22.oto.OtoApp
+import io.github.iaguito22.oto.dj.Dj
+import io.github.iaguito22.oto.dj.Kind
+import io.github.iaguito22.oto.dj.Memory
+import io.github.iaguito22.oto.dj.Play
+import io.github.iaguito22.oto.dj.Profile
+import io.github.iaguito22.oto.dj.Track
 import io.github.iaguito22.oto.importer.songKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +54,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import timber.log.Timber
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.min
@@ -77,8 +85,14 @@ class PlaybackService : MediaSessionService() {
     // Por id y por título + artista, porque la misma canción suele estar como canción y como vídeo.
     private val recent = ArrayDeque<String>()
 
-    private val prefs by lazy { (application as OtoApp).prefs }
+    private val app by lazy { application as OtoApp }
+    private val prefs by lazy { app.prefs }
     private var liked = emptySet<String>()
+
+    private var dj: Dj? = null
+    private var djJob: Job? = null
+    // Lo que dura cada una, para saber qué parte se oyó al pasar a otra.
+    private val durations = HashMap<String, Long>()
 
     override fun onCreate() {
         super.onCreate()
@@ -334,6 +348,68 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    // --- DJ ---
+
+    /** Arranca el DJ (ver [Dj]): la primera suena al momento y el resto se elige de una en una, sobre la marcha. */
+    private fun startDj(): ListenableFuture<SessionResult> {
+        val done = SettableFuture.create<SessionResult>()
+        stopRadio()
+        djJob?.cancel()
+        djJob = scope.launch {
+            val d = withContext(Dispatchers.Default) {
+                val profile = Profile(prefs.playlists.first(), prefs.liked.first(), prefs.history.first(), app.plays.all(), System.currentTimeMillis())
+                Dj(profile, app.djCatalog, Memory(File(filesDir, "dj.json")), scope, log = { Timber.tag("dj").d(it) })
+            }
+            val first = d.start()
+            if (first == null) {
+                done.set(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+                return@launch
+            }
+            dj = d
+            Timber.tag("dj").d("%s: %s — %s", d.picks.last().kind, first.artist, first.title)
+            player.setMediaItems(listOf(first.toDjItem(d)))
+            player.prepare()
+            player.play()
+            done.set(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+        djJob?.invokeOnCompletion { scope.launch { topUpDj() } }
+        return done
+    }
+
+    private fun stopDj() {
+        djJob?.cancel()
+        dj = null
+    }
+
+    /** Siempre una por delante: lo justo para que no haya silencio y la siguiente ya sepa lo que pasaste. */
+    private fun topUpDj() {
+        val d = dj ?: return
+        if (djJob?.isActive == true || player.mediaItemCount - player.currentMediaItemIndex - 1 >= 1) return
+        djJob = scope.launch {
+            val t = d.next() ?: return@launch
+            if (dj !== d) return@launch
+            player.addMediaItem(t.toDjItem(d))
+            Timber.tag("dj").d("%s: %s — %s", d.picks.last().kind, t.artist, t.title)
+        }
+    }
+
+    private fun Track.toDjItem(d: Dj): MediaItem {
+        val item = toSong().toMediaItem()
+        val extras = Bundle(item.mediaMetadata.extras ?: Bundle.EMPTY).apply { putString(DJ_KIND, d.picks.last().kind.name) }
+        return item.buildUpon().setMediaMetadata(item.mediaMetadata.buildUpon().setExtras(extras).build()).build()
+    }
+
+    /** Lo que se oyó de [item] antes de pasar a otra: al diario (de lo que aprende el DJ) y, si es suya, al DJ. */
+    private fun logPlay(item: MediaItem, ms: Long) {
+        val dur = durations[item.mediaId] ?: item.mediaMetadata.durationMs ?: 0L
+        val kind = item.mediaMetadata.extras?.getString(DJ_KIND)?.let { k -> Kind.entries.firstOrNull { it.name == k } }
+        if (kind == null && ms < 1_000) return
+        val h = item.toHeard()
+        val play = Play(h.id, h.title, h.artist, h.artistId, System.currentTimeMillis(), ms, dur, kind)
+        scope.launch(Dispatchers.IO) { app.plays.add(play) }
+        if (kind != null) dj?.heard(item.mediaId, ms, dur)
+    }
+
     private fun remember(vararg keys: String) {
         for (k in keys) {
             recent.remove(k)
@@ -348,22 +424,36 @@ class PlaybackService : MediaSessionService() {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val id = mediaItem?.mediaId ?: return
             retries.keys.retainAll(setOf(id))
+            durations.keys.retainAll(setOf(id) + (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet())
             remember(id, sameSong(mediaItem.mediaMetadata.title?.toString().orEmpty(), mediaItem.mediaMetadata.artist?.toString().orEmpty()))
             applyLoudness()
             topUpRadio()
+            topUpDj()
             countInHistory(id)
             showLike()
             scope.launch(Dispatchers.IO) { prefs.addHeard(mediaItem.toHeard()) }
         }
 
         override fun onPlayerError(error: PlaybackException) = recover(error)
+
+        override fun onPlaybackStateChanged(state: Int) {
+            val id = player.currentMediaItem?.mediaId ?: return
+            if (state == Player.STATE_READY && player.duration > 0) durations[id] = player.duration
+        }
+
+        override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
+            val item = old.mediaItem ?: return
+            // Moverse dentro de la misma no es dejarla; volver a empezarla sola (repetir una), sí.
+            if (item.mediaId == new.mediaItem?.mediaId && reason != Player.DISCONTINUITY_REASON_AUTO_TRANSITION) return
+            logPlay(item, old.positionMs)
+        }
     }
 
     private val callback = object : MediaSession.Callback {
         // Todos los controladores (también la notificación) pueden pulsar el corazón.
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult =
             MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                .setAvailableSessionCommands(MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().add(LIKE).build())
+                .setAvailableSessionCommands(MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().add(LIKE).add(DJ).build())
                 .build()
 
         override fun onCustomCommand(
@@ -372,6 +462,7 @@ class PlaybackService : MediaSessionService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction == DJ.customAction) return startDj()
             if (customCommand.customAction != LIKE.customAction) return super.onCustomCommand(session, controller, customCommand, args)
             toggleLike()
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -395,6 +486,7 @@ class PlaybackService : MediaSessionService() {
             val items = mediaItems.map { it.withPlaybackUri() }
             // Poner una sola canción es pedir su radio detrás; una lista (álbum, playlist) suena tal cual.
             // Se lanza después de que la sesión aplique la cola nueva.
+            stopDj()
             if (items.size == 1) scope.launch(Dispatchers.Main) { startRadio(items[0].mediaId) } else stopRadio()
             return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(items, startIndex, startPositionMs))
         }
@@ -417,6 +509,11 @@ class PlaybackService : MediaSessionService() {
         const val RECENT = 400
         const val HEARD_MS = 30_000L
         const val QUALITY_KEY = "oto_quality"
+        const val DJ_KIND = "oto_dj"
         val LIKE = SessionCommand("io.github.iaguito22.oto.LIKE", Bundle.EMPTY)
+        val DJ = SessionCommand(DJ_COMMAND, Bundle.EMPTY)
     }
 }
+
+/** Lo que pide la interfaz para arrancar el DJ. */
+const val DJ_COMMAND = "io.github.iaguito22.oto.DJ"

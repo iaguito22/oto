@@ -149,6 +149,8 @@ fun MenuSheet(
     val playlists by prefs.playlists.collectAsStateWithLifecycle(initialValue = null)
     val liked by prefs.likedList.collectAsStateWithLifecycle(initialValue = null)
     val pinned by prefs.pinned.collectAsStateWithLifecycle(initialValue = emptySet())
+    val source by connection.source.collectAsStateWithLifecycle()
+    val np by connection.state.collectAsStateWithLifecycle()
     LaunchedEffect(history, liked, playlists) {
         vm.taste = withContext(Dispatchers.Default) {
             Taste.of(history.orEmpty().asSequence() + liked?.songs.orEmpty() + playlists.orEmpty().asSequence().flatMap { it.songs })
@@ -243,6 +245,11 @@ fun MenuSheet(
                 when (nav.view) {
                     View.Tabs -> HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
                         if (page == 0) YourMusic(history, liked, playlists, pinned, folders, currentId, play, onHold = { hold(it, null) }, onOpen = vm::openLocal, onFolder = vm::openFolder, onNew = { creating = true },
+                            dj = source?.kind == "DJ" && np.playing,
+                            onDj = {
+                                if (playlists.orEmpty().all { it.songs.isEmpty() } && liked?.songs.isNullOrEmpty()) notice = "El DJ aprende de tus listas: guarda algo primero"
+                                else { connection.playDj(onFail = { notice = "El DJ no ha podido empezar" }); onClose() }
+                            },
                             onListMenu = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); listMenu = it },
                             onFolderMenu = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); folderMenu = it })
                         else Explore(s, currentId, play, onHold = { hold(it, null) }, onOpen = vm::open, onRetry = vm::loadHome)
@@ -842,6 +849,8 @@ private fun YourMusic(
     onNew: () -> Unit,
     onListMenu: (LocalPlaylist) -> Unit,
     onFolderMenu: (String) -> Unit,
+    dj: Boolean,
+    onDj: () -> Unit,
 ) {
     if (history == null || playlists == null || liked == null) return
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = Space.lg)) {
@@ -865,7 +874,8 @@ private fun YourMusic(
         }
         item(key = "pinned") {
             LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-                // Me gusta va siempre la primera, aunque esté vacía: así se sabe que existe.
+                // El DJ y Me gusta van siempre delante, aunque no tengas nada: así se sabe que existen.
+                item(key = "dj") { DjCard(dj, onDj) }
                 item(key = LIKED_ID) { PlaylistCard(liked, onClick = { onOpen(LIKED_ID) }) }
                 items(top, key = { it.key }, itemContent = card)
                 if (playlists.isEmpty()) item(key = "new") { NewListCard(onNew) }

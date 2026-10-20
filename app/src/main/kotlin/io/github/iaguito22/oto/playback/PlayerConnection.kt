@@ -2,10 +2,13 @@ package io.github.iaguito22.oto.playback
 
 import android.content.ComponentName
 import android.content.Context
+import android.os.Bundle
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.metrolist.innertube.models.AlbumItem
@@ -166,6 +169,23 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     private fun shuffleItems(indices: List<Int>) = indices.map { i ->
         val m = original!![i]
         Shuffle.Item(m.mediaId, m.mediaMetadata.artist?.toString().orEmpty(), ages.getOrNull(i))
+    }
+
+    /**
+     * El DJ (ver [io.github.iaguito22.oto.dj.Dj]): lo elige el servicio, de una en una. [onFail]: aún no sabe nada de
+     * ti (no hay listas, Me gusta ni historial).
+     */
+    fun playDj(onFail: () -> Unit) = withController { c ->
+        val before = _source.value
+        _source.value = Source("DJ", "Mezcla para ti")
+        original = null
+        val result = c.sendCustomCommand(SessionCommand(DJ_COMMAND, Bundle.EMPTY), Bundle.EMPTY)
+        result.addListener({
+            if (runCatching { result.get().resultCode }.getOrNull() != SessionResult.RESULT_SUCCESS) {
+                _source.value = before
+                onFail()
+            }
+        }, ContextCompat.getMainExecutor(context))
     }
 
     /** Detrás de la que suena. */
