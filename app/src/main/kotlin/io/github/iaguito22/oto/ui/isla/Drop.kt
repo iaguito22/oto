@@ -171,6 +171,7 @@ fun Drop(
             val shadow = 8.dp.toPx()
             val bleed = 90.dp.toPx()
             val slop = 7.dp.toPx()
+            val reach = 52.dp.toPx()
             val threshold = 52.dp.toPx()
             val kxIn = 92.dp.toPx(); val kxOut = 108.dp.toPx()
             val kyIn = 58.dp.toPx(); val kyOut = 68.dp.toPx()
@@ -201,6 +202,9 @@ fun Drop(
         .pointerInput(state) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
+                // Solo la gota (con un poco de margen), no toda la franja de abajo: tocar el borde de la pantalla
+                // para que no se apague no puede pausar la música.
+                if (hypot(down.position.x - size.width / 2f, down.position.y - size.height / 2f) > px.reach) return@awaitEachGesture
                 down.consume()
                 state.pressTarget = 1.1f
                 var moved = false
