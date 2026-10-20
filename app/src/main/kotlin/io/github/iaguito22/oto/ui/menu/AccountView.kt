@@ -1,5 +1,6 @@
 package io.github.iaguito22.oto.ui.menu
 
+import android.accounts.AccountManager
 import android.annotation.SuppressLint
 import android.net.Uri
 import android.webkit.CookieManager
@@ -7,6 +8,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -64,7 +67,15 @@ fun AccountView(onBack: () -> Unit, onSignedIn: () -> Unit) {
     val session by account.session.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var web by remember { mutableStateOf(false) }
+    var email by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    // Las cuentas de Google del móvil, con el selector del sistema (sin pedir permisos). Una app no puede usar la
+    // sesión de Chrome, pero así Google se abre con tu correo puesto y solo queda confirmar.
+    val choose = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        email = r.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)
+        error = null
+        web = true
+    }
     BackHandler(web) { web = false }
 
     Column(Modifier.fillMaxSize().padding(horizontal = Space.sm)) {
@@ -81,6 +92,7 @@ fun AccountView(onBack: () -> Unit, onSignedIn: () -> Unit) {
             when (step) {
                 2 -> session?.let { s -> SignedIn(s, onSignOut = { scope.launch { account.signOut(); onSignedIn() } }) }
                 1 -> SignInPage(
+                    email = email,
                     modifier = Modifier.fillMaxSize().padding(bottom = Space.md).clip(RoundedCornerShape(Radius.lg)),
                     onSession = { s -> scope.launch { account.signIn(s); web = false; onSignedIn() } },
                     onFail = { error = it; web = false },
@@ -90,7 +102,13 @@ fun AccountView(onBack: () -> Unit, onSignedIn: () -> Unit) {
                         "Entrar con YouTube Music",
                         "La portada y la radio saldrán de tus gustos, lo que oigas contará en tu historial de YouTube " +
                             "y lo que te guste en Oto también le gustará a YouTube Music. Oto solo guarda la sesión en el móvil.",
-                    ) { Pill("Entrar con Google", { error = null; web = true }) }
+                    ) {
+                        Pill("Entrar con Google", {
+                            runCatching {
+                                choose.launch(AccountManager.newChooseAccountIntent(null, null, arrayOf("com.google"), null, null, null, null))
+                            }.onFailure { email = null; error = null; web = true }
+                        })
+                    }
                     error?.let { Text(it, style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.padding(Space.md)) }
                 }
             }
@@ -123,7 +141,7 @@ private fun SignedIn(s: Session, onSignOut: () -> Unit) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun SignInPage(modifier: Modifier, onSession: (Session) -> Unit, onFail: (String) -> Unit) {
+private fun SignInPage(email: String?, modifier: Modifier, onSession: (Session) -> Unit, onFail: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     var reading by remember { mutableStateOf(false) }
     AndroidView(
@@ -150,7 +168,7 @@ private fun SignInPage(modifier: Modifier, onSession: (Session) -> Unit, onFail:
                         }
                     }
                 }
-                loadUrl("https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmusic.youtube.com")
+                loadUrl("https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmusic.youtube.com" + email?.let { "&Email=" + Uri.encode(it) }.orEmpty())
             }
         },
     )
