@@ -40,6 +40,7 @@ La gota es un aro fino del color de la canción, o la gota líquida de antes (en
 - **Cuenta de YouTube Music** (opcional): recomendaciones tuyas y una copia de tus listas en tu cuenta, que vuelven solas al reinstalar.
 - **DJ**: una mezcla continua de lo tuyo, lo que te falta de tus artistas y artistas nuevos, que aprende de cuánto te quedas con cada canción.
 - **Hecho con lo tuyo** en Explorar: En bucle, mezclas de tus artistas, lo que hace tiempo que no oyes y lo mejor del DJ.
+- **Android Auto**: tu música, lo oído hace poco, el DJ y la búsqueda (también por voz) en el coche.
 - **Descargas** de listas o canciones sueltas, para oír sin conexión.
 - **Calidad Auto o Máxima**, ahorro de datos y precarga de las siguientes canciones.
 - Aleatorio que separa artistas, bucle, canciones parecidas al acabar una lista, fundido entre canciones, cola editable y salida de audio.
