@@ -30,7 +30,8 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
+import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
@@ -73,10 +74,10 @@ import kotlin.math.pow
  * y los de los auriculares; aquí solo vive lo propio: resolver el stream al abrirlo, reintentar y la radio.
  */
 @OptIn(UnstableApi::class)
-class PlaybackService : MediaSessionService() {
+class PlaybackService : MediaLibraryService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var player: ExoPlayer
-    private lateinit var session: MediaSession
+    private lateinit var session: MediaLibrarySession
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     private val cache by lazy { (application as OtoApp).audioCache }
 
@@ -109,6 +110,9 @@ class PlaybackService : MediaSessionService() {
     private val recent = ArrayDeque<String>()
 
     private val app by lazy { application as OtoApp }
+    private val library by lazy { Library(prefs) }
+    /** La última búsqueda desde Android Auto: la pide en dos pasos (cuántos hay, luego cuáles). */
+    private var found: Pair<String, List<MediaItem>> = "" to emptyList()
     private val prefs by lazy { app.prefs }
     private var liked = emptySet<String>()
 
@@ -144,7 +148,7 @@ class PlaybackService : MediaSessionService() {
         crossfade = Crossfade(this, player, sources, scope, { fadeMs }, { gain }, onFadeIn = { fadeIn = it; applyVolume() })
         crossfade.start()
 
-        session = MediaSession.Builder(this, player)
+        session = MediaLibrarySession.Builder(this, player, callback)
             .setSessionActivity(
                 PendingIntent.getActivity(
                     this, 0,
@@ -152,7 +156,6 @@ class PlaybackService : MediaSessionService() {
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
                 ),
             )
-            .setCallback(callback)
             .build()
 
         scope.launch {
@@ -522,6 +525,21 @@ class PlaybackService : MediaSessionService() {
     /** Arranca el DJ (ver [Dj]): la primera suena al momento y el resto se elige de una en una, sobre la marcha. */
     private fun startDj(): ListenableFuture<SessionResult> {
         val done = SettableFuture.create<SessionResult>()
+        firstOfDj { first ->
+            if (first == null) {
+                done.set(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+                return@firstOfDj
+            }
+            player.setMediaItems(listOf(first))
+            player.prepare()
+            player.play()
+            done.set(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+        return done
+    }
+
+    /** Prepara el DJ y da su primera canción (null si no hay de dónde sacarla); quien la recibe la pone. */
+    private fun firstOfDj(then: (MediaItem?) -> Unit) {
         stopRadio()
         list = false
         djJob?.cancel()
@@ -530,20 +548,19 @@ class PlaybackService : MediaSessionService() {
                 val profile = Profile(prefs.playlists.first(), prefs.liked.first(), prefs.history.first(), app.plays.all(), System.currentTimeMillis())
                 Dj(profile, app.djCatalog, Memory(File(filesDir, "dj.json")), scope, log = { Timber.tag("dj").d(it) })
             }
-            val first = d.start()
-            if (first == null) {
-                done.set(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
-                return@launch
-            }
+            val first = d.start() ?: return@launch then(null)
             dj = d
             Timber.tag("dj").d("%s: %s — %s", d.picks.last().kind, first.artist, first.title)
-            player.setMediaItems(listOf(first.toDjItem(d)))
-            player.prepare()
-            player.play()
-            done.set(SessionResult(SessionResult.RESULT_SUCCESS))
+            then(first.toDjItem(d))
         }
         djJob?.invokeOnCompletion { scope.launch { topUpDj() } }
-        return done
+    }
+
+    /** Un future que se cumple con lo que devuelva [block], en el hilo principal. */
+    private fun <T> future(block: suspend () -> T): ListenableFuture<T> {
+        val f = SettableFuture.create<T>()
+        scope.launch { runCatching { block() }.onSuccess { f.set(it) }.onFailure { f.setException(it) } }
+        return f
     }
 
     private fun stopDj() {
@@ -664,11 +681,51 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    private val callback = object : MediaSession.Callback {
-        // Todos los controladores (también la notificación) pueden pulsar el corazón.
+    private val callback = object : MediaLibrarySession.Callback {
+        override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?) =
+            Futures.immediateFuture(LibraryResult.ofItem(library.root(), params))
+
+        override fun onGetChildren(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            parentId: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+        ) = future {
+            val all = library.children(parentId)
+            val from = (page * pageSize).coerceAtMost(all.size)
+            LibraryResult.ofItemList(all.subList(from, (from + pageSize).coerceAtMost(all.size)), params)
+        }
+
+        override fun onGetItem(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, mediaId: String) = future {
+            val item = library.expand(MediaItem.Builder().setMediaId(mediaId).build())?.let { (items, at) -> items[at] }
+            if (item != null) LibraryResult.ofItem(item, null) else LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)
+        }
+
+        override fun onSearch(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, query: String, params: LibraryParams?) = future {
+            found = query to library.search(query)
+            session.notifySearchResultChanged(browser, query, found.second.size, params)
+            LibraryResult.ofVoid()
+        }
+
+        override fun onGetSearchResult(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+        ) = future {
+            val all = if (found.first == query) found.second else library.search(query)
+            val from = (page * pageSize).coerceAtMost(all.size)
+            LibraryResult.ofItemList(all.subList(from, (from + pageSize).coerceAtMost(all.size)), params)
+        }
+
+        // Todos los controladores (también la notificación) pueden pulsar el corazón; y explorar la biblioteca (Android Auto).
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult =
             MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                .setAvailableSessionCommands(MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().add(LIKE).add(DJ).build())
+                .setAvailableSessionCommands(MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon().add(LIKE).add(DJ).build())
                 .build()
 
         override fun onCustomCommand(
@@ -683,13 +740,15 @@ class PlaybackService : MediaSessionService() {
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
         }
 
-        // Los MediaItem que llegan de un controlador pierden la URI por el camino.
+        // Los MediaItem que llegan de un controlador pierden la URI por el camino. Los de Android Auto pueden venir
+        // de una lista (id «in|lista|canción») o ser una búsqueda por voz (sin id, con lo dicho).
         override fun onAddMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
-        ): ListenableFuture<MutableList<MediaItem>> =
-            Futures.immediateFuture(mediaItems.mapTo(ArrayList()) { it.withPlaybackUri() })
+        ): ListenableFuture<MutableList<MediaItem>> = future {
+            mediaItems.flatMapTo(ArrayList()) { item -> resolve(item).map { it.withPlaybackUri() } }
+        }
 
         override fun onSetMediaItems(
             mediaSession: MediaSession,
@@ -698,6 +757,31 @@ class PlaybackService : MediaSessionService() {
             startIndex: Int,
             startPositionMs: Long,
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+            val one = mediaItems.singleOrNull()
+            // Desde Android Auto: el DJ, una canción de una lista (suena la lista desde ella) o lo pedido por voz.
+            if (one != null && one.mediaId == Library.DJ) {
+                val f = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
+                firstOfDj { first ->
+                    if (first == null) f.setException(IllegalStateException("El DJ no tiene de dónde sacar"))
+                    else f.set(MediaSession.MediaItemsWithStartPosition(listOf(first), 0, 0))
+                }
+                return f
+            }
+            if (one != null && (Library.inList(one.mediaId) != null || one.mediaId.isEmpty())) return future {
+                val expanded = library.expand(one)
+                if (expanded != null) {
+                    stopDj(); stopRadio()
+                    list = true
+                    autoplay()
+                    MediaSession.MediaItemsWithStartPosition(expanded.first.map { it.withPlaybackUri() }, expanded.second, 0)
+                } else {
+                    val found = resolve(one).map { it.withPlaybackUri() }
+                    stopDj()
+                    list = false
+                    found.firstOrNull()?.let { startRadio(it.mediaId) }
+                    MediaSession.MediaItemsWithStartPosition(found, 0, 0)
+                }
+            }
             val items = mediaItems.map { it.withPlaybackUri() }
             // Poner una sola canción es pedir su radio detrás; una lista (álbum, playlist) suena tal cual.
             // Se lanza después de que la sesión aplique la cola nueva.
@@ -707,6 +791,14 @@ class PlaybackService : MediaSessionService() {
             if (items.size == 1) scope.launch(Dispatchers.Main) { startRadio(items[0].mediaId) } else { stopRadio(); scope.launch(Dispatchers.Main) { autoplay() } }
             return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(items, startIndex, startPositionMs))
         }
+    }
+
+    /** Lo que de verdad suena por [item]: la canción de una lista, la primera que encuentre lo dicho por voz, o él mismo. */
+    private suspend fun resolve(item: MediaItem): List<MediaItem> {
+        Library.inList(item.mediaId)?.let { (_, song) -> return library.expand(item)?.let { (l, at) -> listOf(l[at]) } ?: listOf(item.buildUpon().setMediaId(song).build()) }
+        if (item.mediaId.isNotEmpty()) return listOf(item)
+        val q = item.requestMetadata.searchQuery ?: return emptyList()
+        return library.search(q).take(1)
     }
 
     private class ResolveException(id: String, cause: Throwable) : IOException("No se pudo resolver $id: ${cause.message}", cause) {
