@@ -234,7 +234,7 @@ fun MenuSheet(
                         drawContent()
                         val fade = 28.dp.toPx()
                         drawRect(
-                            Brush.verticalGradient(listOf(Color.Black, Color.Transparent), startY = size.height - fade, endY = size.height),
+                            Brush.verticalGradient(listOf(Color.Transparent, Color.Black), startY = size.height - fade, endY = size.height),
                             Offset(0f, size.height - fade), Size(size.width, fade), blendMode = BlendMode.DstOut,
                         )
                     },
