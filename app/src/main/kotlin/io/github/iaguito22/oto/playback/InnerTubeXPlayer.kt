@@ -167,6 +167,8 @@ object InnerTubeXPlayer {
         val loudnessDb: Double?,
         val contentLength: Long?,
         val quality: Quality,
+        /** Con cuenta, a esta URL se avisa de que ha sonado: así cuenta en el historial de YouTube. */
+        val tracking: String?,
     )
 
     private fun ExtractedStream.toStream() = Stream(
@@ -187,6 +189,7 @@ object InnerTubeXPlayer {
             bitrate = bitrate,
             sampleRate = sampleRate,
         ),
+        tracking = playbackTracking?.playbackUrl,
     )
 
     private data class Bundle(val generation: Long, val cipher: YouTubeCipherService, val extractor: InnerTubeExtractor)

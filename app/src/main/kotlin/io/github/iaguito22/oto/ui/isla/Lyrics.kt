@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -121,9 +122,11 @@ fun LyricsPanel(np: NowPlaying, connection: PlayerConnection, width: Dp, height:
     }
     val current = if (loaded.id == np.id) loaded else Loaded(np.id, null)
     val c = Oto.colors
+    // Más ancha que la carátula por los lados, con el texto igual de ancho que ella: la línea activa crece hacia la
+    // derecha y cada palabra cantada se agranda, y lo pegado al borde no puede cortarse contra la capa del fundido.
     Box(
         Modifier
-            .size(width, height)
+            .requiredSize(width + EDGE * 2, height)
             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
             .drawWithContent {
                 drawContent()
@@ -142,7 +145,7 @@ fun LyricsPanel(np: NowPlaying, connection: PlayerConnection, width: Dp, height:
             label = "lyrics",
         ) { (id, lyrics) ->
             when (lyrics) {
-                null -> Skeleton(rows = 5, modifier = Modifier.padding(top = Space.xl))
+                null -> Skeleton(rows = 5, modifier = Modifier.padding(start = EDGE, end = EDGE, top = Space.xl))
                 Lyrics.Missing -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
                         if (id == null) "No suena nada" else "No hay letra\npara esta canción",
@@ -159,7 +162,7 @@ fun LyricsPanel(np: NowPlaying, connection: PlayerConnection, width: Dp, height:
 @Composable
 private fun PlainLyrics(l: Lyrics.Plain) {
     val c = Oto.colors
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 36.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = EDGE, vertical = 36.dp)) {
         Row(Modifier.padding(bottom = Space.md).clip(CircleShape).background(c.field).padding(horizontal = 10.dp, vertical = 4.dp)) {
             Text("Sin sincronizar", style = OtoType.label, color = c.textMuted)
         }
@@ -265,7 +268,7 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
         Modifier
             .fillMaxSize()
             .verticalScroll(scroll)
-            .padding(top = height * ANCHOR, bottom = height * (1 - ANCHOR)),
+            .padding(start = EDGE, end = EDGE, top = height * ANCHOR, bottom = height * (1 - ANCHOR)),
     ) {
         val firstActive = remember(rows) { active }
         rows.forEachIndexed { i, row ->
@@ -542,6 +545,8 @@ private fun rank(l: Lyrics?) = when (l) {
     else -> 0
 }
 // La línea activa queda a esta altura del panel.
+// Margen a cada lado del texto para lo que crece al cantarse (ver LyricsPanel).
+private val EDGE = 20.dp
 private const val ANCHOR = 0.3f
 private const val SCROLL_MS = 620
 private const val USER_HOLD_MS = 2500L

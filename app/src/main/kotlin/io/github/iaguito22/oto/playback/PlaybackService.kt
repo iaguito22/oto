@@ -32,6 +32,7 @@ import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import io.github.iaguito22.oto.MainActivity
+import com.metrolist.innertube.YouTube
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.importer.songKey
 import kotlinx.coroutines.CoroutineScope
@@ -65,6 +66,8 @@ class PlaybackService : MediaSessionService() {
 
     private val urls = StreamUrlCache()
     private val loudness = ConcurrentHashMap<String, Double>()
+    private val tracking = ConcurrentHashMap<String, String>()
+    private var historyJob: Job? = null
     private val retries = HashMap<String, Int>()
     private var retryJob: Job? = null
 
@@ -167,6 +170,7 @@ class PlaybackService : MediaSessionService() {
         Timber.d("stream %s en %d ms (%s)", id, (System.nanoTime() - started) / 1_000_000, stream.client)
 
         StreamInfo.put(id, stream.quality)
+        stream.tracking?.let { tracking[id] = it }
         runCatching { cache.applyContentMetadataMutations(id, ContentMetadataMutations().set(QUALITY_KEY, stream.quality.encode())) }
         stream.loudnessDb?.let {
             loudness[id] = it
@@ -268,6 +272,25 @@ class PlaybackService : MediaSessionService() {
         scope.launch { prefs.toggleLike(item.toHeard()) }
     }
 
+    // --- Historial de YouTube ---
+
+    /**
+     * Con cuenta, lo que suena más de [HEARD_MS] cuenta en tu historial de YouTube, que es de lo que aprenden sus
+     * recomendaciones (como un «stream» de Spotify). Si sonaba desde la caché no hubo URL de aviso: se pide aparte.
+     */
+    private fun countInHistory(id: String) {
+        historyJob?.cancel()
+        if (YouTube.cookie.isNullOrEmpty()) return
+        historyJob = scope.launch {
+            while (player.currentMediaItem?.mediaId == id && player.currentPosition < HEARD_MS) delay(2_000)
+            if (player.currentMediaItem?.mediaId != id) return@launch
+            val url = tracking[id] ?: withContext(Dispatchers.IO) { InnerTubeXPlayer.resolve(id, connectivity) }.getOrNull()?.tracking ?: return@launch
+            withContext(Dispatchers.IO) { YouTube.registerPlayback(null, url) }
+                .onSuccess { Timber.d("historial: %s", id) }
+                .onFailure { Timber.w(it, "historial") }
+        }
+    }
+
     // --- Radio ---
 
     private fun startRadio(seedId: String) {
@@ -328,6 +351,7 @@ class PlaybackService : MediaSessionService() {
             remember(id, sameSong(mediaItem.mediaMetadata.title?.toString().orEmpty(), mediaItem.mediaMetadata.artist?.toString().orEmpty()))
             applyLoudness()
             topUpRadio()
+            countInHistory(id)
             showLike()
             scope.launch(Dispatchers.IO) { prefs.addHeard(mediaItem.toHeard()) }
         }
@@ -391,6 +415,7 @@ class PlaybackService : MediaSessionService() {
         const val RADIO_AHEAD = 2
         const val RADIO_PAGES = 3
         const val RECENT = 400
+        const val HEARD_MS = 30_000L
         const val QUALITY_KEY = "oto_quality"
         val LIKE = SessionCommand("io.github.iaguito22.oto.LIKE", Bundle.EMPTY)
     }

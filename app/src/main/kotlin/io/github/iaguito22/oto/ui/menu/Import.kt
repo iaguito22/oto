@@ -209,7 +209,7 @@ private fun Sources(reading: Boolean, error: String?, onLink: (String) -> Unit, 
 }
 
 @Composable
-private fun Block(title: String, body: String, action: @Composable () -> Unit) {
+internal fun Block(title: String, body: String, action: @Composable () -> Unit) {
     val c = Oto.colors
     Column(
         Modifier

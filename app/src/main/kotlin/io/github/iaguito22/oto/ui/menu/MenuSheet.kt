@@ -112,7 +112,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class View { Tabs, Search, Page, Settings, Import }
+private enum class View { Tabs, Search, Page, Settings, Import, Account }
 
 /** Qué se ve: la vista y, en las páginas, cuántas hay apiladas (cada una entra como un paso más hondo). */
 private data class Nav(val view: View, val depth: Int)
@@ -158,8 +158,10 @@ fun MenuSheet(
     var listMenu by remember { mutableStateOf<LocalPlaylist?>(null) }
     var saving by remember { mutableStateOf<Saving?>(null) }
     var importing by remember { mutableStateOf(false) }
+    var accounting by remember { mutableStateOf(false) }
 
     val view = when {
+        accounting -> View.Account
         importing -> View.Import
         settings -> View.Settings
         s.pages.isNotEmpty() -> View.Page
@@ -168,6 +170,7 @@ fun MenuSheet(
     }
     BackHandler(view != View.Tabs) {
         when (view) {
+            View.Account -> accounting = false
             View.Import -> importing = false
             View.Settings -> settings = false
             View.Page -> vm.closeDetail()
@@ -192,11 +195,11 @@ fun MenuSheet(
             }
             Row(Modifier.fillMaxWidth().padding(start = Space.lg, end = Space.sm, top = Space.md, bottom = Space.sm), verticalAlignment = Alignment.CenterVertically) {
                 Tabs(pager, onSelect = { i ->
-                    settings = false; importing = false; vm.closeAll(); vm.onQuery(""); focus.clearFocus()
+                    settings = false; importing = false; accounting = false; vm.closeAll(); vm.onQuery(""); focus.clearFocus()
                     scope.launch { pager.animateScrollToPage(i, animationSpec = Motion.spatial()) }
                 })
                 Spacer(Modifier.weight(1f))
-                RoundIcon(R.drawable.ic_settings, selected = settings) { settings = !settings; importing = false; focus.clearFocus() }
+                RoundIcon(R.drawable.ic_settings, selected = settings) { settings = !settings; importing = false; accounting = false; focus.clearFocus() }
             }
 
             AnimatedContent(
@@ -245,7 +248,8 @@ fun MenuSheet(
                         )
                         null -> Unit
                     }
-                    View.Settings -> Settings(onBack = { settings = false }, onTutorial = onTutorial, onImport = { importing = true })
+                    View.Settings -> Settings(onBack = { settings = false }, onTutorial = onTutorial, onImport = { importing = true }, onAccount = { accounting = true })
+                    View.Account -> AccountView(onBack = { accounting = false }, onSignedIn = vm::loadHome)
                     View.Import -> Import(onBack = { importing = false }, onLists = {
                         importing = false; settings = false
                         scope.launch { pager.animateScrollToPage(0, animationSpec = Motion.spatial()) }
@@ -267,7 +271,8 @@ fun MenuSheet(
                     )
                 }
             }
-            SearchField(s.query, s.searching, vm::onQuery, onSearch = { focus.clearFocus() })
+            // Entrando con Google, el teclado es para la contraseña: el buscador sobra.
+            if (view != View.Account) SearchField(s.query, s.searching, vm::onQuery, onSearch = { focus.clearFocus() })
         }
 
         // ---- Lo que flota encima: acciones de una canción, opciones de una lista y pedir un nombre ----
@@ -642,7 +647,7 @@ private fun LocalView(
 }
 
 @Composable
-private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () -> Unit) {
+private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () -> Unit, onAccount: () -> Unit) {
     val c = Oto.colors
     Column(Modifier.fillMaxSize().padding(horizontal = Space.sm)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -650,8 +655,15 @@ private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () ->
             Text("Ajustes", style = OtoType.title, color = c.text)
         }
         Spacer(Modifier.height(Space.md))
-        val importer = (LocalContext.current.applicationContext as OtoApp).importer
-        val state by importer.state.collectAsStateWithLifecycle()
+        val app = LocalContext.current.applicationContext as OtoApp
+        val state by app.importer.state.collectAsStateWithLifecycle()
+        val session by app.account.session.collectAsStateWithLifecycle()
+        SettingRow(
+            "Cuenta de YouTube Music",
+            session?.let { listOfNotNull(it.name.ifEmpty { null }, it.email).joinToString(" · ").ifEmpty { "Has entrado" } }
+                ?: "Sin cuenta: recomendaciones de visitante",
+            onAccount,
+        )
         SettingRow("Importar de Spotify", importSummary(state), onImport)
         SettingRow("Ver los gestos otra vez", "El tutorial del principio", onTutorial)
         Spacer(Modifier.weight(1f))

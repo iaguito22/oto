@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.metrolist.innertube.models.Artist
 import com.metrolist.innertube.models.SongItem
@@ -36,6 +37,7 @@ private val HISTORY = stringPreferencesKey("history")
 private val PLAYLISTS = stringPreferencesKey("playlists")
 private val REMAINING = booleanPreferencesKey("show_remaining")
 private val LIKED = stringPreferencesKey("liked")
+private val LIKES_SENT = stringSetPreferencesKey("likes_sent")
 
 /** El id con el que «Me gusta» se abre y suena como si fuera una lista tuya más. */
 const val LIKED_ID = "liked"
@@ -120,6 +122,17 @@ class Prefs(private val context: Context) {
             p[LIKED] = encode(if (now) listOf(h) + list else list.filter { it.id != h.id })
         }
         return now
+    }
+
+    /** Los me gusta que ya sabe YouTube Music (con cuenta, ver Account). */
+    suspend fun likesSent(): Set<String> = context.store.data.first()[LIKES_SENT].orEmpty()
+
+    suspend fun markLikeSent(id: String, on: Boolean) {
+        context.store.edit { p -> p[LIKES_SENT] = p[LIKES_SENT].orEmpty().let { if (on) it + id else it - id } }
+    }
+
+    suspend fun clearLikesSent() {
+        context.store.edit { it.remove(LIKES_SENT) }
     }
 
     // ---- Listas ----
