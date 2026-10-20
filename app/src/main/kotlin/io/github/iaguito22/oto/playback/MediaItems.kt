@@ -5,6 +5,7 @@ import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import com.metrolist.innertube.models.SongItem
+import io.github.iaguito22.oto.Heard
 import kotlin.math.roundToInt
 
 /**
@@ -33,6 +34,15 @@ fun SongItem.toMediaItem(): MediaItem = MediaItem.Builder()
             .build(),
     )
     .build()
+
+/** Lo que se guarda de lo que suena (historial, me gusta, listas). */
+fun MediaItem.toHeard(): Heard {
+    val meta = mediaMetadata
+    return Heard(
+        mediaId, meta.title?.toString().orEmpty(), meta.artist?.toString().orEmpty(), meta.artworkUri?.toString(),
+        meta.extras?.getStringArray(ARTIST_IDS)?.firstOrNull()?.ifEmpty { null },
+    )
+}
 
 /** Un MediaItem que llega de un MediaController pierde su URI por el camino: se reconstruye desde el mediaId. */
 fun MediaItem.withPlaybackUri(): MediaItem =

@@ -18,6 +18,10 @@ private val TUTORIAL_DONE = booleanPreferencesKey("tutorial_done")
 private val HISTORY = stringPreferencesKey("history")
 private val PLAYLISTS = stringPreferencesKey("playlists")
 private val REMAINING = booleanPreferencesKey("show_remaining")
+private val LIKED = stringPreferencesKey("liked")
+
+/** El id con el que «Me gusta» se abre y suena como si fuera una lista tuya más. */
+const val LIKED_ID = "liked"
 
 /** Una canción oída o guardada. Lo justo para enseñarla y volver a ponerla. */
 data class Heard(val id: String, val title: String, val artist: String, val artwork: String?, val artistId: String? = null)
@@ -29,7 +33,7 @@ fun SongItem.toHeard() = Heard(id, title, artists.joinToString { it.name }, thum
 /** Una lista tuya, guardada en el móvil. */
 data class LocalPlaylist(val id: String, val name: String, val songs: List<Heard>)
 
-/** Lo que la app recuerda entre sesiones (los me gusta, con Room, son la fase 6). */
+/** Lo que la app recuerda entre sesiones. */
 class Prefs(private val context: Context) {
     val tutorialDone: Flow<Boolean> = context.store.data.map { it[TUTORIAL_DONE] ?: false }
 
@@ -52,6 +56,35 @@ class Prefs(private val context: Context) {
             val list = listOf(h) + decode(p[HISTORY]).filter { it.id != h.id }
             p[HISTORY] = encode(list.take(HISTORY_SIZE))
         }
+    }
+
+    // ---- Me gusta ----
+
+    /** La última que te gustó, la primera. */
+    val liked: Flow<List<Heard>> = context.store.data.map { decode(it[LIKED]) }
+
+    val likedIds: Flow<Set<String>> = liked.map { l -> l.mapTo(HashSet()) { it.id } }
+
+    /** «Me gusta» como lista: así se enseña y suena igual que las tuyas. */
+    val likedList: Flow<LocalPlaylist> = liked.map { LocalPlaylist(LIKED_ID, "Me gusta", it) }
+
+    /** Entra la primera o sale. */
+    suspend fun setLiked(h: Heard, on: Boolean) {
+        context.store.edit { p ->
+            val rest = decode(p[LIKED]).filter { it.id != h.id }
+            p[LIKED] = encode(if (on) listOf(h) + rest else rest)
+        }
+    }
+
+    /** Devuelve si ahora te gusta. */
+    suspend fun toggleLike(h: Heard): Boolean {
+        var now = false
+        context.store.edit { p ->
+            val list = decode(p[LIKED])
+            now = list.none { it.id == h.id }
+            p[LIKED] = encode(if (now) listOf(h) + list else list.filter { it.id != h.id })
+        }
+        return now
     }
 
     // ---- Listas ----

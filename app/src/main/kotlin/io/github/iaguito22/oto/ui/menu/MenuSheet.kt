@@ -95,6 +95,7 @@ import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
 import io.github.iaguito22.oto.BuildConfig
 import io.github.iaguito22.oto.Heard
+import io.github.iaguito22.oto.LIKED_ID
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.R
@@ -117,8 +118,8 @@ private data class Nav(val view: View, val depth: Int)
 /** Una canción mantenida pulsada. [list]: la lista tuya en la que está, si es una. */
 private data class Held(val song: SongItem, val list: String? = null)
 
-/** Pedir un nombre: para una lista nueva (con [song] dentro, si la hay) o para renombrar [rename]. */
-private data class Naming(val rename: LocalPlaylist? = null, val song: SongItem? = null)
+/** Pedir un nombre: para una lista nueva o para renombrar [rename]. */
+private data class Naming(val rename: LocalPlaylist? = null)
 
 /**
  * Lo que sale al subir la gota: pestañas Tu música | Explorar, el buscador abajo (al alcance del pulgar) y los
@@ -137,6 +138,7 @@ fun MenuSheet(
     val prefs = (LocalContext.current.applicationContext as OtoApp).prefs
     val history by prefs.history.collectAsStateWithLifecycle(initialValue = null)
     val playlists by prefs.playlists.collectAsStateWithLifecycle(initialValue = null)
+    val liked by prefs.likedList.collectAsStateWithLifecycle(initialValue = null)
     val pager = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
     val focus = LocalFocusManager.current
@@ -147,6 +149,7 @@ fun MenuSheet(
     var held by remember { mutableStateOf<Held?>(null) }
     var naming by remember { mutableStateOf<Naming?>(null) }
     var listMenu by remember { mutableStateOf<LocalPlaylist?>(null) }
+    var saving by remember { mutableStateOf<Heard?>(null) }
 
     val view = when {
         settings -> View.Settings
@@ -163,7 +166,7 @@ fun MenuSheet(
         }
     }
     // Después del de arriba: con algo flotando, atrás lo cierra primero.
-    BackHandler(held != null || naming != null || listMenu != null) { held = null; naming = null; listMenu = null }
+    BackHandler(held != null || naming != null || listMenu != null || saving != null) { held = null; naming = null; listMenu = null; saving = null }
 
     val play: (SongItem) -> Unit = { focus.clearFocus(); connection.play(it); onClose() }
     val hold: (SongItem, String?) -> Unit = { song, list ->
@@ -211,7 +214,7 @@ fun MenuSheet(
             ) { nav ->
                 when (nav.view) {
                     View.Tabs -> HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
-                        if (page == 0) YourMusic(history, playlists, currentId, play, onHold = { hold(it, null) }, onOpen = vm::openLocal, onNew = { naming = Naming() })
+                        if (page == 0) YourMusic(history, liked, playlists, currentId, play, onHold = { hold(it, null) }, onOpen = vm::openLocal, onNew = { naming = Naming() })
                         else Explore(s, currentId, play, onHold = { hold(it, null) }, onOpen = vm::open, onRetry = vm::loadHome)
                     }
                     View.Search -> Results(s, currentId, play, onHold = { hold(it, null) })
@@ -225,7 +228,7 @@ fun MenuSheet(
                             onPlay = { songs, i -> connection.playAll(songs, i, p.item); onClose() }, onHold = { hold(it, null) },
                         )
                         is Page.Local -> LocalView(
-                            playlists?.firstOrNull { it.id == p.id }, currentId, onBack = vm::closeDetail,
+                            if (p.id == LIKED_ID) liked else playlists?.firstOrNull { it.id == p.id }, currentId, onBack = vm::closeDetail,
                             onPlay = { list, i -> connection.playLocal(list, i); onClose() },
                             onHold = { song -> hold(song, p.id) }, onMenu = { listMenu = it },
                         )
@@ -256,24 +259,18 @@ fun MenuSheet(
 
         Floating(held, onDismiss = { held = null }) { h ->
             SongActions(
-                h, playlists.orEmpty(),
+                h,
                 onNext = {
                     connection.playNext(h.song)
                     notice = "«${h.song.title}» va después de esta"
                     held = null
                 },
-                onAdd = { list ->
-                    held = null
-                    scope.launch {
-                        notice = if (prefs.addToPlaylist(list.id, h.song.toHeard())) "Añadida a «${list.name}»" else "Ya estaba en «${list.name}»"
-                    }
-                },
-                onNew = { held = null; naming = Naming(song = h.song) },
+                onSave = { held = null; saving = h.song.toHeard() },
                 onArtist = { id, name -> held = null; vm.openArtist(id, name) },
                 onRemove = h.list?.let { list ->
                     {
                         held = null
-                        scope.launch { prefs.removeFromPlaylist(list, h.song.id) }
+                        scope.launch { if (list == LIKED_ID) prefs.setLiked(h.song.toHeard(), false) else prefs.removeFromPlaylist(list, h.song.id) }
                     }
                 },
                 // En la página de un artista no se ofrece ir a él.
@@ -296,18 +293,13 @@ fun MenuSheet(
             NameField(n, onDone = { name ->
                 naming = null
                 scope.launch {
-                    when {
-                        n.rename != null -> prefs.renamePlaylist(n.rename.id, name)
-                        n.song != null -> {
-                            prefs.createPlaylist(name, n.song.toHeard())
-                            notice = "«${n.song.title}» está en «$name»"
-                        }
-                        // Una lista vacía se abre: así se ve qué hacer para llenarla.
-                        else -> vm.openLocal(prefs.createPlaylist(name))
-                    }
+                    if (n.rename != null) prefs.renamePlaylist(n.rename.id, name)
+                    // Una lista vacía se abre: así se ve qué hacer para llenarla.
+                    else vm.openLocal(prefs.createPlaylist(name))
                 }
             })
         }
+        Floating(saving, onDismiss = { saving = null }) { song -> SaveTo(song, onDone = { saving = null }) }
     }
 }
 
@@ -577,23 +569,29 @@ private fun LocalView(
         }
         return
     }
+    val likes = list.id == LIKED_ID
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
         item(key = "head") {
-            PageHeader(onBack, { Mosaic(list.songs, 112.dp) }, list.name, count(list.songs.size)) {
+            PageHeader(onBack, { if (likes) LikedArt(112.dp) else Mosaic(list.songs, 112.dp) }, list.name, count(list.songs.size)) {
                 if (list.songs.isNotEmpty()) Pill("Reproducir", { onPlay(list, 0) }, icon = R.drawable.ic_play_arrow)
-                RoundIcon(R.drawable.ic_more_horiz) { onMenu(list) }
+                // Me gusta no se renombra ni se borra.
+                if (!likes) RoundIcon(R.drawable.ic_more_horiz) { onMenu(list) }
             }
         }
         if (list.songs.isEmpty()) item(key = "empty") {
-            Empty(R.drawable.ic_add, "Está vacía", "Mantén pulsada cualquier canción, aquí o en Explorar, y elige «Añadir a una lista».", Modifier.height(260.dp))
+            if (likes) Empty(
+                R.drawable.ic_favorite, "Aún no te gusta nada",
+                "Toca dos veces la carátula de lo que suena. Mantenla pulsada para guardarla en otra lista.", Modifier.height(260.dp),
+            ) else Empty(
+                R.drawable.ic_add, "Está vacía",
+                "Mantén pulsada cualquier canción, aquí o en Explorar, y elige «Guardar en…». O mantén pulsada la carátula de lo que suena.", Modifier.height(260.dp),
+            )
         }
         itemsIndexed(list.songs, key = { _, it -> it.id }) { i, h ->
             SongRow(h.title, h.artist, h.artwork, h.id == currentId, onClick = { onPlay(list, i) }, onLongClick = { onHold(h.toSong()) }, modifier = Modifier.animateItem())
         }
     }
 }
-
-private fun count(n: Int) = if (n == 1) "1 canción" else "$n canciones"
 
 @Composable
 private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit) {
@@ -632,6 +630,7 @@ private fun SettingRow(title: String, body: String, onClick: () -> Unit) {
 @Composable
 private fun YourMusic(
     history: List<Heard>?,
+    liked: LocalPlaylist?,
     playlists: List<LocalPlaylist>?,
     currentId: String?,
     play: (SongItem) -> Unit,
@@ -639,7 +638,7 @@ private fun YourMusic(
     onOpen: (String) -> Unit,
     onNew: () -> Unit,
 ) {
-    if (history == null || playlists == null) return
+    if (history == null || playlists == null || liked == null) return
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = Space.lg)) {
         item(key = "listsTitle") {
             Row(Modifier.fillMaxWidth().padding(end = Space.md), verticalAlignment = Alignment.CenterVertically) {
@@ -650,6 +649,8 @@ private fun YourMusic(
         }
         item(key = "lists") {
             LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                // Me gusta va siempre la primera, aunque esté vacía: así se sabe que existe.
+                item(key = LIKED_ID) { PlaylistCard(liked, onClick = { onOpen(LIKED_ID) }) }
                 items(playlists, key = { it.id }) { p -> PlaylistCard(p, onClick = { onOpen(p.id) }, modifier = Modifier.animateItem()) }
                 if (playlists.isEmpty()) item(key = "new") { NewListCard(onNew) }
             }
@@ -675,7 +676,7 @@ private fun PlaylistCard(p: LocalPlaylist, onClick: () -> Unit, modifier: Modifi
             .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
             .padding(Space.xs + 2.dp),
     ) {
-        Mosaic(p.songs, 140.dp)
+        if (p.id == LIKED_ID) LikedArt(140.dp) else Mosaic(p.songs, 140.dp)
         Spacer(Modifier.height(Space.sm))
         Text(p.name, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(count(p.songs.size), style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
@@ -707,58 +708,7 @@ private fun NewListCard(onClick: () -> Unit) {
     }
 }
 
-/** La portada de una lista: las cuatro primeras carátulas en cuadrícula (o la primera, si hay menos). */
-@Composable
-private fun Mosaic(songs: List<Heard>, size: Dp) {
-    val c = Oto.colors
-    val arts = songs.mapNotNull { it.artwork }.distinct()
-    Box(Modifier.size(size).clip(RoundedCornerShape(Radius.md)).background(c.field), contentAlignment = Alignment.Center) {
-        when {
-            arts.size >= 4 -> Column {
-                Row { Art(arts[0], size / 2, 0.dp); Art(arts[1], size / 2, 0.dp) }
-                Row { Art(arts[2], size / 2, 0.dp); Art(arts[3], size / 2, 0.dp) }
-            }
-            arts.isNotEmpty() -> Art(arts[0], size, 0.dp)
-            else -> Icon(painterResource(R.drawable.ic_queue_music), null, Modifier.size(size * 0.3f), tint = c.textFaint)
-        }
-    }
-}
-
 // ---- Lo que flota ----
-
-/**
- * Una tarjeta que sube desde abajo sobre un velo; tocar el velo la cierra. Guarda lo último que enseñó para
- * poder irse con ello puesto.
- */
-@Composable
-private fun <T : Any> Floating(value: T?, onDismiss: () -> Unit, content: @Composable ColumnScope.(T) -> Unit) {
-    var last by remember { mutableStateOf(value) }
-    if (value != null) last = value
-    Box(Modifier.fillMaxSize()) {
-        AnimatedVisibility(value != null, enter = fadeIn(tween(Motion.EFFECTS)), exit = fadeOut(tween(Motion.EFFECTS))) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)).clickable(remember { MutableInteractionSource() }, null, onClick = onDismiss))
-        }
-        AnimatedVisibility(
-            value != null,
-            modifier = Modifier.align(Alignment.BottomCenter),
-            enter = fadeIn(tween(Motion.EFFECTS)) + slideInVertically(spring(dampingRatio = 0.82f, stiffness = 420f)) { it / 3 } +
-                scaleIn(spring(dampingRatio = 0.82f, stiffness = 420f), initialScale = 0.94f),
-            exit = fadeOut(tween(Motion.EFFECTS_FAST)) + slideOutVertically(tween(Motion.SPATIAL_FAST, easing = Motion.EmphasizedAccelerate)) { it / 4 } +
-                scaleOut(tween(Motion.SPATIAL_FAST), targetScale = 0.96f),
-        ) {
-            Column(
-                Modifier
-                    .padding(Space.md)
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(Radius.xl))
-                    .background(Color(0xFF1C1C1C))
-                    .background(Oto.colors.accent.copy(alpha = 0.06f))
-                    .clickable(remember { MutableInteractionSource() }, null) {}
-                    .padding(Space.sm),
-            ) { last?.let { content(it) } }
-        }
-    }
-}
 
 @Composable
 private fun ActionRow(icon: Int, text: String, tint: Color = Oto.colors.text, trailing: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
@@ -781,17 +731,14 @@ private fun ActionRow(icon: Int, text: String, tint: Color = Oto.colors.text, tr
 @Composable
 private fun ColumnScope.SongActions(
     h: Held,
-    playlists: List<LocalPlaylist>,
     onNext: () -> Unit,
-    onAdd: (LocalPlaylist) -> Unit,
-    onNew: () -> Unit,
+    onSave: () -> Unit,
     onArtist: (String, String) -> Unit,
     onRemove: (() -> Unit)?,
     here: String?,
 ) {
     val c = Oto.colors
     val song = h.song
-    var adding by remember(h) { mutableStateOf(false) }
     Row(Modifier.padding(Space.sm), verticalAlignment = Alignment.CenterVertically) {
         Art(song.thumbnail, 48.dp, Radius.sm)
         Spacer(Modifier.width(Space.md))
@@ -802,49 +749,9 @@ private fun ColumnScope.SongActions(
     }
     Spacer(Modifier.height(Space.xs))
     ActionRow(R.drawable.ic_queue_music, "Reproducir a continuación", onClick = onNext)
-    ActionRow(R.drawable.ic_add, "Añadir a una lista", trailing = {
-        val turn by androidx.compose.animation.core.animateFloatAsState(if (adding) 1f else 0f, spring(dampingRatio = 0.8f, stiffness = 500f), label = "chevron")
-        Icon(painterResource(R.drawable.ic_arrow_back), null, Modifier.size(18.dp).graphicsLayer { rotationZ = 270f - 180f * turn }, tint = c.textFaint)
-    }) { adding = !adding }
-    AnimatedVisibility(
-        adding,
-        enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = 420f)) + fadeIn(tween(Motion.EFFECTS, delayMillis = 60)),
-        exit = shrinkVertically(tween(Motion.SPATIAL_FAST, easing = Motion.Standard)) + fadeOut(tween(Motion.EFFECTS_FAST)),
-    ) {
-        Column(Modifier.padding(start = Space.xl).fillMaxWidth()) {
-            playlists.filter { it.id != h.list }.forEach { p ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(Radius.lg))
-                        .clickable(remember { MutableInteractionSource() }, ripple(color = c.text)) { onAdd(p) }
-                        .padding(horizontal = Space.sm, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Mosaic(p.songs, 36.dp)
-                    Spacer(Modifier.width(Space.md))
-                    Text(p.name, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    if (p.songs.any { it.id == song.id }) Icon(painterResource(R.drawable.ic_check), null, Modifier.size(18.dp), tint = c.accent)
-                }
-            }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(Radius.lg))
-                    .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onNew)
-                    .padding(horizontal = Space.sm, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.size(36.dp).clip(RoundedCornerShape(Radius.md)).background(c.accent.copy(alpha = 0.22f)), contentAlignment = Alignment.Center) {
-                    Icon(painterResource(R.drawable.ic_add), null, Modifier.size(20.dp), tint = c.accent)
-                }
-                Spacer(Modifier.width(Space.md))
-                Text("Nueva lista…", style = OtoType.rowTitle, color = c.accent)
-            }
-        }
-    }
+    ActionRow(R.drawable.ic_add, "Guardar en…", onClick = onSave)
     song.artists.firstOrNull { it.id != null && it.id != here }?.let { a -> ActionRow(R.drawable.ic_person, "Ir a ${a.name}") { onArtist(a.id!!, a.name) } }
-    if (onRemove != null) ActionRow(R.drawable.ic_delete, "Quitar de esta lista", onClick = onRemove)
+    if (onRemove != null) ActionRow(R.drawable.ic_delete, if (h.list == LIKED_ID) "Quitar de Me gusta" else "Quitar de esta lista", onClick = onRemove)
 }
 
 @Composable
@@ -871,8 +778,6 @@ private fun ColumnScope.NameField(n: Naming, onDone: (String) -> Unit) {
         if (n.rename != null) "Cambiar el nombre" else "Nueva lista",
         style = OtoType.title, color = c.text, modifier = Modifier.padding(start = Space.md, top = Space.md, end = Space.md),
     )
-    if (n.song != null) Text("Con «${n.song.title}» dentro", style = OtoType.rowSub, color = c.textMuted, maxLines = 1,
-        overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = Space.md))
     Spacer(Modifier.height(Space.md))
     Box(
         Modifier

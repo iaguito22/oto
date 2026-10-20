@@ -110,7 +110,20 @@ import coil3.compose.AsyncImage
 import coil3.imageLoader
 import coil3.request.ImageRequest
 import coil3.toBitmap
+import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.OtoApp
+import io.github.iaguito22.oto.ui.menu.Floating
+import io.github.iaguito22.oto.ui.menu.SaveTo
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.painterResource
 import io.github.iaguito22.oto.R
 import io.github.iaguito22.oto.playback.NowPlaying
 import io.github.iaguito22.oto.playback.PlayerConnection
@@ -168,6 +181,36 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
             else -> sheet.open(SheetKind.Queue, origin)
         }
     }
+    // Guardar lo que suena: doble toque en la carátula = Me gusta; mantenerla (o tocar su marca) = elegir dónde.
+    val likedIds by app.prefs.likedIds.collectAsStateWithLifecycle(initialValue = emptySet())
+    val lists by app.prefs.playlists.collectAsStateWithLifecycle(initialValue = emptyList())
+    var saving by remember { mutableStateOf<Heard?>(null) }
+    var burst by remember { mutableIntStateOf(0) }
+    val saved: (String?) -> Saved = { id ->
+        when {
+            id == null -> Saved.No
+            id in likedIds -> Saved.Liked
+            lists.any { l -> l.songs.any { it.id == id } } -> Saved.Listed
+            else -> Saved.No
+        }
+    }
+    val like: () -> Unit = like@{
+        val h = np.toHeard() ?: return@like
+        burst++
+        haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+        // Como en las fotos: dos toques solo dan me gusta, nunca lo quitan (eso, con la marca o manteniendo).
+        if (h.id in likedIds) flash = CueLabel(R.drawable.ic_favorite, "Ya está en Me gusta")
+        else {
+            flash = CueLabel(R.drawable.ic_favorite, "En Me gusta")
+            scope.launch { app.prefs.setLiked(h, true) }
+        }
+    }
+    val save: () -> Unit = save@{
+        val h = np.toHeard() ?: return@save
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        saving = h
+    }
+    BackHandler(saving != null) { saving = null }
     val openArtist: (String, String, Offset) -> Unit = { id, name, origin ->
         haptics.performHapticFeedback(HapticFeedbackType.Confirm)
         menu.openArtist(id, name)
@@ -200,7 +243,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
     Box(Modifier.fillMaxSize().background(c.base)) {
         Backdrop(np.artwork)
         Stage(
-            np, connection, drop, lyrics, openSource, openArtist,
+            np, connection, drop, lyrics, openSource, openArtist, saved, like, save, burst,
             Modifier.graphicsLayer {
                 // Lo de detrás se aleja y se desenfoca mientras la hoja crece: hace de cristal sin capturar la pantalla.
                 val m = sheet.morph.value.coerceIn(0f, 1.2f)
@@ -240,6 +283,10 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
                 .navigationBarsPadding()
                 .padding(bottom = DROP_LIFT + DROP_HOST / 2 + 72.dp),
         )
+        Floating(
+            saving, onDismiss = { saving = null },
+            cardModifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime)),
+        ) { song -> SaveTo(song, onDone = { saving = null }) }
         SheetHost(sheet, { dropCenter }, dropRadius) { kind ->
             when (kind) {
                 SheetKind.Menu -> MenuSheet(connection, np.id, onClose = sheet::close, onTutorial = {
@@ -292,6 +339,10 @@ private fun Stage(
     lyrics: Boolean,
     onSource: (Offset) -> Unit,
     onArtist: (String, String, Offset) -> Unit,
+    saved: (String?) -> Saved,
+    onLike: () -> Unit,
+    onSave: () -> Unit,
+    burst: Int,
     modifier: Modifier,
 ) {
     val c = Oto.colors
@@ -321,6 +372,9 @@ private fun Stage(
     val pull = remember { Animatable(0f) }
     var sourceCenter by remember { mutableStateOf(Offset.Zero) }
     val canPull = np.id != null && source != null
+    // El detector de toques vive más que una recomposición: tiene que llamar a la versión de ahora (la canción de ahora).
+    val like by rememberUpdatedState(onLike)
+    val save by rememberUpdatedState(onSave)
 
     Column(
         modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(bottom = DROP_LIFT + DROP_HOST),
@@ -346,7 +400,11 @@ private fun Stage(
             ) { showLyrics ->
                 if (showLyrics) LyricsPanel(np, connection, side, side + LYRICS_EXTRA)
                 else Box(
-                    Modifier.pullToOpen(canPull, pull, onOpen = { onSource(sourceCenter) }),
+                    Modifier
+                        .pullToOpen(canPull, pull, onOpen = { onSource(sourceCenter) })
+                        .pointerInput(np.id != null) {
+                            if (np.id != null) detectTapGestures(onDoubleTap = { like() }, onLongPress = { save() })
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     // Al llevar la gota a un lado se asoma por ese lado la canción que vendría.
@@ -373,7 +431,8 @@ private fun Stage(
                             translationY = COVER_PULL * pullOffset(pull.value, density)
                         },
                         label = "cover",
-                    ) { song -> Cover(song.artwork, side, paused) }
+                    ) { song -> Cover(song.artwork, side, paused, saved(song.id), onSave) }
+                    HeartBurst(burst, side, Modifier.graphicsLayer { translationY = COVER_PULL * pullOffset(pull.value, density) })
                 }
             }
         }
@@ -556,8 +615,13 @@ private fun Artists(song: Shown, onArtist: (String, String, Offset) -> Unit) {
     )
 }
 
+/** Dónde está guardada una canción: en Me gusta (corazón), solo en alguna lista tuya (marca) o en ninguna. */
+private enum class Saved { No, Listed, Liked }
+
+private fun NowPlaying.toHeard() = id?.let { Heard(it, title, artist, artwork, artists.firstOrNull()?.second) }
+
 @Composable
-private fun Cover(artwork: String?, side: Dp, paused: Float) {
+private fun Cover(artwork: String?, side: Dp, paused: Float, saved: Saved, onSaved: () -> Unit) {
     val c = Oto.colors
     val shape = RoundedCornerShape(28.dp)
     val sat = lerp(1f, 0.7f, paused)
@@ -583,6 +647,83 @@ private fun Cover(artwork: String?, side: Dp, paused: Float) {
                 modifier = Modifier.fillMaxSize(),
             )
         }
+        SavedMark(saved, onSaved, Modifier.align(Alignment.BottomEnd).padding(12.dp))
+    }
+}
+
+/** La marca de guardada, en la esquina de la carátula: tocarla abre dónde está. */
+@Composable
+private fun SavedMark(saved: Saved, onClick: () -> Unit, modifier: Modifier) {
+    val c = Oto.colors
+    var shown by remember { mutableStateOf(saved) }
+    if (saved != Saved.No) shown = saved
+    AnimatedVisibility(
+        saved != Saved.No,
+        modifier = modifier,
+        enter = fadeIn(tween(Motion.EFFECTS_FAST)) + scaleIn(spring(dampingRatio = 0.5f, stiffness = 600f), initialScale = 0.3f),
+        exit = fadeOut(tween(Motion.EFFECTS_FAST)) + scaleOut(tween(Motion.SPATIAL_FAST, easing = Motion.Standard), targetScale = 0.6f),
+    ) {
+        Box(
+            Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.42f))
+                .clickable(remember { MutableInteractionSource() }, null, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Crossfade(shown, animationSpec = tween(Motion.EFFECTS), label = "savedMark") { s ->
+                Icon(
+                    painterResource(if (s == Saved.Liked) R.drawable.ic_favorite else R.drawable.ic_check), null,
+                    Modifier.size(19.dp), tint = c.accent,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * El corazón del doble toque: brota del centro de la carátula con un rebote, suelta un aro de acento y se va
+ * hinchándose y desvaneciéndose. Cada [key] nuevo lo lanza otra vez, aunque el anterior no hubiera acabado.
+ */
+@Composable
+private fun HeartBurst(key: Int, side: Dp, modifier: Modifier) {
+    val c = Oto.colors
+    val scale = remember { Animatable(0f) }
+    val alpha = remember { Animatable(0f) }
+    val ring = remember { Animatable(1f) }
+    LaunchedEffect(key) {
+        if (key == 0) return@LaunchedEffect
+        scale.snapTo(0.35f); alpha.snapTo(1f); ring.snapTo(0f)
+        launch { ring.animateTo(1f, tween(560, easing = Motion.EmphasizedDecelerate)) }
+        // El rebote no se espera a que se calme: a su hora se va, aunque aún tiemble (y lo de irse lo corta).
+        launch { scale.animateTo(1f, spring(dampingRatio = 0.42f, stiffness = 420f)) }
+        delay(HEART_HOLD_MS)
+        launch { scale.animateTo(1.22f, tween(240, easing = Motion.EmphasizedAccelerate)) }
+        alpha.animateTo(0f, tween(240, easing = Motion.Standard))
+    }
+    Box(
+        modifier.size(side).drawBehind {
+            val a = alpha.value
+            if (a <= 0f) return@drawBehind
+            // Una sombra suave debajo: el corazón blanco se lee igual sobre una carátula clara.
+            drawCircle(Brush.radialGradient(listOf(Color.Black.copy(alpha = 0.32f * a), Color.Transparent), radius = size.minDimension * 0.34f))
+            val r = ring.value
+            if (r < 1f) drawCircle(
+                c.accent.copy(alpha = (1f - r) * a),
+                radius = size.minDimension * lerp(0.14f, 0.46f, r),
+                style = Stroke(width = lerp(10.dp.toPx(), 1.dp.toPx(), r)),
+            )
+        },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painterResource(R.drawable.ic_favorite), null,
+            Modifier.size(side * 0.3f).graphicsLayer {
+                scaleX = scale.value; scaleY = scale.value
+                this.alpha = alpha.value
+            },
+            tint = Color.White,
+        )
     }
 }
 
@@ -751,3 +892,4 @@ private val PROGRESS_H = 72.dp
 private const val FLASH_MS = 650L
 private const val PEEK_MUTE_MS = 500L
 private const val BACKDROP_MS = 800
+private const val HEART_HOLD_MS = 480L

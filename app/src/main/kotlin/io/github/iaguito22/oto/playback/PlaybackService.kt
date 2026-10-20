@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
+import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -23,11 +24,13 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
-import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.MainActivity
 import io.github.iaguito22.oto.OtoApp
 import kotlinx.coroutines.CoroutineScope
@@ -67,6 +70,9 @@ class PlaybackService : MediaSessionService() {
     private var radioJob: Job? = null
     private val recent = ArrayDeque<String>()
 
+    private val prefs by lazy { (application as OtoApp).prefs }
+    private var liked = emptySet<String>()
+
     override fun onCreate() {
         super.onCreate()
         InnerTubeXPlayer.initialize(this)
@@ -93,6 +99,9 @@ class PlaybackService : MediaSessionService() {
             )
             .setCallback(callback)
             .build()
+
+        // El corazón de la notificación sigue a Prefs: lo cambie quien lo cambie, aquí se ve.
+        scope.launch { prefs.likedIds.collect { liked = it; showLike() } }
 
         connectivity.registerDefaultNetworkCallback(networkCallback)
         scope.launch(Dispatchers.IO) {
@@ -230,6 +239,26 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    // --- Me gusta ---
+
+    /** Un corazón en la notificación, la pantalla de bloqueo y los controles del sistema. */
+    private fun showLike() {
+        val on = player.currentMediaItem?.mediaId?.let { it in liked } ?: return
+        session.setMediaButtonPreferences(
+            listOf(
+                CommandButton.Builder(if (on) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED)
+                    .setDisplayName(if (on) "Quitar de Me gusta" else "Me gusta")
+                    .setSessionCommand(LIKE)
+                    .build(),
+            ),
+        )
+    }
+
+    private fun toggleLike() {
+        val item = player.currentMediaItem ?: return
+        scope.launch { prefs.toggleLike(item.toHeard()) }
+    }
+
     // --- Radio ---
 
     private fun startRadio(seedId: String) {
@@ -275,21 +304,31 @@ class PlaybackService : MediaSessionService() {
             while (recent.size > RECENT) recent.removeFirst()
             applyLoudness()
             topUpRadio()
-            val meta = mediaItem.mediaMetadata
-            scope.launch(Dispatchers.IO) {
-                (application as OtoApp).prefs.addHeard(
-                    Heard(
-                        id, meta.title?.toString().orEmpty(), meta.artist?.toString().orEmpty(), meta.artworkUri?.toString(),
-                        meta.extras?.getStringArray(ARTIST_IDS)?.firstOrNull()?.ifEmpty { null },
-                    ),
-                )
-            }
+            showLike()
+            scope.launch(Dispatchers.IO) { prefs.addHeard(mediaItem.toHeard()) }
         }
 
         override fun onPlayerError(error: PlaybackException) = recover(error)
     }
 
     private val callback = object : MediaSession.Callback {
+        // Todos los controladores (también la notificación) pueden pulsar el corazón.
+        override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult =
+            MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().add(LIKE).build())
+                .build()
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction != LIKE.customAction) return super.onCustomCommand(session, controller, customCommand, args)
+            toggleLike()
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
         // Los MediaItem que llegan de un controlador pierden la URI por el camino.
         override fun onAddMediaItems(
             mediaSession: MediaSession,
@@ -329,5 +368,6 @@ class PlaybackService : MediaSessionService() {
         const val RADIO_PAGES = 3
         const val RECENT = 200
         const val QUALITY_KEY = "oto_quality"
+        val LIKE = SessionCommand("io.github.iaguito22.oto.LIKE", Bundle.EMPTY)
     }
 }
