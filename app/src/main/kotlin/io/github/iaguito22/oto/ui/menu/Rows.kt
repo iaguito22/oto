@@ -1,0 +1,161 @@
+package io.github.iaguito22.oto.ui.menu
+
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
+import com.metrolist.innertube.models.SongItem
+import io.github.iaguito22.oto.playback.resize
+import io.github.iaguito22.oto.ui.theme.Motion
+import io.github.iaguito22.oto.ui.theme.Oto
+import io.github.iaguito22.oto.ui.theme.OtoType
+import io.github.iaguito22.oto.ui.theme.Radius
+import io.github.iaguito22.oto.ui.theme.Space
+
+fun SongItem.subtitle() = buildString {
+    append(artists.joinToString { it.name })
+    duration?.let { append(" · %d:%02d".format(it / 60, it % 60)) }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun SongRow(
+    title: String,
+    subtitle: String,
+    artwork: String?,
+    current: Boolean,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    val c = Oto.colors
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.lg))
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = ripple(color = c.text),
+                onLongClick = onLongClick,
+                onClick = onClick,
+            )
+            .padding(horizontal = Space.sm, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Art(artwork, 44.dp, Radius.sm)
+        Spacer(Modifier.width(Space.md))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = OtoType.rowTitle, color = if (current) c.accent else c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (current) {
+            Spacer(Modifier.width(Space.sm))
+            Icon(painterResource(io.github.iaguito22.oto.R.drawable.ic_graphic_eq), null, Modifier.size(18.dp), tint = c.accent)
+        }
+    }
+}
+
+/** Carátula con el hueco ya pintado mientras carga, para que nada salte. */
+@Composable
+fun Art(url: String?, size: Dp, radius: Dp, modifier: Modifier = Modifier) {
+    val c = Oto.colors
+    AsyncImage(
+        model = url?.resize((size.value * 3).toInt()),
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = modifier.size(size).clip(if (radius >= size / 2) CircleShape else RoundedCornerShape(radius)).background(c.field),
+    )
+}
+
+/** Lo que ocupa el sitio de una lista mientras llega: bloques que respiran, sin girar nada. */
+@Composable
+fun Skeleton(rows: Int = 6, modifier: Modifier = Modifier) {
+    val c = Oto.colors
+    val t = rememberInfiniteTransition(label = "skeleton")
+    val a by t.animateFloat(0.5f, 1f, infiniteRepeatable(tween(900, easing = Motion.Standard), RepeatMode.Reverse), label = "breath")
+    Column(modifier.graphicsLayer { alpha = a }, verticalArrangement = Arrangement.spacedBy(Space.md)) {
+        repeat(rows) { i ->
+            Row(Modifier.padding(horizontal = Space.sm), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(44.dp).clip(RoundedCornerShape(Radius.sm)).background(c.field))
+                Spacer(Modifier.width(Space.md))
+                Column {
+                    Box(Modifier.height(12.dp).fillMaxWidth(0.55f + 0.08f * (i % 3)).clip(CircleShape).background(c.field))
+                    Spacer(Modifier.height(6.dp))
+                    Box(Modifier.height(10.dp).fillMaxWidth(0.32f + 0.06f * (i % 2)).clip(CircleShape).background(c.field))
+                }
+            }
+        }
+    }
+}
+
+/** Un hueco vacío explicado: icono, una frase y, si hace falta, qué hacer. */
+@Composable
+fun Empty(icon: Int, title: String, body: String, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null) {
+    val c = Oto.colors
+    Column(modifier.fillMaxSize().padding(Space.xl), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Icon(painterResource(icon), null, Modifier.size(36.dp), tint = c.textFaint)
+        Spacer(Modifier.height(Space.md))
+        Text(title, style = OtoType.rowTitle, color = c.text, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(4.dp))
+        Text(body, style = OtoType.rowSub, color = c.textMuted, textAlign = TextAlign.Center)
+        if (action != null) {
+            Spacer(Modifier.height(Space.lg))
+            action()
+        }
+    }
+}
+
+@Composable
+fun Pill(text: String, onClick: () -> Unit, filled: Boolean = true, icon: Int? = null) {
+    val c = Oto.colors
+    Row(
+        Modifier
+            .height(40.dp)
+            .clip(CircleShape)
+            .background(if (filled) c.accent else c.field)
+            .combinedClickable(remember { MutableInteractionSource() }, ripple(color = if (filled) c.onAccent else c.text), onClick = onClick)
+            .padding(horizontal = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (icon != null) {
+            Icon(painterResource(icon), null, Modifier.size(20.dp), tint = if (filled) c.onAccent else c.text)
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(text, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.08f), color = if (filled) c.onAccent else c.text)
+    }
+}

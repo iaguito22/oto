@@ -5,8 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import io.github.iaguito22.oto.ui.sonda.SondaScreen
-import io.github.iaguito22.oto.ui.theme.OtoTheme
+import io.github.iaguito22.oto.ui.isla.IslaScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -16,10 +15,7 @@ class MainActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
         setContent {
-            OtoTheme {
-                // Pantalla provisional (fases 2 y 3): busca y reproduce. La isla la sustituye en la fase 4.
-                SondaScreen()
-            }
+            IslaScreen()
         }
     }
 

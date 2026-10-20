@@ -1,0 +1,625 @@
+package io.github.iaguito22.oto.ui.isla
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.lifecycle.viewmodel.compose.viewModel
+import io.github.iaguito22.oto.playback.Source
+import io.github.iaguito22.oto.playback.StreamInfo
+import io.github.iaguito22.oto.ui.menu.MenuViewModel
+import kotlin.math.tanh
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.MarqueeSpacing
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.util.lerp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil3.compose.AsyncImage
+import coil3.imageLoader
+import coil3.request.ImageRequest
+import coil3.toBitmap
+import io.github.iaguito22.oto.OtoApp
+import io.github.iaguito22.oto.R
+import io.github.iaguito22.oto.playback.NowPlaying
+import io.github.iaguito22.oto.playback.PlayerConnection
+import io.github.iaguito22.oto.ui.menu.MenuSheet
+import io.github.iaguito22.oto.ui.theme.Motion
+import io.github.iaguito22.oto.ui.theme.Oto
+import io.github.iaguito22.oto.ui.theme.OtoTheme
+import io.github.iaguito22.oto.ui.theme.OtoType
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+/**
+ * La pantalla única de Oto: la carátula sobre su propio color desenfocado y, abajo, la gota. Todo lo demás
+ * (Menú, cola, letra) sale de la gota y vuelve a ella.
+ */
+@Composable
+fun IslaScreen() {
+    val app = LocalContext.current.applicationContext as OtoApp
+    val connection = app.player
+    val np by connection.state.collectAsStateWithLifecycle()
+    val accent = rememberAccent(np.artwork)
+    OtoTheme(accent) { Isla(np, connection, app) }
+}
+
+@Composable
+private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
+    val c = Oto.colors
+    val density = LocalDensity.current
+    val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    val drop = remember { DropState() }
+    val sheet = rememberSheetState()
+    val tutorial = remember { TutorialState() }
+    val tutorialDone by app.prefs.tutorialDone.collectAsStateWithLifecycle(initialValue = null)
+    LaunchedEffect(tutorialDone) { if (tutorialDone == false && !tutorial.active) tutorial.start() }
+
+    var cue by remember { mutableStateOf<CueLabel?>(null) }
+    var flash by remember { mutableStateOf<CueLabel?>(null) }
+    LaunchedEffect(flash) { if (flash != null) { delay(FLASH_MS); flash = null } }
+    var dropCenter by remember { mutableStateOf(Offset.Zero) }
+    // Durante el tutorial la carátula se aparta: solo cuentan la gota y lo que se explica.
+    val teaching by animateFloatAsState(if (tutorial.active) 1f else 0f, tween(Motion.SPATIAL_FAST, easing = Motion.Standard), label = "teaching")
+    val dropRadius = with(density) { DROP_RADIUS.toPx() }
+    var lyrics by rememberSaveable { mutableStateOf(false) }
+    BackHandler(lyrics && !sheet.isOpen && !tutorial.active) { lyrics = false }
+    val menu: MenuViewModel = viewModel()
+    val next by connection.queue.collectAsStateWithLifecycle()
+    val previous by connection.previousEntry.collectAsStateWithLifecycle()
+    val openSource: (Offset) -> Unit = { origin ->
+        val item = connection.source.value?.item
+        haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+        if (item != null) {
+            menu.open(item)
+            sheet.open(SheetKind.Menu, origin)
+        } else sheet.open(SheetKind.Queue, origin)
+    }
+
+    PrefetchArtwork(connection)
+
+    val onGesture: (Gesture) -> Unit = { g ->
+        if (tutorial.active) {
+            if (tutorial.attempt(g)) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+            else haptics.performHapticFeedback(HapticFeedbackType.Reject)
+        } else when (g) {
+            Gesture.Toggle -> if (np.id == null) {
+                flash = CueLabel(R.drawable.ic_search, "Sube la gota para buscar")
+                haptics.performHapticFeedback(HapticFeedbackType.Reject)
+            } else {
+                flash = g.label(np.playing)
+                haptics.performHapticFeedback(if (np.playing) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn)
+                connection.toggle()
+            }
+            Gesture.Next -> { haptics.performHapticFeedback(HapticFeedbackType.Confirm); connection.next() }
+            Gesture.Previous -> { haptics.performHapticFeedback(HapticFeedbackType.Confirm); connection.previous() }
+            Gesture.Menu -> { menu.closeDetail(); sheet.open(SheetKind.Menu) }
+            Gesture.Queue -> sheet.open(SheetKind.Queue)
+            Gesture.Lyrics -> { haptics.performHapticFeedback(HapticFeedbackType.Confirm); lyrics = !lyrics }
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(c.base)) {
+        Backdrop(np.artwork)
+        Stage(
+            np, connection, drop, lyrics, openSource,
+            Modifier.graphicsLayer {
+                // Lo de detrás se aleja y se desenfoca mientras la hoja crece: hace de cristal sin capturar la pantalla.
+                val m = sheet.morph.value.coerceIn(0f, 1.2f)
+                alpha = 1f - 0.92f * teaching
+                val s = 1f - 0.05f * m
+                scaleX = s; scaleY = s
+                renderEffect = if (m > 0.01f) BlurEffect(28.dp.toPx() * m, 28.dp.toPx() * m, TileMode.Decal) else null
+            },
+        )
+        Drop(
+            state = drop,
+            playing = np.playing,
+            accent = c.accent,
+            visible = { if (sheet.isOpen) 1f - (sheet.morph.value / 0.06f).coerceIn(0f, 1f) else 1f },
+            onCue = { g, hold ->
+                cue = when (g) {
+                    // Con la siguiente o la anterior se dice cuál es, no solo «Siguiente».
+                    Gesture.Next -> CueLabel(R.drawable.ic_skip_next, next.firstOrNull()?.title?.ifEmpty { null } ?: "Siguiente")
+                    Gesture.Previous -> CueLabel(R.drawable.ic_skip_previous, previous?.title?.ifEmpty { null } ?: "Desde el principio")
+                    Gesture.Lyrics -> if (lyrics) CueLabel(R.drawable.ic_lyrics, "Carátula") else g.label(np.playing)
+                    else -> g?.label(np.playing, hold)
+                }
+            },
+            onGesture = onGesture,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = DROP_LIFT)
+                .fillMaxWidth()
+                .height(DROP_HOST)
+                .onGloballyPositioned { dropCenter = it.boundsInRoot().center },
+        )
+        Cue(
+            cue ?: flash,
+            Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = DROP_LIFT + DROP_HOST / 2 + 72.dp),
+        )
+        SheetHost(sheet, { dropCenter }, dropRadius) { kind ->
+            when (kind) {
+                SheetKind.Menu -> MenuSheet(connection, np.id, onClose = sheet::close, onTutorial = {
+                    sheet.close()
+                    lyrics = false
+                    scope.launch { delay(350); tutorial.start() }
+                }, vm = menu)
+                SheetKind.Queue -> QueueSheet(connection, onClose = sheet::close)
+            }
+        }
+        Tutorial(tutorial, { dropCenter }, drop, onDone = { scope.launch { app.prefs.setTutorialDone(true) } })
+    }
+}
+
+/** La carátula como fondo: pequeña, ampliada, muy desenfocada y saturada, con un velo encima. */
+@Composable
+private fun Backdrop(artwork: String?) {
+    val context = LocalContext.current
+    // Se carga antes de cambiar, así el fundido va de una imagen a otra y no pasa por negro.
+    val image by produceState<ImageBitmap?>(null, artwork) {
+        if (artwork == null) { value = null; return@produceState }
+        val r = context.imageLoader.execute(ImageRequest.Builder(context).data(smallArtwork(artwork)).build())
+        r.image?.toBitmap()?.asImageBitmap()?.let { value = it }
+    }
+    Crossfade(image, animationSpec = tween(BACKDROP_MS, easing = Motion.Standard), label = "backdrop") { bmp ->
+        if (bmp != null) Image(
+            bmp, null,
+            contentScale = ContentScale.Crop,
+            colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = 1.35f; scaleY = 1.35f
+                    renderEffect = BlurEffect(64.dp.toPx(), 64.dp.toPx(), TileMode.Clamp)
+                },
+        )
+    }
+    Box(
+        Modifier.fillMaxSize().background(
+            Brush.verticalGradient(0f to Color(0x8C080808), 0.55f to Color(0x6B080808), 1f to Color(0xCC080808)),
+        ),
+    )
+}
+
+@Composable
+private fun Stage(
+    np: NowPlaying,
+    connection: PlayerConnection,
+    drop: DropState,
+    lyrics: Boolean,
+    onSource: (Offset) -> Unit,
+    modifier: Modifier,
+) {
+    val c = Oto.colors
+    // Hacia dónde entra la canción nueva: de la derecha si avanza, de la izquierda si retrocede.
+    var lastIndex by remember { mutableIntStateOf(np.index) }
+    var lastId by remember { mutableStateOf(np.id) }
+    var dir by remember { mutableIntStateOf(1) }
+    if (np.id != lastId) {
+        dir = if (np.index < lastIndex) -1 else 1
+        lastIndex = np.index
+        lastId = np.id
+    }
+    val titleShift = with(LocalDensity.current) { 26.dp.roundToPx() }
+    val paused by animateFloatAsState(if (np.id != null && !np.playing && !np.buffering) 1f else 0f, spring(dampingRatio = 0.62f, stiffness = 300f), label = "paused")
+    val source by connection.source.collectAsStateWithLifecycle()
+    val next by connection.queue.collectAsStateWithLifecycle()
+    val previous by connection.previousEntry.collectAsStateWithLifecycle()
+
+    Column(
+        modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(bottom = DROP_LIFT + DROP_HOST),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        SourceHeader(source.takeIf { np.id != null }, onSource)
+        Spacer(Modifier.weight(1f))
+        BoxWithConstraints(Modifier.padding(horizontal = 36.dp), contentAlignment = Alignment.Center) {
+            val side = minOf(maxWidth, 340.dp)
+            // La letra ocupa el sitio de la carátula: cambiar a ella es como cambiar de carátula, no de pantalla.
+            AnimatedContent(
+                targetState = lyrics,
+                transitionSpec = {
+                    val down = if (targetState) 1 else -1
+                    (fadeIn(tween(Motion.EFFECTS, delayMillis = 50)) + scaleIn(spring(dampingRatio = 0.8f, stiffness = 300f), 0.94f) +
+                        slideInVertically(spring(dampingRatio = 0.8f, stiffness = 300f)) { -down * it / 14 }) togetherWith
+                        (fadeOut(tween(Motion.EFFECTS_FAST)) + scaleOut(tween(Motion.SPATIAL_FAST, easing = Motion.EmphasizedAccelerate), 0.94f)) using
+                        SizeTransform(clip = false)
+                },
+                contentAlignment = Alignment.Center,
+                label = "coverOrLyrics",
+            ) { showLyrics ->
+                if (showLyrics) LyricsPanel(np, side)
+                else Box(contentAlignment = Alignment.Center) {
+                    // Al llevar la gota a un lado se asoma por ese lado la canción que vendría.
+                    Peek(next.firstOrNull()?.artwork, side, drop, toRight = true)
+                    Peek(previous?.artwork, side, drop, toRight = false)
+                    AnimatedContent(
+                        targetState = np,
+                        contentKey = { it.id },
+                        transitionSpec = {
+                            val d = dir
+                            (fadeIn(tween(220, delayMillis = 40)) + slideInHorizontally(spring(dampingRatio = 0.78f, stiffness = 260f)) { d * it / 7 } + scaleIn(spring(dampingRatio = 0.78f, stiffness = 260f), 0.94f)) togetherWith
+                                (fadeOut(tween(Motion.EFFECTS_FAST)) + slideOutHorizontally(tween(Motion.SPATIAL_FAST, easing = Motion.EmphasizedAccelerate)) { -d * it / 9 } + scaleOut(tween(Motion.SPATIAL_FAST), 0.94f)) using
+                                SizeTransform(clip = false)
+                        },
+                        modifier = Modifier.graphicsLayer {
+                            drop.frame
+                            translationX = -drop.lean * side.toPx() * 0.1f
+                        },
+                        label = "cover",
+                    ) { song -> Cover(song.artwork, side, paused) }
+                }
+            }
+        }
+        Spacer(Modifier.height(28.dp))
+        AnimatedContent(
+            targetState = np,
+            contentKey = { it.id },
+            transitionSpec = {
+                val d = dir
+                (fadeIn(tween(Motion.EFFECTS, delayMillis = 60)) + slideInHorizontally(spring(dampingRatio = 0.72f, stiffness = 380f)) { d * titleShift }) togetherWith
+                    fadeOut(tween(Motion.EFFECTS_FAST)) using SizeTransform(clip = false)
+            },
+            label = "titles",
+        ) { song ->
+            Column(Modifier.fillMaxWidth().padding(horizontal = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                // Un título largo se desplaza y se desvanece por los bordes en vez de cortarse en seco.
+                Box(Modifier.fillMaxWidth().fadeEdges(), contentAlignment = Alignment.Center) {
+                    Text(
+                        song.title.ifEmpty { if (song.id == null) "Nada sonando" else "" },
+                        style = OtoType.title, color = c.text, maxLines = 1, textAlign = TextAlign.Center,
+                        modifier = Modifier.basicMarquee(initialDelayMillis = 2500, repeatDelayMillis = 2500, velocity = 36.dp, spacing = MarqueeSpacing(48.dp)),
+                    )
+                }
+                Text(
+                    song.artist.ifEmpty { if (song.id == null) "Sube la gota para buscar" else "" },
+                    style = OtoType.body.copy(fontSize = 15.sp), color = c.textMuted, maxLines = 1, textAlign = TextAlign.Center,
+                )
+            }
+        }
+        StatusLine(np)
+        Spacer(Modifier.height(10.dp))
+        if (np.id != null) Progress(np, connection, Modifier.padding(horizontal = 36.dp))
+        else Spacer(Modifier.height(PROGRESS_H))
+        Spacer(Modifier.weight(1.25f))
+    }
+}
+
+/**
+ * Lo que suena viene de algún sitio (un álbum, una lista, la radio de una canción): se dice arriba, y tirar de
+ * ahí hacia abajo (o tocarlo) lo abre. Sigue al dedo con resistencia y vibra al pasar el umbral, como la gota.
+ */
+@Composable
+private fun SourceHeader(source: Source?, onOpen: (Offset) -> Unit) {
+    val c = Oto.colors
+    val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    val pull = remember { Animatable(0f) }
+    var center by remember { mutableStateOf(Offset.Zero) }
+    var shown by remember { mutableStateOf(source) }
+    if (source != null) shown = source
+    val alpha by animateFloatAsState(if (source != null) 1f else 0f, tween(Motion.EFFECTS, easing = Motion.Standard), label = "source")
+    val density = LocalDensity.current
+    val k = with(density) { 64.dp.toPx() }
+    val threshold = with(density) { 48.dp.toPx() }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .height(SOURCE_H)
+            .graphicsLayer {
+                this.alpha = alpha
+                translationY = k * tanh(pull.value / k)
+            }
+            .onGloballyPositioned { center = it.boundsInRoot().center }
+            .pointerInput(source != null) {
+                if (source == null) return@pointerInput
+                var armed = false
+                detectVerticalDragGestures(
+                    onDragEnd = {
+                        if (armed) onOpen(center)
+                        armed = false
+                        scope.launch { pull.animateTo(0f, Motion.spatial()) }
+                    },
+                    onDragCancel = {
+                        armed = false
+                        scope.launch { pull.animateTo(0f, Motion.spatial()) }
+                    },
+                ) { change, dy ->
+                    change.consume()
+                    val d = (pull.value + dy).coerceAtLeast(0f)
+                    if ((d > threshold) != armed) {
+                        armed = !armed
+                        if (armed) haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                    }
+                    scope.launch { pull.snapTo(d) }
+                }
+            }
+            .pointerInput(source != null) { if (source != null) detectTapGestures { onOpen(center) } }
+            .padding(top = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        val s = shown ?: return@Column
+        Text(
+            (if (s.item == null) s.kind else "Desde ${s.kind.lowercase()}").uppercase(),
+            style = OtoType.label.copy(fontSize = 11.sp), color = c.textMuted, maxLines = 1,
+        )
+        Text(
+            s.title, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 48.dp),
+        )
+    }
+}
+
+/** La carátula de al lado, escondida fuera de la pantalla hasta que la gota se lleva hacia su lado. */
+@Composable
+private fun Peek(artwork: String?, side: Dp, drop: DropState, toRight: Boolean) {
+    if (artwork == null) return
+    val screen = LocalConfiguration.current.screenWidthDp.dp
+    val peekSide = side * 0.8f
+    AsyncImage(
+        model = artwork,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier
+            .size(peekSide)
+            .graphicsLayer {
+                drop.frame
+                val sign = if (toRight) 1f else -1f
+                val f = (drop.lean * sign).coerceIn(0f, 1f)
+                val hidden = screen.toPx() / 2 + peekSide.toPx() / 2 + 8.dp.toPx()
+                translationX = sign * (hidden - PEEK_REVEAL.toPx() * f)
+                alpha = (f * 2.5f).coerceIn(0f, 1f)
+                rotationZ = sign * 4f * (1f - f)
+                shape = RoundedCornerShape(22.dp)
+                clip = true
+            },
+    )
+}
+
+@Composable
+private fun Cover(artwork: String?, side: Dp, paused: Float) {
+    val c = Oto.colors
+    val shape = RoundedCornerShape(28.dp)
+    val sat = lerp(1f, 0.7f, paused)
+    val bright = lerp(1f, 0.85f, paused)
+    Box(
+        Modifier
+            .size(side)
+            .graphicsLayer { val s = lerp(1f, 0.93f, paused); scaleX = s; scaleY = s }
+            .shadow(30.dp, shape, ambientColor = Color.Black, spotColor = Color.Black)
+            .clip(shape)
+            // Opaco: con un fondo translúcido la sombra se vería a través.
+            .background(c.field.compositeOver(c.base)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (artwork == null) {
+            Text("音", style = OtoType.display.copy(fontSize = 96.sp, fontWeight = FontWeight.Normal), color = c.textFaint)
+        } else {
+            AsyncImage(
+                model = artwork,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                colorFilter = if (paused > 0.001f) ColorFilter.colorMatrix(dim(sat, bright)) else null,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
+
+private fun dim(saturation: Float, brightness: Float) = ColorMatrix().apply {
+    setToSaturation(saturation)
+    timesAssign(ColorMatrix(floatArrayOf(brightness, 0f, 0f, 0f, 0f, 0f, brightness, 0f, 0f, 0f, 0f, 0f, brightness, 0f, 0f, 0f, 0f, 0f, 1f, 0f)))
+}
+
+@Composable
+private fun StatusLine(np: NowPlaying) {
+    val c = Oto.colors
+    val text = when {
+        np.error != null -> "No se pudo reproducir"
+        np.buffering -> "Cargando"
+        np.id != null && !np.playing -> "En pausa"
+        else -> null
+    }
+    Box(Modifier.height(30.dp), contentAlignment = Alignment.Center) {
+        AnimatedContent(
+            targetState = text,
+            transitionSpec = { fadeIn(tween(Motion.EFFECTS, delayMillis = 80)) togetherWith fadeOut(tween(Motion.EFFECTS_FAST)) using SizeTransform(clip = false) },
+            contentAlignment = Alignment.Center,
+            label = "status",
+        ) { t ->
+            if (t != null) Text(t.uppercase(), style = OtoType.label, color = c.accent)
+        }
+    }
+}
+
+/** La línea de tiempo: fina, se engorda al tocarla y se arrastra para saltar. Se redibuja sin recomponer. */
+@Composable
+private fun Progress(np: NowPlaying, connection: PlayerConnection, modifier: Modifier) {
+    val c = Oto.colors
+    val haptics = LocalHapticFeedback.current
+    val pos = remember { mutableLongStateOf(0L) }
+    var drag by remember { mutableStateOf<Float?>(null) }
+    val dur = np.durationMs
+    LaunchedEffect(np.id, np.playing, dur) {
+        do {
+            withFrameNanos { }
+            if (drag == null) pos.longValue = connection.position()
+        } while (np.playing)
+    }
+    val thick by animateFloatAsState(if (drag != null) 1f else 0f, spring(dampingRatio = 0.7f, stiffness = 700f), label = "thick")
+    val shownSecs by remember(dur) { derivedStateOf { ((drag?.let { it * dur }?.toLong() ?: pos.longValue) / 1000).toInt() } }
+    val totalSecs = (dur / 1000).toInt()
+    val seek: (Float) -> Unit = { f ->
+        val ms = (f.coerceIn(0f, 1f) * dur).toLong()
+        pos.longValue = ms
+        connection.seekTo(ms)
+    }
+
+    Column(modifier.fillMaxWidth()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(28.dp)
+                .pointerInputSeek(dur, onTap = { f -> haptics.performHapticFeedback(HapticFeedbackType.SegmentTick); seek(f) }, onDrag = { f -> drag = f }, onEnd = {
+                    drag?.let(seek)
+                    drag = null
+                })
+                .drawBehind {
+                    val f = drag ?: if (dur > 0) (pos.longValue.toFloat() / dur).coerceIn(0f, 1f) else 0f
+                    val h = lerp(4.dp.toPx(), 8.dp.toPx(), thick)
+                    val y = (size.height - h) / 2
+                    drawRoundRect(Color.White.copy(alpha = 0.16f), Offset(0f, y), Size(size.width, h), CornerRadius(h / 2))
+                    if (f > 0f) drawRoundRect(c.accent, Offset(0f, y), Size(maxOf(h, size.width * f), h), CornerRadius(h / 2))
+                },
+        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            val style = OtoType.label.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.sp, fontFeatureSettings = "tnum")
+            Text(time(shownSecs), style = style, color = c.textMuted)
+            // La calidad con la que llega, en medio: lo que dio YouTube (o lo que se guardó con la caché).
+            val quality by StreamInfo.quality.collectAsStateWithLifecycle()
+            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Crossfade(quality[np.id]?.toString(), animationSpec = tween(Motion.EFFECTS), label = "quality") { q ->
+                    if (q != null) Text(q, style = style.copy(fontSize = 11.sp, letterSpacing = 0.04.em), color = c.textFaint, maxLines = 1)
+                }
+            }
+            Text(if (totalSecs > 0) "-" + time((totalSecs - shownSecs).coerceAtLeast(0)) else "", style = style, color = c.textMuted)
+        }
+    }
+}
+
+private fun Modifier.pointerInputSeek(dur: Long, onTap: (Float) -> Unit, onDrag: (Float) -> Unit, onEnd: () -> Unit): Modifier =
+    this
+        .pointerInput(dur) { detectTapGestures { onTap(it.x / size.width) } }
+        .pointerInput(dur) {
+            var f = 0f
+            detectHorizontalDragGestures(
+                onDragStart = { f = it.x / size.width; onDrag(f.coerceIn(0f, 1f)) },
+                onDragEnd = onEnd,
+                onDragCancel = onEnd,
+            ) { change, dx ->
+                change.consume()
+                f += dx / size.width
+                onDrag(f.coerceIn(0f, 1f))
+            }
+        }
+
+private fun Modifier.fadeEdges() = graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val f = 18.dp.toPx()
+        drawRect(Brush.horizontalGradient(listOf(Color.Black, Color.Transparent), endX = f), size = Size(f, size.height), blendMode = BlendMode.DstOut)
+        drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color.Black), startX = size.width - f, endX = size.width), Offset(size.width - f, 0f), Size(f, size.height), blendMode = BlendMode.DstOut)
+    }
+
+private fun time(secs: Int) = "%d:%02d".format(secs / 60, secs % 60)
+
+/** Las carátulas de las dos siguientes, ya en caché: al pasar de canción la nueva entra ya pintada. */
+@Composable
+private fun PrefetchArtwork(connection: PlayerConnection) {
+    val context = LocalContext.current
+    val queue by connection.queue.collectAsStateWithLifecycle()
+    val next = queue.take(2).mapNotNull { it.artwork }
+    LaunchedEffect(next) {
+        next.forEach { url ->
+            context.imageLoader.enqueue(ImageRequest.Builder(context).data(url).build())
+            context.imageLoader.enqueue(ImageRequest.Builder(context).data(smallArtwork(url)).build())
+        }
+    }
+}
+
+private val DROP_HOST = 168.dp
+// La gota no va pegada a la barra de gestos: un poco más arriba queda donde cae el pulgar.
+private val DROP_LIFT = 24.dp
+private val DROP_RADIUS = 43.dp
+private val SOURCE_H = 52.dp
+private val PEEK_REVEAL = 84.dp
+private val PROGRESS_H = 46.dp
+private const val FLASH_MS = 650L
+private const val BACKDROP_MS = 800

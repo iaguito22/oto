@@ -21,6 +21,7 @@ import java.util.Locale
 class OtoApp : Application() {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val player by lazy { PlayerConnection(this) }
+    val prefs by lazy { Prefs(this) }
 
     // Una SimpleCache por carpeta y proceso: vive aquí y no en el servicio, que puede recrearse.
     @get:OptIn(UnstableApi::class)

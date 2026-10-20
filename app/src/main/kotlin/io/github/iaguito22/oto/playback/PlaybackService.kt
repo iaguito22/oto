@@ -1,6 +1,7 @@
 package io.github.iaguito22.oto.playback
 
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
@@ -16,13 +17,17 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.ContentMetadata
+import androidx.media3.datasource.cache.ContentMetadataMutations
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.MainActivity
 import io.github.iaguito22.oto.OtoApp
 import kotlinx.coroutines.CoroutineScope
@@ -65,7 +70,7 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         InnerTubeXPlayer.initialize(this)
-        player = ExoPlayer.Builder(this)
+        player = ExoPlayer.Builder(this, renderersFactory())
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory()))
             .setAudioAttributes(
                 AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(),
@@ -112,6 +117,12 @@ class PlaybackService : MediaSessionService() {
 
     // --- Streams ---
 
+    /** El sink de siempre, con [AudioLevels] delante para que la gota sepa cuándo pega el bombo. */
+    private fun renderersFactory() = object : DefaultRenderersFactory(this) {
+        override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink =
+            AudioLevels.Sink(super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)!!)
+    }
+
     private fun dataSourceFactory(): DataSource.Factory {
         val cached = CacheDataSource.Factory()
             .setCache(cache)
@@ -124,7 +135,9 @@ class PlaybackService : MediaSessionService() {
     private fun resolve(spec: DataSpec): DataSpec {
         val id = spec.key ?: return spec
         // Entera en la caché: no hace falta ni pedir la URL. Si solo hay un trozo, sí (el resto viene de la red).
-        val length = ContentMetadata.getContentLength(cache.getContentMetadata(id))
+        val metadata = cache.getContentMetadata(id)
+        val length = ContentMetadata.getContentLength(metadata)
+        Quality.decode(metadata.get(QUALITY_KEY, null as String?))?.let { StreamInfo.put(id, it) }
         if (length > 0 && cache.isCached(id, spec.position, length - spec.position)) return spec
 
         urls[id]?.let { return spec.withResolvedStream(it) }
@@ -135,6 +148,8 @@ class PlaybackService : MediaSessionService() {
             .getOrElse { throw ResolveException(id, it) }
         Timber.d("stream %s en %d ms (%s)", id, (System.nanoTime() - started) / 1_000_000, stream.client)
 
+        StreamInfo.put(id, stream.quality)
+        runCatching { cache.applyContentMetadataMutations(id, ContentMetadataMutations().set(QUALITY_KEY, stream.quality.encode())) }
         stream.loudnessDb?.let {
             loudness[id] = it
             scope.launch { applyLoudness() }
@@ -260,6 +275,12 @@ class PlaybackService : MediaSessionService() {
             while (recent.size > RECENT) recent.removeFirst()
             applyLoudness()
             topUpRadio()
+            val meta = mediaItem.mediaMetadata
+            scope.launch(Dispatchers.IO) {
+                (application as OtoApp).prefs.addHeard(
+                    Heard(id, meta.title?.toString().orEmpty(), meta.artist?.toString().orEmpty(), meta.artworkUri?.toString()),
+                )
+            }
         }
 
         override fun onPlayerError(error: PlaybackException) = recover(error)
@@ -304,5 +325,6 @@ class PlaybackService : MediaSessionService() {
         const val RADIO_AHEAD = 2
         const val RADIO_PAGES = 3
         const val RECENT = 200
+        const val QUALITY_KEY = "oto_quality"
     }
 }

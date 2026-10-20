@@ -1,6 +1,5 @@
 package io.github.iaguito22.oto.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.material3.LocalTextStyle
@@ -26,7 +25,9 @@ data class OtoColors(
     val dark: Boolean,
 )
 
-fun darkColors(accent: Color = Color(0xFF8FD3DB)) = OtoColors(
+val DefaultAccent = Color(0xFF8FD3DB)
+
+fun darkColors(accent: Color = DefaultAccent) = OtoColors(
     base = Color(0xFF0B0B0B),
     veil = Color(0x800B0B0B),
     text = Color.White,
@@ -60,9 +61,10 @@ object Oto {
     val colors: OtoColors @Composable get() = LocalOtoColors.current
 }
 
+/** Oto es oscura siempre (la carátula desenfocada es el fondo); el claro queda para cuando haga falta. */
 @Composable
-fun OtoTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val colors = if (dark) darkColors() else lightColors()
+fun OtoTheme(accent: Color = DefaultAccent, dark: Boolean = true, content: @Composable () -> Unit) {
+    val colors = if (dark) darkColors(accent) else lightColors()
     CompositionLocalProvider(
         LocalOtoColors provides colors,
         LocalTextStyle provides OtoType.body.copy(color = colors.text),

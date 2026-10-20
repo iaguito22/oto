@@ -166,6 +166,7 @@ object InnerTubeXPlayer {
         val useRangeChunks: Boolean,
         val loudnessDb: Double?,
         val contentLength: Long?,
+        val quality: Quality,
     )
 
     private fun ExtractedStream.toStream() = Stream(
@@ -181,6 +182,11 @@ object InnerTubeXPlayer {
         useRangeChunks = useRangeChunks,
         loudnessDb = loudnessDb,
         contentLength = contentLengthBytes,
+        quality = Quality(
+            codec = codecs?.substringBefore('.')?.ifBlank { null } ?: mimeType?.substringAfter('/')?.substringBefore(';') ?: "audio",
+            bitrate = bitrate,
+            sampleRate = sampleRate,
+        ),
     )
 
     private data class Bundle(val generation: Long, val cipher: YouTubeCipherService, val extractor: InnerTubeExtractor)
