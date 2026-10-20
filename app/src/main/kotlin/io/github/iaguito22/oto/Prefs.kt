@@ -1,19 +1,36 @@
 package io.github.iaguito22.oto
 
 import android.content.Context
+import androidx.datastore.core.DataMigration
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.metrolist.innertube.models.Artist
 import com.metrolist.innertube.models.SongItem
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
 private val Context.store by preferencesDataStore("oto")
+
+// Las listas, aparte: con lo importado de Spotify pesan megas, y así oír una canción (historial) no las reescribe.
+// Antes vivían en «oto»: la primera vez se mudan.
+private val Context.lists by preferencesDataStore("oto_lists", produceMigrations = { ctx ->
+    listOf(object : DataMigration<Preferences> {
+        override suspend fun shouldMigrate(currentData: Preferences) = currentData[PLAYLISTS] == null && ctx.store.data.first()[PLAYLISTS] != null
+        override suspend fun migrate(currentData: Preferences): Preferences =
+            currentData.toMutablePreferences().apply { ctx.store.data.first()[PLAYLISTS]?.let { this[PLAYLISTS] = it } }
+        override suspend fun cleanUp() { ctx.store.edit { it.remove(PLAYLISTS) } }
+    })
+})
 private val TUTORIAL_DONE = booleanPreferencesKey("tutorial_done")
 private val HISTORY = stringPreferencesKey("history")
 private val PLAYLISTS = stringPreferencesKey("playlists")
@@ -30,8 +47,8 @@ fun Heard.toSong() = SongItem(id = id, title = title, artists = listOf(Artist(ar
 
 fun SongItem.toHeard() = Heard(id, title, artists.joinToString { it.name }, thumbnail, artists.firstOrNull()?.id)
 
-/** Una lista tuya, guardada en el móvil. */
-data class LocalPlaylist(val id: String, val name: String, val songs: List<Heard>)
+/** Una lista tuya, guardada en el móvil. [from]: la lista de Spotify de la que se importó, si viene de una. */
+data class LocalPlaylist(val id: String, val name: String, val songs: List<Heard>, val from: String? = null)
 
 /** Lo que la app recuerda entre sesiones. */
 class Prefs(private val context: Context) {
@@ -61,7 +78,7 @@ class Prefs(private val context: Context) {
     // ---- Me gusta ----
 
     /** La última que te gustó, la primera. */
-    val liked: Flow<List<Heard>> = context.store.data.map { decode(it[LIKED]) }
+    val liked: Flow<List<Heard>> = context.store.data.map { it[LIKED] }.distinctUntilChanged().map(::decode).flowOn(Dispatchers.Default)
 
     val likedIds: Flow<Set<String>> = liked.map { l -> l.mapTo(HashSet()) { it.id } }
 
@@ -73,6 +90,24 @@ class Prefs(private val context: Context) {
         context.store.edit { p ->
             val rest = decode(p[LIKED]).filter { it.id != h.id }
             p[LIKED] = encode(if (on) listOf(h) + rest else rest)
+        }
+    }
+
+    /** Varias a la vez (un álbum): entran las que falten, delante y en su orden; o salen todas. */
+    suspend fun setLikedAll(songs: List<Heard>, on: Boolean) {
+        context.store.edit { p ->
+            val ids = songs.mapTo(HashSet()) { it.id }
+            val rest = decode(p[LIKED]).filter { it.id !in ids }
+            p[LIKED] = encode(if (on) songs.distinctBy { it.id } + rest else rest)
+        }
+    }
+
+    /** Las que aún no estaban, detrás de las que ya te gustaban (lo importado es más antiguo). */
+    suspend fun addLikedAll(songs: List<Heard>) {
+        context.store.edit { p ->
+            val list = decode(p[LIKED])
+            val have = list.mapTo(HashSet()) { it.id }
+            p[LIKED] = encode(list + songs.filter { have.add(it.id) })
         }
     }
 
@@ -89,18 +124,45 @@ class Prefs(private val context: Context) {
 
     // ---- Listas ----
 
-    val playlists: Flow<List<LocalPlaylist>> = context.store.data.map { decodeLists(it[PLAYLISTS]) }
+    // Decodificar varios megas de JSON no puede ir en el hilo de la interfaz.
+    val playlists: Flow<List<LocalPlaylist>> = context.lists.data.map { it[PLAYLISTS] }.distinctUntilChanged().map(::decodeLists).flowOn(Dispatchers.Default)
 
     /** La nueva va la primera; devuelve su id. */
-    suspend fun createPlaylist(name: String, first: Heard? = null): String {
+    suspend fun createPlaylist(name: String, first: Heard? = null): String = createPlaylist(name, listOfNotNull(first))
+
+    suspend fun createPlaylist(name: String, songs: List<Heard>): String {
         val id = UUID.randomUUID().toString()
-        editLists { listOf(LocalPlaylist(id, name.trim(), listOfNotNull(first))) + it }
+        editLists { listOf(LocalPlaylist(id, name.trim(), songs.distinctBy { it.id })) + it }
         return id
+    }
+
+    /**
+     * Una lista traída de Spotify. Si ya se importó antes (mismo [from]), se rehace en su sitio con lo nuevo; si no,
+     * entra en la posición [at], para que un lote quede en el mismo orden que en Spotify.
+     */
+    suspend fun importPlaylist(from: String, name: String, songs: List<Heard>, at: Int) = editLists { l ->
+        val clean = songs.distinctBy { it.id }
+        if (l.any { it.from == from }) l.map { if (it.from == from) it.copy(name = name, songs = clean) else it }
+        else l.toMutableList().apply { add(at.coerceIn(0, size), LocalPlaylist(UUID.randomUUID().toString(), name, clean, from)) }
     }
 
     suspend fun renamePlaylist(id: String, name: String) = editLists { l -> l.map { if (it.id == id) it.copy(name = name.trim()) else it } }
 
     suspend fun deletePlaylist(id: String) = editLists { l -> l.filter { it.id != id } }
+
+    /** Las que falten, al final y en orden. */
+    suspend fun addAllToPlaylist(id: String, songs: List<Heard>) = editLists { l ->
+        l.map { p ->
+            if (p.id != id) p else {
+                val have = p.songs.mapTo(HashSet()) { it.id }
+                p.copy(songs = p.songs + songs.filter { have.add(it.id) })
+            }
+        }
+    }
+
+    suspend fun removeAllFromPlaylist(id: String, ids: Set<String>) = editLists { l ->
+        l.map { p -> if (p.id == id) p.copy(songs = p.songs.filter { it.id !in ids }) else p }
+    }
 
     /** Al final, sin repetirla. false si ya estaba. */
     suspend fun addToPlaylist(id: String, song: Heard): Boolean {
@@ -119,18 +181,18 @@ class Prefs(private val context: Context) {
     }
 
     private suspend fun editLists(f: (List<LocalPlaylist>) -> List<LocalPlaylist>) {
-        context.store.edit { p -> p[PLAYLISTS] = encodeLists(f(decodeLists(p[PLAYLISTS]))) }
+        context.lists.edit { p -> p[PLAYLISTS] = encodeLists(f(decodeLists(p[PLAYLISTS]))) }
     }
 
     private fun encodeLists(list: List<LocalPlaylist>) = JSONArray().apply {
-        list.forEach { put(JSONObject().put("id", it.id).put("n", it.name).put("s", JSONArray(encode(it.songs)))) }
+        list.forEach { put(JSONObject().put("id", it.id).put("n", it.name).put("s", JSONArray(encode(it.songs))).put("f", it.from)) }
     }.toString()
 
     private fun decodeLists(s: String?): List<LocalPlaylist> = runCatching {
         val a = JSONArray(s ?: return emptyList())
         (0 until a.length()).map { i ->
             val o = a.getJSONObject(i)
-            LocalPlaylist(o.getString("id"), o.optString("n"), decode(o.optJSONArray("s")?.toString()))
+            LocalPlaylist(o.getString("id"), o.optString("n"), decode(o.optJSONArray("s")?.toString()), o.optString("f").ifEmpty { null })
         }
     }.getOrDefault(emptyList())
 

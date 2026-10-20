@@ -110,7 +110,7 @@ import io.github.iaguito22.oto.ui.theme.Space
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class View { Tabs, Search, Page, Settings }
+private enum class View { Tabs, Search, Page, Settings, Import }
 
 /** Qué se ve: la vista y, en las páginas, cuántas hay apiladas (cada una entra como un paso más hondo). */
 private data class Nav(val view: View, val depth: Int)
@@ -149,9 +149,11 @@ fun MenuSheet(
     var held by remember { mutableStateOf<Held?>(null) }
     var naming by remember { mutableStateOf<Naming?>(null) }
     var listMenu by remember { mutableStateOf<LocalPlaylist?>(null) }
-    var saving by remember { mutableStateOf<Heard?>(null) }
+    var saving by remember { mutableStateOf<Saving?>(null) }
+    var importing by remember { mutableStateOf(false) }
 
     val view = when {
+        importing -> View.Import
         settings -> View.Settings
         s.pages.isNotEmpty() -> View.Page
         s.query.isNotBlank() -> View.Search
@@ -159,6 +161,7 @@ fun MenuSheet(
     }
     BackHandler(view != View.Tabs) {
         when (view) {
+            View.Import -> importing = false
             View.Settings -> settings = false
             View.Page -> vm.closeDetail()
             View.Search -> { vm.onQuery(""); focus.clearFocus() }
@@ -182,11 +185,11 @@ fun MenuSheet(
             }
             Row(Modifier.fillMaxWidth().padding(start = Space.lg, end = Space.sm, top = Space.md, bottom = Space.sm), verticalAlignment = Alignment.CenterVertically) {
                 Tabs(pager, onSelect = { i ->
-                    settings = false; vm.closeAll(); vm.onQuery(""); focus.clearFocus()
+                    settings = false; importing = false; vm.closeAll(); vm.onQuery(""); focus.clearFocus()
                     scope.launch { pager.animateScrollToPage(i, animationSpec = Motion.spatial()) }
                 })
                 Spacer(Modifier.weight(1f))
-                RoundIcon(R.drawable.ic_settings, selected = settings) { settings = !settings; focus.clearFocus() }
+                RoundIcon(R.drawable.ic_settings, selected = settings) { settings = !settings; importing = false; focus.clearFocus() }
             }
 
             AnimatedContent(
@@ -226,6 +229,7 @@ fun MenuSheet(
                         ) else DetailView(
                             p, currentId, onBack = vm::closeDetail,
                             onPlay = { songs, i -> connection.playAll(songs, i, p.item); onClose() }, onHold = { hold(it, null) },
+                            onSave = { songs -> saving = Saving(songs.map { it.toHeard() }, p.item.title, count(songs.size), p.item.thumbnail) },
                         )
                         is Page.Local -> LocalView(
                             if (p.id == LIKED_ID) liked else playlists?.firstOrNull { it.id == p.id }, currentId, onBack = vm::closeDetail,
@@ -234,7 +238,11 @@ fun MenuSheet(
                         )
                         null -> Unit
                     }
-                    View.Settings -> Settings(onBack = { settings = false }, onTutorial = onTutorial)
+                    View.Settings -> Settings(onBack = { settings = false }, onTutorial = onTutorial, onImport = { importing = true })
+                    View.Import -> Import(onBack = { importing = false }, onLists = {
+                        importing = false; settings = false
+                        scope.launch { pager.animateScrollToPage(0, animationSpec = Motion.spatial()) }
+                    })
                 }
             }
 
@@ -265,7 +273,7 @@ fun MenuSheet(
                     notice = "«${h.song.title}» va después de esta"
                     held = null
                 },
-                onSave = { held = null; saving = h.song.toHeard() },
+                onSave = { held = null; saving = Saving(h.song.toHeard()) },
                 onArtist = { id, name -> held = null; vm.openArtist(id, name) },
                 onRemove = h.list?.let { list ->
                     {
@@ -336,7 +344,7 @@ private fun Tabs(pager: PagerState, onSelect: (Int) -> Unit) {
 }
 
 @Composable
-private fun RoundIcon(icon: Int, selected: Boolean = false, onClick: () -> Unit) {
+fun RoundIcon(icon: Int, selected: Boolean = false, onClick: () -> Unit) {
     val c = Oto.colors
     Box(
         Modifier
@@ -482,7 +490,14 @@ private fun PageHeader(onBack: () -> Unit, art: @Composable () -> Unit, title: S
 }
 
 @Composable
-private fun DetailView(d: Page.Remote, currentId: String?, onBack: () -> Unit, onPlay: (List<SongItem>, Int) -> Unit, onHold: (SongItem) -> Unit) {
+private fun DetailView(
+    d: Page.Remote,
+    currentId: String?,
+    onBack: () -> Unit,
+    onPlay: (List<SongItem>, Int) -> Unit,
+    onHold: (SongItem) -> Unit,
+    onSave: (List<SongItem>) -> Unit,
+) {
     val songs = d.songs
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
         item(key = "head") {
@@ -492,7 +507,22 @@ private fun DetailView(d: Page.Remote, currentId: String?, onBack: () -> Unit, o
                 else -> ""
             }
             PageHeader(onBack, { Art(d.item.thumbnail, 112.dp, Radius.md) }, d.item.title, sub) {
-                if (!songs.isNullOrEmpty()) Pill("Reproducir", { onPlay(songs, 0) }, icon = R.drawable.ic_play_arrow)
+                if (!songs.isNullOrEmpty()) {
+                    Pill("Reproducir", { onPlay(songs, 0) }, icon = R.drawable.ic_play_arrow)
+                    // El álbum entero a Me gusta o a una lista tuya (o a una nueva con su nombre). Redondo: al lado
+                    // de «Reproducir» no cabe otra píldora con texto.
+                    val c = Oto.colors
+                    Box(
+                        Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(c.field)
+                            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text)) { onSave(songs) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(painterResource(R.drawable.ic_add), "Guardar", Modifier.size(22.dp), tint = c.text)
+                    }
+                }
             }
         }
         when {
@@ -594,7 +624,7 @@ private fun LocalView(
 }
 
 @Composable
-private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit) {
+private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () -> Unit) {
     val c = Oto.colors
     Column(Modifier.fillMaxSize().padding(horizontal = Space.sm)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -602,6 +632,9 @@ private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit) {
             Text("Ajustes", style = OtoType.title, color = c.text)
         }
         Spacer(Modifier.height(Space.md))
+        val importer = (LocalContext.current.applicationContext as OtoApp).importer
+        val state by importer.state.collectAsStateWithLifecycle()
+        SettingRow("Importar de Spotify", importSummary(state), onImport)
         SettingRow("Ver los gestos otra vez", "El tutorial del principio", onTutorial)
         Spacer(Modifier.weight(1f))
         Text(

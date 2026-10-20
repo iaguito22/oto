@@ -8,6 +8,7 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.YouTubeLocale
+import io.github.iaguito22.oto.importer.Importer
 import io.github.iaguito22.oto.playback.InnerTubeXPlayer
 import io.github.iaguito22.oto.playback.PlayerConnection
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,7 @@ class OtoApp : Application() {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val player by lazy { PlayerConnection(this) }
     val prefs by lazy { Prefs(this) }
+    val importer by lazy { Importer(prefs, scope) }
 
     // Una SimpleCache por carpeta y proceso: vive aquí y no en el servicio, que puede recrearse.
     @get:OptIn(UnstableApi::class)

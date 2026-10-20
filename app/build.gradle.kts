@@ -54,6 +54,9 @@ android {
         buildConfig = true
     }
 
+    // Las pruebas de JVM llaman a YouTube Music de verdad: lo de Android que toquen por el camino devuelve vacío.
+    testOptions.unitTests.isReturnDefaultValues = true
+
     packaging {
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}", "/META-INF/INDEX.LIST", "/META-INF/DEPENDENCIES")
     }
@@ -86,6 +89,7 @@ dependencies {
     implementation(libs.palette)
     implementation(libs.datastore)
     implementation(libs.timber)
+    testImplementation(libs.junit)
 
     coreLibraryDesugaring(libs.desugaring)
 }

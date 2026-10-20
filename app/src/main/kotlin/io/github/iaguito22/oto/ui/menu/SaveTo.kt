@@ -62,7 +62,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -78,12 +80,18 @@ import io.github.iaguito22.oto.ui.theme.Space
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/** Lo que se guarda: una canción o un álbum/lista entero. [art]/[title]/[sub] encabezan la tarjeta. */
+data class Saving(val songs: List<Heard>, val title: String, val sub: String, val art: String?) {
+    constructor(song: Heard) : this(listOf(song), song.title, song.artist, song.artwork)
+}
+
 /**
- * Guardar una canción: Me gusta y cada una de tus listas, cada una con su marca. Tocar una la pone o la quita al
- * momento (no hay que confirmar nada); abajo se crea una lista nueva con la canción ya dentro.
+ * Guardar una canción, o todas las de un álbum: Me gusta y cada una de tus listas, cada una con su marca. Tocar una
+ * la pone o la quita al momento (no hay que confirmar nada); abajo se crea una lista nueva con lo guardado dentro.
+ * Con varias, la marca solo sale si están todas; tocar añade las que falten (o, si están todas, las quita).
  */
 @Composable
-fun ColumnScope.SaveTo(song: Heard, onDone: () -> Unit) {
+fun ColumnScope.SaveTo(what: Saving, onDone: () -> Unit) {
     val c = Oto.colors
     val prefs = (LocalContext.current.applicationContext as OtoApp).prefs
     val liked by prefs.likedIds.collectAsStateWithLifecycle(initialValue = null)
@@ -91,13 +99,15 @@ fun ColumnScope.SaveTo(song: Heard, onDone: () -> Unit) {
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val tick: (Boolean) -> Unit = { on -> haptics.performHapticFeedback(if (on) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff) }
+    val songs = what.songs
+    val ids = remember(songs) { songs.mapTo(HashSet()) { it.id } }
 
     Row(Modifier.padding(Space.sm), verticalAlignment = Alignment.CenterVertically) {
-        Art(song.artwork, 48.dp, Radius.sm)
+        Art(what.art, 48.dp, Radius.sm)
         Spacer(Modifier.width(Space.md))
         Column(Modifier.weight(1f)) {
-            Text(song.title, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(song.artist, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(what.title, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(what.sub, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
     Text(
@@ -108,21 +118,22 @@ fun ColumnScope.SaveTo(song: Heard, onDone: () -> Unit) {
     val likedNow = liked ?: return
     val lists = playlists ?: return
     Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
-        val isLiked = song.id in likedNow
+        val isLiked = likedNow.containsAll(ids)
         ToggleRow({ LikedArt(40.dp) }, "Me gusta", null, isLiked) {
             tick(!isLiked)
-            scope.launch { prefs.setLiked(song, !isLiked) }
+            scope.launch { prefs.setLikedAll(songs, !isLiked) }
         }
         lists.forEach { p ->
-            val inside = p.songs.any { it.id == song.id }
+            val inside = remember(p.songs, ids) { p.songs.count { it.id in ids } == ids.size }
             ToggleRow({ Mosaic(p.songs, 40.dp) }, p.name, count(p.songs.size), inside) {
                 tick(!inside)
-                scope.launch { if (inside) prefs.removeFromPlaylist(p.id, song.id) else prefs.addToPlaylist(p.id, song) }
+                scope.launch { if (inside) prefs.removeAllFromPlaylist(p.id, ids) else prefs.addAllToPlaylist(p.id, songs) }
             }
         }
-        NewListRow(onCreate = { name ->
+        // Una canción suelta empieza sin nombre; un álbum propone el suyo.
+        NewListRow(suggested = if (songs.size > 1) what.title else "", onCreate = { name ->
             tick(true)
-            scope.launch { prefs.createPlaylist(name, song) }
+            scope.launch { prefs.createPlaylist(name, songs) }
         })
     }
     Row(Modifier.fillMaxWidth().padding(horizontal = Space.sm, vertical = Space.sm), horizontalArrangement = Arrangement.End) {
@@ -131,7 +142,7 @@ fun ColumnScope.SaveTo(song: Heard, onDone: () -> Unit) {
 }
 
 @Composable
-private fun ToggleRow(art: @Composable () -> Unit, title: String, sub: String?, on: Boolean, onClick: () -> Unit) {
+fun ToggleRow(art: @Composable () -> Unit, title: String, sub: String?, on: Boolean, onClick: () -> Unit) {
     val c = Oto.colors
     Row(
         Modifier
@@ -176,7 +187,7 @@ private fun Check(on: Boolean) {
 
 /** «Nueva lista…» se convierte en el campo del nombre sin salir de la tarjeta. */
 @Composable
-private fun NewListRow(onCreate: (String) -> Unit) {
+private fun NewListRow(suggested: String, onCreate: (String) -> Unit) {
     val c = Oto.colors
     var naming by remember { mutableStateOf(false) }
     AnimatedContent(
@@ -198,11 +209,12 @@ private fun NewListRow(onCreate: (String) -> Unit) {
             Spacer(Modifier.width(Space.md))
             Text("Nueva lista…", style = OtoType.rowTitle, color = c.accent)
         } else {
-            var name by remember { mutableStateOf("") }
+            // Con nombre propuesto, el cursor al final: lo normal es dejarlo o añadirle algo.
+            var name by remember { mutableStateOf(TextFieldValue(suggested, TextRange(suggested.length))) }
             val focus = remember { FocusRequester() }
             LaunchedEffect(Unit) { delay(120); focus.requestFocus() }
-            val ok = name.isNotBlank()
-            val done = { if (ok) { onCreate(name); naming = false } }
+            val ok = name.text.isNotBlank()
+            val done = { if (ok) { onCreate(name.text); naming = false } }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = Space.xs, vertical = Space.xs).height(50.dp).clip(CircleShape).background(c.field)
                     .padding(start = 18.dp, end = 5.dp),
@@ -210,10 +222,10 @@ private fun NewListRow(onCreate: (String) -> Unit) {
             ) {
                 Box(Modifier.weight(1f)) {
                     val style = OtoType.body.copy(fontSize = OtoType.body.fontSize * 1.07f)
-                    if (name.isEmpty()) Text("Ponle un nombre", style = style, color = c.textFaint)
+                    if (name.text.isEmpty()) Text("Ponle un nombre", style = style, color = c.textFaint)
                     BasicTextField(
                         value = name,
-                        onValueChange = { name = it.take(60) },
+                        onValueChange = { name = if (it.text.length <= 60) it else it.copy(text = it.text.take(60)) },
                         singleLine = true,
                         textStyle = style.copy(color = c.text),
                         cursorBrush = SolidColor(c.accent),

@@ -114,6 +114,7 @@ import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.ui.menu.Floating
 import io.github.iaguito22.oto.ui.menu.SaveTo
+import io.github.iaguito22.oto.ui.menu.Saving
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
@@ -286,7 +287,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
         Floating(
             saving, onDismiss = { saving = null },
             cardModifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime)),
-        ) { song -> SaveTo(song, onDone = { saving = null }) }
+        ) { song -> SaveTo(Saving(song), onDone = { saving = null }) }
         SheetHost(sheet, { dropCenter }, dropRadius) { kind ->
             when (kind) {
                 SheetKind.Menu -> MenuSheet(connection, np.id, onClose = sheet::close, onTutorial = {
