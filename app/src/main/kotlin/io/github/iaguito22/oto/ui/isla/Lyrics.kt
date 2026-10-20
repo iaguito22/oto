@@ -1,5 +1,6 @@
 package io.github.iaguito22.oto.ui.isla
 
+import android.icu.text.BreakIterator
 import android.util.LruCache
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
@@ -54,6 +55,8 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -63,6 +66,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -350,21 +355,22 @@ private fun SungLine(line: Line, dist: Int, order: Int, rom: String?, clock: Lyr
             .padding(vertical = 9.dp),
         horizontalAlignment = align,
     ) {
-        if (!bgOnly) Words(line.words, LYRIC, lit, clock, arrangement, c.text)
+        if (!bgOnly) Words(line.words, LYRIC, lit, clock, arrangement, c.text, letters = line.real)
         if (rom != null && !bgOnly) {
             val romWords = remember(rom, line) { spread(rom, line.words.first().start, line.words.last().end) }
             Words(romWords, ROM, lit, clock, arrangement, c.text.copy(alpha = 0.72f), rise = false, modifier = Modifier.padding(top = 2.dp))
         }
         if (line.bg.isNotEmpty()) {
             Words(line.bg, if (bgOnly) LYRIC.copy(fontSize = LYRIC.fontSize * 0.8f, lineHeight = LYRIC.lineHeight * 0.8f) else BG, lit, clock, arrangement,
-                c.text.copy(alpha = if (bgOnly) 0.9f else 0.78f), modifier = Modifier.padding(top = if (bgOnly) 0.dp else 4.dp))
+                c.text.copy(alpha = if (bgOnly) 0.9f else 0.78f), letters = line.real, modifier = Modifier.padding(top = if (bgOnly) 0.dp else 4.dp))
         }
     }
 }
 
 /**
  * Las palabras de una fila, que se parten entre renglones por los espacios (el japonés, letra a letra). Mientras la
- * línea está encendida cada sílaba es su propio texto, con su relleno y su salto; apagada, cada palabra es un texto.
+ * línea está encendida cada trozo (una letra si la fuente da tiempos por palabra, como en el tema del PC; si no, la
+ * sílaba) tiene su relleno y su salto; apagada, cada palabra es un texto.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -376,6 +382,7 @@ private fun Words(
     arrangement: Arrangement.Horizontal,
     color: Color,
     rise: Boolean = true,
+    letters: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val groups = remember(words) { groupsOf(words) }
@@ -383,13 +390,8 @@ private fun Words(
     FlowRow(modifier.fillMaxWidth(), horizontalArrangement = arrangement) {
         groups.forEach { g ->
             val gap = if (g.last().space) Modifier.padding(end = space) else Modifier
-            if (!lit) {
-                BasicText(g.joinToString("") { it.text }, gap, style = style.copy(color = color))
-            } else Row(gap) {
-                val hold = g.last().end
-                val wordDur = hold - g.first().start
-                g.forEach { w -> Syllable(w, hold, wordDur, style, color, clock, rise) }
-            }
+            if (!lit) BasicText(g.joinToString("") { it.text }, gap, style = style.copy(color = color))
+            else LitWord(g, style, color, clock, rise, letters, gap)
         }
     }
 }
@@ -426,65 +428,116 @@ private fun groupsOf(words: List<Word>): List<List<Word>> {
 }
 
 /**
- * Una sílaba encendida. El relleno avanza letra a letra (los signos pesan poco y, si la sílaba se alarga, la
- * última letra se queda con el resto); sube con un rebote al empezar a cantarse y se asienta despacio cuando
- * acaba la palabra entera ([hold]), más alto cuanto más se alarga. Todo se lee del reloj al dibujar.
+ * Un trozo de una palabra encendida: una letra (con [letter]) o una sílaba entera. [from] y [to] son su sitio en el
+ * texto de la palabra; [weights], lo que pesa cada carácter al rellenarse (los signos poco).
+ */
+private class Piece(val from: Int, val to: Int, val start: Long, val end: Long, val weights: FloatArray, val letter: Boolean)
+
+/**
+ * Los trozos de una palabra. Con [letters], cada sílaba se reparte en letras como en el tema de Spotify del PC: los
+ * signos pesan poco y, si la sílaba se alarga, la última letra se queda con el resto. El japonés, el chino y el
+ * coreano, y lo de un solo carácter, no se parten.
+ */
+private fun piecesOf(g: List<Word>, letters: Boolean): List<Piece> {
+    val out = ArrayList<Piece>()
+    var offset = 0
+    for (w in g) {
+        val text = w.text
+        val d = max(1L, w.end - w.start)
+        val ws = FloatArray(text.length) { if (text[it].isLetterOrDigit()) 1f else 0.3f }
+        if (d > 800 && ws.isNotEmpty()) ws[ws.lastIndex] *= 1 + min(2.5f, (d - 800) / 600f)
+        val marks = graphemes(text)
+        if (!letters || marks.size < 3 || CJK_CHAR.containsMatchIn(text)) {
+            if (text.isNotEmpty()) out += Piece(offset, offset + text.length, w.start, w.end, ws, letter = false)
+        } else {
+            // Una letra con su tilde aparte (dos caracteres) pesa lo de su base, y el estirón de la última va con ella.
+            val pw = FloatArray(marks.size - 1) { k -> (marks[k] until marks[k + 1]).maxOf { ws[it] } }
+            val sum = pw.sum()
+            var acc = 0f
+            for (k in pw.indices) {
+                val s = w.start + (d * acc / sum).toLong()
+                acc += pw[k]
+                out += Piece(offset + marks[k], offset + marks[k + 1], s, w.start + (d * acc / sum).toLong(), floatArrayOf(1f), letter = true)
+            }
+        }
+        offset += text.length
+    }
+    return out
+}
+
+/** Dónde empieza cada letra tal como se ve (una «é» escrita como «e» + tilde es una), y el final. */
+private fun graphemes(text: String): IntArray {
+    val bi = BreakIterator.getCharacterInstance().apply { setText(text) }
+    return generateSequence(bi.first()) { bi.next().takeIf { n -> n != BreakIterator.DONE } }.toList().toIntArray()
+}
+
+/**
+ * Una palabra encendida. Ocupa lo mismo que apagada (el mismo texto, sin pintar) y cada trozo se dibuja en el sitio
+ * que tiene dentro de la palabra: separar las letras en textos sueltos perdía el kerning y la línea se movía al
+ * encenderse. Cada trozo se rellena a su tiempo, sube con un rebote al empezar a cantarse y se asienta despacio
+ * cuando acaba la palabra entera, más alto cuanto más se alarga: con letras, una ola que la recorre. Todo se lee del
+ * reloj al dibujar.
  */
 @Composable
-private fun Syllable(w: Word, hold: Long, wordDur: Long, style: TextStyle, color: Color, clock: LyricsClock, rise: Boolean) {
-    val weights = remember(w) {
-        val chars = w.text.toList()
-        val ws = FloatArray(chars.size) { if (chars[it].isLetterOrDigit()) 1f else 0.3f }
-        val d = w.end - w.start
-        if (d > 800 && ws.isNotEmpty()) ws[ws.lastIndex] *= 1 + min(2.5f, (d - 800) / 600f)
-        ws
-    }
+private fun LitWord(g: List<Word>, style: TextStyle, color: Color, clock: LyricsClock, rise: Boolean, letters: Boolean, modifier: Modifier) {
+    val measurer = rememberTextMeasurer(cacheSize = 0)
+    val text = remember(g) { g.joinToString("") { it.text } }
+    val pieces = remember(g, letters) { piecesOf(g, letters) }
+    val shapes = remember(pieces, style) { pieces.map { measurer.measure(text.substring(it.from, it.to), style, softWrap = false, maxLines = 1) } }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    val sw = min(0.085f, 0.032f + wordDur / 1000f * 0.03f)
-    val ud = (hold - w.start).coerceIn(120, 420)
-    val dim = color.copy(alpha = color.alpha * 0.62f)
+    val hold = g.last().end
+    val sw = min(0.085f, 0.032f + (hold - g.first().start) / 1000f * 0.03f)
+    val full = remember(color) { SolidColor(color) }
+    val dim = remember(color) { SolidColor(color.copy(alpha = color.alpha * 0.62f)) }
     BasicText(
-        w.text,
-        Modifier
-            .graphicsLayer {
-                compositingStrategy = CompositingStrategy.Offscreen
-                if (!rise) return@graphicsLayer
-                val t = clock.ms
-                val up = when {
-                    t < w.start -> 0f
-                    t < w.start + ud -> Overshoot.transform((t - w.start) / ud.toFloat())
-                    else -> 1f
+        text,
+        modifier.drawWithContent {
+            val l = layout ?: return@drawWithContent
+            val t = clock.ms
+            val lift = sw * style.fontSize.toPx() * 1.05f
+            pieces.forEachIndexed { k, p ->
+                val box = l.getBoundingBox(p.from)
+                val w = l.getBoundingBox(p.to - 1).right - box.left
+                val r = if (!rise) 0f else {
+                    val ud = (hold - p.start).coerceIn(120, 420)
+                    val up = when {
+                        t < p.start -> 0f
+                        t < p.start + ud -> Overshoot.transform((t - p.start) / ud.toFloat())
+                        else -> 1f
+                    }
+                    up * if (t > hold) 1f - EaseOutExpo.transform(((t - hold) / 900f).coerceIn(0f, 1f)) else 1f
                 }
-                val down = if (t > hold) 1f - EaseOutExpo.transform(((t - hold) / 900f).coerceIn(0f, 1f)) else 1f
-                val r = up * down
-                translationY = -sw * style.fontSize.toPx() * 1.05f * r
-                val s = 1f + sw * r
-                scaleX = s; scaleY = s
-                transformOrigin = TransformOrigin(0.5f, 0.88f)
+                val f = ((t - p.start).toFloat() / max(1L, p.end - p.start)).coerceIn(0f, 1f)
+                val brush = when {
+                    f <= 0f -> dim
+                    f >= 1f -> full
+                    else -> {
+                        // Como el CSS del PC: el borde del relleno es un degradado del 12 % del trozo.
+                        val soft = if (p.letter) w * 0.12f else max(6.dp.toPx(), w * 0.12f)
+                        val x = fillX(f, p.weights, shapes[k], w)
+                        Brush.horizontalGradient(
+                            0f to color, ((x - soft) / w).coerceIn(0f, 1f) to color, (x / w).coerceIn(0.001f, 1f) to dim.value, 1f to dim.value,
+                            startX = 0f, endX = w,
+                        )
+                    }
+                }
+                withTransform({
+                    if (r != 0f) {
+                        translate(0f, -lift * r)
+                        scale(1f + sw * r, 1f + sw * r, Offset(box.left + w / 2, box.top + box.height * 0.88f))
+                    }
+                    // alpha = 1 explícito: sin él, con un degradado se queda la opacidad del pintado anterior (la de la
+                    // letra apagada) y la que se está rellenando salía más oscura que las demás.
+                }) { drawText(shapes[k], brush, Offset(box.left, box.top), alpha = 1f) }
             }
-            .drawWithContent {
-                drawContent()
-                val t = clock.ms
-                val f = ((t - w.start).toFloat() / max(1L, w.end - w.start)).coerceIn(0f, 1f)
-                val x = fillX(f, weights, layout, size.width)
-                val soft = max(6.dp.toPx(), size.width * 0.12f)
-                when {
-                    f <= 0f -> drawRect(dim, blendMode = BlendMode.SrcIn)
-                    f >= 1f -> drawRect(color, blendMode = BlendMode.SrcIn)
-                    else -> drawRect(
-                        Brush.horizontalGradient(0f to color, ((x - soft) / size.width).coerceIn(0f, 1f) to color, (x / size.width).coerceIn(0.001f, 1f) to dim, 1f to dim),
-                        blendMode = BlendMode.SrcIn,
-                    )
-                }
-            },
-        style = style.copy(color = Color.White),
+        },
+        style = style,
         onTextLayout = { layout = it },
     )
 }
 
-/** Hasta dónde llega el relleno, en px: el progreso repartido por letras según su peso. */
-private fun fillX(f: Float, weights: FloatArray, layout: TextLayoutResult?, width: Float): Float {
-    if (layout == null || weights.isEmpty()) return f * width
+/** Hasta dónde llega el relleno dentro del trozo, en px: el progreso repartido por letras según su peso. */
+private fun fillX(f: Float, weights: FloatArray, layout: TextLayoutResult, width: Float): Float {
     val target = f * weights.sum()
     var acc = 0f
     for (i in weights.indices) {

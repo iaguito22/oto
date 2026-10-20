@@ -165,7 +165,7 @@ fun ToggleRow(art: @Composable () -> Unit, title: String, sub: String?, on: Bool
 
 /** La marca: un aro vacío que se llena de acento con un pequeño rebote. */
 @Composable
-private fun Check(on: Boolean) {
+internal fun Check(on: Boolean) {
     val c = Oto.colors
     val f by animateFloatAsState(if (on) 1f else 0f, spring(dampingRatio = 0.55f, stiffness = 700f), label = "check")
     Box(

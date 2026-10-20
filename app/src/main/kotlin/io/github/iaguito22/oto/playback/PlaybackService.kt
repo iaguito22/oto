@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -12,6 +13,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
@@ -24,6 +26,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -35,6 +38,7 @@ import com.google.common.util.concurrent.SettableFuture
 import io.github.iaguito22.oto.MainActivity
 import com.metrolist.innertube.YouTube
 import io.github.iaguito22.oto.OtoApp
+import io.github.iaguito22.oto.QualityMode
 import io.github.iaguito22.oto.dj.Dj
 import io.github.iaguito22.oto.dj.Kind
 import io.github.iaguito22.oto.dj.Memory
@@ -57,6 +61,7 @@ import timber.log.Timber
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import kotlin.math.min
 import kotlin.math.pow
 
@@ -73,6 +78,13 @@ class PlaybackService : MediaSessionService() {
     private val cache by lazy { (application as OtoApp).audioCache }
 
     private val urls = StreamUrlCache()
+    private val bandwidth by lazy { DefaultBandwidthMeter.getSingletonInstance(this) }
+    // La calidad de cada canción que suena o va a sonar: se decide al empezar a cargarla y ya no cambia (ver [Tier]).
+    private val tiers = ConcurrentHashMap<String, Tier>()
+    @Volatile private var mode = QualityMode.Auto
+    // La que suena, para [WholeSongLoadControl] (que pregunta desde el hilo de reproducción).
+    @Volatile private var playingIndex = 0
+    private var stallJob: Job? = null
     private val loudness = ConcurrentHashMap<String, Double>()
     private val tracking = ConcurrentHashMap<String, String>()
     private var historyJob: Job? = null
@@ -98,7 +110,11 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
         InnerTubeXPlayer.initialize(this)
         player = ExoPlayer.Builder(this, renderersFactory())
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory()))
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(dataSourceFactory()).setLoadErrorHandlingPolicy(PatientErrorPolicy(::isConnectionLost)),
+            )
+            .setLoadControl(WholeSongLoadControl({ mode }, { playingIndex }))
+            .setBandwidthMeter(bandwidth)
             .setAudioAttributes(
                 AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(),
                 /* handleAudioFocus = */ true,
@@ -106,8 +122,8 @@ class PlaybackService : MediaSessionService() {
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
-        // Abre y llena el búfer de la siguiente canción antes de que acabe esta: sin silencio entre temas.
-        player.preloadConfiguration = ExoPlayer.PreloadConfiguration(PRELOAD_US)
+        // Sin la precarga de ExoPlayer: la siguiente ya la baja entera [WholeSongLoadControl] en cuanto esta termina de
+        // bajar, y la precarga añadía 30 s de la de después, que casi nunca se oyen.
         player.addListener(listener)
 
         session = MediaSession.Builder(this, player)
@@ -125,6 +141,8 @@ class PlaybackService : MediaSessionService() {
             val heard = withContext(Dispatchers.IO) { prefs.history.first() }
             heard.asReversed().forEach { remember(it.id, sameSong(it.title, it.artist)) }
         }
+
+        scope.launch { prefs.quality.collect { mode = it } }
 
         // El corazón de la notificación sigue a Prefs: lo cambie quien lo cambie, aquí se ve.
         scope.launch { prefs.likedIds.collect { liked = it; showLike() } }
@@ -159,33 +177,59 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun dataSourceFactory(): DataSource.Factory {
+        val network = OkHttpDataSource.Factory(http)
         val cached = CacheDataSource.Factory()
             .setCache(cache)
-            .setUpstreamDataSourceFactory(OkHttpDataSource.Factory(OkHttpClient()))
+            // A trozos: de una vez, YouTube la frena a ~33 KB/s (ver [ChunkedDataSource]).
+            .setUpstreamDataSourceFactory { ChunkedDataSource(network.createDataSource()) }
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
         return ResolvingDataSource.Factory(cached, ::resolve)
     }
 
-    /** Se llama en el hilo de carga cada vez que ExoPlayer abre un trozo del audio. */
+    /**
+     * Se llama en el hilo de carga cada vez que ExoPlayer abre un trozo del audio. La primera vez que se abre una
+     * canción se decide su calidad ([Tier]); a partir de ahí, cada trozo (también al volver a pedir la URL porque
+     * caducó o porque cambió la red) es de ese mismo formato.
+     */
     private fun resolve(spec: DataSpec): DataSpec {
-        val id = spec.key ?: return spec
+        val key = spec.key ?: return spec
+        val id = Tier.idOf(key)
+        val tier = Tier.forcedBy(key)?.also { tiers[id] = it }
+            ?: tiers.getOrPut(id) { chooseTier(conditions(), isWhole(Tier.High.key(id))).also { Timber.d("calidad %s: %s", id, it) } }
+        val cacheKey = tier.key(id)
+        val keyed = if (cacheKey == key) spec else spec.buildUpon().setKey(cacheKey).build()
+
         // Entera en la caché: no hace falta ni pedir la URL. Si solo hay un trozo, sí (el resto viene de la red).
-        val metadata = cache.getContentMetadata(id)
+        val metadata = cache.getContentMetadata(cacheKey)
         val length = ContentMetadata.getContentLength(metadata)
         Quality.decode(metadata.get(QUALITY_KEY, null as String?))?.let { StreamInfo.put(id, it) }
-        if (length > 0 && cache.isCached(id, spec.position, length - spec.position)) return spec
+        if (length > 0 && cache.isCached(cacheKey, spec.position, length - spec.position)) return keyed
 
-        urls[id]?.let { return spec.withResolvedStream(it) }
+        urls[cacheKey]?.let { return keyed.withResolvedStream(it) }
 
-        val generation = urls.generation(id)
+        val generation = urls.generation(cacheKey)
         val started = System.nanoTime()
-        val stream = runBlocking(Dispatchers.IO) { InnerTubeXPlayer.resolve(id, connectivity) }
+        val stream = runBlocking(Dispatchers.IO) { InnerTubeXPlayer.resolve(id, tier) }
             .getOrElse { throw ResolveException(id, it) }
-        Timber.d("stream %s en %d ms (%s)", id, (System.nanoTime() - started) / 1_000_000, stream.client)
+        Timber.d("stream %s en %d ms (%s, itag %d)", cacheKey, (System.nanoTime() - started) / 1_000_000, stream.client, stream.itag)
+
+        // Lo guardado es de otro formato (otro cliente dio otro itag): esos bytes ya no casan con los nuevos. Fuera, y
+        // un error para que ExoPlayer vuelva a abrirla desde la cabecera, en el mismo punto.
+        val storedItag = metadata.get(ITAG_KEY, 0L)
+        if (storedItag != 0L && storedItag != stream.itag.toLong() && cache.getCachedBytes(cacheKey, 0, C.LENGTH_UNSET.toLong()) > 0) {
+            Timber.w("%s: itag %d en vez de %d, se vuelve a bajar", cacheKey, stream.itag, storedItag)
+            runCatching { cache.removeResource(cacheKey) }
+            throw ResolveException(id, IllegalStateException("cambió el formato"))
+        }
 
         StreamInfo.put(id, stream.quality)
         stream.tracking?.let { tracking[id] = it }
-        runCatching { cache.applyContentMetadataMutations(id, ContentMetadataMutations().set(QUALITY_KEY, stream.quality.encode())) }
+        runCatching {
+            cache.applyContentMetadataMutations(
+                cacheKey,
+                ContentMetadataMutations().set(QUALITY_KEY, stream.quality.encode()).set(ITAG_KEY, stream.itag.toLong()),
+            )
+        }
         stream.loudnessDb?.let {
             loudness[id] = it
             scope.launch { applyLoudness() }
@@ -199,7 +243,7 @@ class PlaybackService : MediaSessionService() {
             useRangeChunks = stream.useRangeChunks,
         )
         urls.put(
-            mediaId = id,
+            mediaId = cacheKey,
             url = resolved.url,
             requestHeaders = resolved.requestHeaders,
             clientName = resolved.clientName,
@@ -209,7 +253,46 @@ class PlaybackService : MediaSessionService() {
             useRangeChunks = resolved.useRangeChunks,
             expectedGeneration = generation,
         )
-        return spec.withResolvedStream(resolved)
+        return keyed.withResolvedStream(resolved)
+    }
+
+    private fun isWhole(cacheKey: String): Boolean {
+        val length = ContentMetadata.getContentLength(cache.getContentMetadata(cacheKey))
+        return length > 0 && cache.isCached(cacheKey, 0, length)
+    }
+
+    /** Lo que cuenta para elegir calidad, leído en el momento (en el hilo de carga: aquí se puede esperar a Prefs). */
+    private fun conditions() = Conditions(
+        mode = runBlocking { prefs.quality.first() },
+        dataSaver = runBlocking { prefs.dataSaver.first() },
+        metered = connectivity.isActiveNetworkMetered,
+        bandwidthBps = bandwidth.bitrateEstimate,
+    )
+
+    /** La clave con la que está (o estará) en la caché lo que suena ahora de esta canción. */
+    private fun keyOf(id: String) = (tiers[id] ?: Tier.High).key(id)
+
+    /**
+     * En Auto, si una canción en alta lleva [STALL_MS] sin empezar a sonar con la URL ya pedida y con red (son los bytes
+     * lo que no llega), se pasa a baja antes de que empiece: nunca a mitad.
+     */
+    private fun watchStart() {
+        val id = player.currentMediaItem?.mediaId ?: return
+        if (stallJob?.isActive == true) return
+        stallJob = scope.launch {
+            delay(STALL_MS)
+            val item = player.currentMediaItem ?: return@launch
+            if (item.mediaId != id || mode != QualityMode.Auto || tiers[id] != Tier.High) return@launch
+            if (player.playbackState != Player.STATE_BUFFERING || player.currentPosition > STARTED_MS) return@launch
+            if (urls[Tier.High.key(id)] == null) return@launch
+            // Sin conexión, bajar la calidad no la trae antes: espera y vuelve en alta cuando haya red.
+            val net = connectivity.activeNetwork?.let(connectivity::getNetworkCapabilities)
+            if (net?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true) return@launch
+            Timber.d("calidad %s: no arranca en alta, pasa a baja", id)
+            tiers[id] = Tier.Low
+            // Otra clave de caché = otra fuente: ExoPlayer la vuelve a preparar (la alta a medias se queda en la caché).
+            player.replaceMediaItem(player.currentMediaItemIndex, item.buildUpon().setCustomCacheKey(Tier.Low.key(id)).build())
+        }
     }
 
     /** YouTube normaliza bajando las canciones que suenan por encima de su referencia, nunca subiendo. */
@@ -227,8 +310,8 @@ class PlaybackService : MediaSessionService() {
         retries[id] = attempt
         Timber.w(error, "error %s (%s), intento %d", id, error.errorCodeName, attempt)
 
-        val failedClient = urls.clientName(id)
-        urls.invalidate(id)
+        val failedClient = urls.clientName(keyOf(id))
+        urls.invalidate(keyOf(id))
         if (!network) {
             // Una URL rechazada suele ser cosa del cliente que la dio o de un cifrado viejo: se cambian los dos.
             failedClient?.let { InnerTubeXPlayer.markClientFailed(id, it) }
@@ -298,7 +381,7 @@ class PlaybackService : MediaSessionService() {
         historyJob = scope.launch {
             while (player.currentMediaItem?.mediaId == id && player.currentPosition < HEARD_MS) delay(2_000)
             if (player.currentMediaItem?.mediaId != id) return@launch
-            val url = tracking[id] ?: withContext(Dispatchers.IO) { InnerTubeXPlayer.resolve(id, connectivity) }.getOrNull()?.tracking ?: return@launch
+            val url = tracking[id] ?: withContext(Dispatchers.IO) { InnerTubeXPlayer.resolve(id, tiers[id] ?: Tier.Low) }.getOrNull()?.tracking ?: return@launch
             withContext(Dispatchers.IO) { YouTube.registerPlayback(null, url) }
                 .onSuccess { Timber.d("historial: %s", id) }
                 .onFailure { Timber.w(it, "historial") }
@@ -424,6 +507,13 @@ class PlaybackService : MediaSessionService() {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val id = mediaItem?.mediaId ?: return
             retries.keys.retainAll(setOf(id))
+            // Lo que ya no suena ni va a sonar justo después vuelve a decidir su calidad la próxima vez.
+            playingIndex = player.currentMediaItemIndex
+            // Lo que ya no está en la cola vuelve a decidir su calidad la próxima vez; lo que sigue en ella, no (puede
+            // estar a medio cargar).
+            tiers.keys.retainAll((0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet())
+            stallJob?.cancel()
+            if (player.playbackState == Player.STATE_BUFFERING) watchStart()
             durations.keys.retainAll(setOf(id) + (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet())
             remember(id, sameSong(mediaItem.mediaMetadata.title?.toString().orEmpty(), mediaItem.mediaMetadata.artist?.toString().orEmpty()))
             applyLoudness()
@@ -436,14 +526,21 @@ class PlaybackService : MediaSessionService() {
 
         override fun onPlayerError(error: PlaybackException) = recover(error)
 
+        // Quitar o mover canciones de la cola cambia el índice de la que suena sin pasar a otra.
+        override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+            playingIndex = player.currentMediaItemIndex
+        }
+
         override fun onPlaybackStateChanged(state: Int) {
             val id = player.currentMediaItem?.mediaId ?: return
+            if (state == Player.STATE_BUFFERING && player.currentPosition <= STARTED_MS) watchStart() else if (state != Player.STATE_BUFFERING) stallJob?.cancel()
             if (state == Player.STATE_READY && player.duration > 0) durations[id] = player.duration
         }
 
         override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
             val item = old.mediaItem ?: return
-            // Moverse dentro de la misma no es dejarla; volver a empezarla sola (repetir una), sí.
+            // Moverse dentro de la misma no es dejarla; volver a empezarla sola (repetir una), sí. Cambiarla por ella
+            // misma en baja ([watchStart]) tampoco.
             if (item.mediaId == new.mediaItem?.mediaId && reason != Player.DISCONTINUITY_REASON_AUTO_TRANSITION) return
             logPlay(item, old.positionMs)
         }
@@ -496,19 +593,30 @@ class PlaybackService : MediaSessionService() {
         val network = generateSequence(cause) { it.cause }.any { it is IOException && it !is ResolveException }
     }
 
+    /** Para [PatientErrorPolicy]: lo que se arregla esperando a que vuelva la cobertura. */
+    private fun isConnectionLost(e: IOException): Boolean =
+        generateSequence<Throwable>(e) { it.cause }.firstNotNullOfOrNull { (it as? ResolveException)?.network } ?: e.isConnectionFailure()
+
     private fun PlaybackException.isNetwork(): Boolean =
         errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
             errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
             generateSequence<Throwable>(this) { it.cause }.any { it is ResolveException && it.network }
 
     private companion object {
-        const val PRELOAD_US = 30_000_000L
         const val MAX_RETRIES = 3
         const val RADIO_AHEAD = 2
         const val RADIO_PAGES = 3
         const val RECENT = 400
         const val HEARD_MS = 30_000L
         const val QUALITY_KEY = "oto_quality"
+        const val ITAG_KEY = "oto_itag"
+        const val STALL_MS = 6_000L
+        const val STARTED_MS = 1_000L
+        // Con poca cobertura una respuesta tarda: mejor esperar algo más que cortar y volver a empezar la petición.
+        val http: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
         const val DJ_KIND = "oto_dj"
         val LIKE = SessionCommand("io.github.iaguito22.oto.LIKE", Bundle.EMPTY)
         val DJ = SessionCommand(DJ_COMMAND, Bundle.EMPTY)

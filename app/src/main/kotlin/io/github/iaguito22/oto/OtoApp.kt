@@ -1,6 +1,11 @@
 package io.github.iaguito22.oto
 
 import android.app.Application
+import coil3.ImageLoader
+import coil3.PlatformContext
+import coil3.SingletonImageLoader
+import coil3.disk.DiskCache
+import okio.Path.Companion.toOkioPath
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
@@ -23,7 +28,7 @@ import timber.log.Timber
 import java.io.File
 import java.util.Locale
 
-class OtoApp : Application() {
+class OtoApp : Application(), SingletonImageLoader.Factory {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val player by lazy { PlayerConnection(this, prefs, scope) }
     val prefs by lazy { Prefs(this) }
@@ -37,7 +42,7 @@ class OtoApp : Application() {
     // Una SimpleCache por carpeta y proceso: vive aquí y no en el servicio, que puede recrearse.
     @get:OptIn(UnstableApi::class)
     val audioCache by lazy {
-        SimpleCache(File(cacheDir, "audio"), LeastRecentlyUsedCacheEvictor(AUDIO_CACHE_BYTES), StandaloneDatabaseProvider(this))
+        SimpleCache(File(cacheDir, "audio"), LeastRecentlyUsedCacheEvictor(Storage.AUDIO_BYTES), StandaloneDatabaseProvider(this))
     }
 
     override fun onCreate() {
@@ -49,16 +54,24 @@ class OtoApp : Application() {
         YouTube.locale = YouTubeLocale(gl = system.country.ifBlank { "ES" }, hl = system.language.ifBlank { "es" })
 
         // Con cuenta, su sesión. Sin visitorData, YouTube responde como a un visitante nuevo en cada petición y las
-        // recomendaciones salen peores.
-        if (account.restore() == null) scope.launch(Dispatchers.IO) {
-            YouTube.visitorData()
-                .onSuccess { YouTube.visitorData = it }
-                .onFailure { Timber.w(it, "No se pudo pedir visitorData") }
+        // recomendaciones salen peores; y sin él no hay cliente que dé el audio. Se guarda: pedirlo cada vez al abrir
+        // fallaba con poca cobertura (InnerTubeX le da 15 s) y entonces no sonaba nada.
+        if (account.restore() == null) {
+            val visitor = getSharedPreferences("oto_visitor", MODE_PRIVATE)
+            val saved = visitor.getString("visitorData", null)
+            if (saved != null) YouTube.visitorData = saved
+            else scope.launch(Dispatchers.IO) {
+                YouTube.visitorData()
+                    .onSuccess { YouTube.visitorData = it; visitor.edit().putString("visitorData", it).apply() }
+                    .onFailure { Timber.w(it, "No se pudo pedir visitorData") }
+            }
         }
         cloud.start()
+        scope.launch(Dispatchers.IO) { Storage.trimDj(File(cacheDir, "dj")) }
     }
 
-    private companion object {
-        const val AUDIO_CACHE_BYTES = 1L shl 30 // 1 GB: unas 200 canciones
-    }
+    // Las carátulas, con su tope (ver [Storage]): por defecto Coil se queda un 2 % del disco.
+    override fun newImageLoader(context: PlatformContext): ImageLoader = ImageLoader.Builder(context)
+        .diskCache { DiskCache.Builder().directory(File(cacheDir, "coil3_disk_cache").toOkioPath()).maxSizeBytes(Storage.IMAGES_BYTES).build() }
+        .build()
 }

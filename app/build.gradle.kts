@@ -20,6 +20,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0-beta"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // La clave del PoToken va en local.properties (o en la variable de entorno), nunca en el repo.
         val googleApiKey = local.getProperty("GOOGLE_API_KEY") ?: System.getenv("GOOGLE_API_KEY").orEmpty()
@@ -106,6 +107,9 @@ dependencies {
     testImplementation(libs.junit)
     // El org.json de android.jar en las pruebas de JVM es un esqueleto vacío.
     testImplementation("com.vaadin.external.google:android-json:0.0.20131108.vaadin1")
+    // Lo que necesita Android de verdad (la caché de audio): en el emulador.
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 
     coreLibraryDesugaring(libs.desugaring)
 }

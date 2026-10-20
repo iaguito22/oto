@@ -6,7 +6,6 @@
 package io.github.iaguito22.oto.playback
 
 import androidx.core.net.toUri
-import androidx.media3.common.C
 import androidx.media3.datasource.DataSpec
 
 internal data class CachedStreamUrl(
@@ -18,21 +17,10 @@ internal data class CachedStreamUrl(
     val useRangeChunks: Boolean = false,
 )
 
-internal fun DataSpec.withResolvedStream(stream: CachedStreamUrl): DataSpec {
-    val resolved =
-        withUri(stream.url.toUri())
-            .withRequestHeaders(httpRequestHeaders + stream.requestHeaders)
-    if ((!stream.requireBoundedRange && !stream.useRangeChunks) || stream.rangeChunkSizeBytes <= 0L) {
-        return resolved
-    }
-    val boundedLength =
-        if (length == C.LENGTH_UNSET.toLong()) {
-            stream.rangeChunkSizeBytes
-        } else {
-            minOf(length, stream.rangeChunkSizeBytes)
-        }
-    return resolved.subrange(0, boundedLength)
-}
+// Ya no se recorta aquí a un trozo (eso acababa la canción al final del primer trozo): los trozos los pide siempre
+// ChunkedDataSource, también a los clientes que exigen rangos acotados.
+internal fun DataSpec.withResolvedStream(stream: CachedStreamUrl): DataSpec =
+    withUri(stream.url.toUri()).withRequestHeaders(httpRequestHeaders + stream.requestHeaders)
 
 internal class StreamUrlCache(
     private val maxEntries: Int = 500,

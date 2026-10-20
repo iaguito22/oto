@@ -43,6 +43,8 @@ private val SORT_FLIPPED = stringSetPreferencesKey("sort_flipped")
 private val PINNED = stringSetPreferencesKey("pinned")
 private val FOLDERS = stringSetPreferencesKey("folders")
 private val CLOUD = stringPreferencesKey("cloud")
+private val QUALITY = stringPreferencesKey("audio_quality")
+private val DATA_SAVER = booleanPreferencesKey("data_saver")
 
 /** Lo que se fija arriba en Tus listas: el id de una lista o «d:» y el nombre de una carpeta. */
 fun pinKey(list: LocalPlaylist) = list.folder?.let { "d:$it" } ?: list.id
@@ -60,6 +62,12 @@ fun SongItem.toHeard() = Heard(id, title, artists.joinToString { it.name }, thum
 /** Una lista tuya, guardada en el móvil. [from]: la lista de Spotify de la que se importó, si viene de una. */
 data class LocalPlaylist(val id: String, val name: String, val songs: List<Heard>, val from: String? = null, val folder: String? = null)
 
+/**
+ * Auto: la calidad que aguante la conexión, elegida al empezar cada canción (nunca cambia a mitad); si la conexión
+ * duda, antes fluida que alta. Máxima: siempre la mejor, aunque tarde más en empezar.
+ */
+enum class QualityMode { Auto, Max }
+
 /** Lo que la app recuerda entre sesiones. */
 class Prefs(private val context: Context) {
     val tutorialDone: Flow<Boolean> = context.store.data.map { it[TUTORIAL_DONE] ?: false }
@@ -73,6 +81,22 @@ class Prefs(private val context: Context) {
 
     suspend fun setShowRemaining(on: Boolean) {
         context.store.edit { it[REMAINING] = on }
+    }
+
+    /** Con qué calidad suena: ver [QualityMode]. */
+    val quality: Flow<QualityMode> = context.store.data
+        .map { p -> QualityMode.entries.firstOrNull { it.name == p[QUALITY] } ?: QualityMode.Auto }
+        .distinctUntilChanged()
+
+    suspend fun setQuality(mode: QualityMode) {
+        context.store.edit { it[QUALITY] = mode.name }
+    }
+
+    /** Con datos móviles, la calidad baja aunque la conexión dé para más. */
+    val dataSaver: Flow<Boolean> = context.store.data.map { it[DATA_SAVER] ?: false }.distinctUntilChanged()
+
+    suspend fun setDataSaver(on: Boolean) {
+        context.store.edit { it[DATA_SAVER] = on }
     }
 
     /** Aleatorio, como el botón de Spotify: vale para todo lo que se ponga hasta quitarlo. */

@@ -1,7 +1,6 @@
 package io.github.iaguito22.oto.playback
 
 import android.content.Context
-import android.net.ConnectivityManager
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertubex.InnerTubeLogEvent
 import com.metrolist.innertubex.InnerTubeLogLevel
@@ -22,7 +21,14 @@ import com.metrolist.innertubex.extraction.YtConfigParserImpl
 import com.metrolist.innertubex.extraction.generateClientPlaybackNonce
 import com.metrolist.innertubex.extraction.strategy.PoTokenProviderKind
 import io.github.iaguito22.oto.playback.potoken.PoTokenGenerator
+import com.metrolist.innertubex.extraction.PlayerConfig
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
@@ -37,6 +43,10 @@ object InnerTubeXPlayer {
     private const val TAG = "InnerTubeX"
     private const val CLIENT_FAILURE_TTL_MS = 5 * 60 * 1000L
     private const val DEFAULT_STREAM_TTL_SECONDS = 5 * 60
+    private const val PLAYER_REQUEST_TIMEOUT_MS = 30_000L
+    private const val VISITOR_DATA_TIMEOUT_MS = 30_000L
+    private const val CONFIG_REFRESH_MS = 60 * 60 * 1000L
+    private const val CONFIG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000L
 
     @Volatile private var appContext: Context? = null
     @Volatile private var currentBundle: Bundle? = null
@@ -51,7 +61,8 @@ object InnerTubeXPlayer {
     /** Descarga la configuración del reproductor y el cifrado antes de la primera canción. */
     suspend fun prewarm() = bundle().extractor.prewarm()
 
-    suspend fun resolve(videoId: String, connectivity: ConnectivityManager): Result<Stream> =
+    /** [tier]: la calidad que se decidió para esta canción (ver [Tier]); la misma en cada vuelta a pedirla. */
+    suspend fun resolve(videoId: String, tier: Tier): Result<Stream> =
         try {
             val hints = ContentHints().withStreamCapabilities(allowHls = false, allowSabr = false, allowBoundedRange = true)
             val stream = requireNotNull(
@@ -59,8 +70,8 @@ object InnerTubeXPlayer {
                     videoId = videoId,
                     hints = hints,
                     excludedClients = failedClients(videoId),
-                    // Con datos móviles, calidad baja; con wifi, la mejor que haya.
-                    audioQuality = if (connectivity.isActiveNetworkMetered) AudioQuality.LOW else AudioQuality.AUTO,
+                    // HIGH: la mejor que haya (opus ~160 kbps; con Premium, más). LOW: el AAC más ligero (~48 kbps).
+                    audioQuality = if (tier == Tier.Low) AudioQuality.LOW else AudioQuality.HIGH,
                     clientPlaybackNonce = generateClientPlaybackNonce(),
                 ),
             ) { "InnerTubeX no devolvió ningún stream" }
@@ -82,7 +93,11 @@ object InnerTubeXPlayer {
 
     fun clearClientFailures() = clientFailures.clear()
 
-    suspend fun refreshAfterStreamRejection(): Boolean = bundle().cipher.refreshAfterStreamRejection()
+    suspend fun refreshAfterStreamRejection(): Boolean {
+        // La configuración guardada puede ser la de un reproductor que YouTube ya no acepta: la próxima, de nuevo.
+        configPrefs.edit().clear().apply()
+        return bundle().cipher.refreshAfterStreamRejection()
+    }
 
     private fun failedClients(videoId: String): Set<String> {
         val f = clientFailures[videoId] ?: return emptySet()
@@ -108,12 +123,9 @@ object InnerTubeXPlayer {
             }
             val store = RemotePlayerConfigStore(transport.httpClient, configRepository, logger)
             val cipher = YouTubeCipherService(transport.httpClient, store, logger)
-            val extractor = InnerTubeExtractor(
-                configParser = YtConfigParserImpl(transport.httpClient, transport.innerTube, store, logger).withEmbeddedFallback(),
-                cipherService = cipher,
-                innerTube = transport.innerTube,
-                tokenProvider = tokenProvider,
-                logger = logger,
+            val extractor = PatientExtractor.create(
+                YtConfigParserImpl(transport.httpClient, transport.innerTube, store, logger).resilient(),
+                cipher, transport.innerTube, tokenProvider, logger, PLAYER_REQUEST_TIMEOUT_MS, VISITOR_DATA_TIMEOUT_MS,
             )
             Bundle(transport.generation, cipher, extractor).also { currentBundle = it }
         }
@@ -167,6 +179,8 @@ object InnerTubeXPlayer {
         val loudnessDb: Double?,
         val contentLength: Long?,
         val quality: Quality,
+        /** El formato exacto: si al volver a pedirla a mitad de canción llega otro, lo guardado ya no le sirve. */
+        val itag: Int,
         /** Con cuenta, a esta URL se avisa de que ha sonado: así cuenta en el historial de YouTube. */
         val tracking: String?,
     )
@@ -189,6 +203,7 @@ object InnerTubeXPlayer {
             bitrate = bitrate,
             sampleRate = sampleRate,
         ),
+        itag = itag,
         tracking = playbackTracking?.playbackUrl,
     )
 
@@ -196,14 +211,65 @@ object InnerTubeXPlayer {
 
     private data class FailedClients(val names: Set<String>, val at: Long)
 
-    private fun YtConfigParser.withEmbeddedFallback(): YtConfigParser = object : YtConfigParser by this {
-        override suspend fun fetchConfig(videoId: String, useLoginCookies: Boolean) =
-            try {
-                this@withEmbeddedFallback.fetchConfig(videoId, useLoginCookies)
-            } catch (_: IllegalStateException) {
-                this@withEmbeddedFallback.fetchEmbeddedConfig(videoId, useLoginCookies = false)
+    /**
+     * La configuración del reproductor de YouTube, guardada: la última buena se usa al momento (y se renueva aparte si
+     * tiene más de [CONFIG_REFRESH_MS]). Pedirla cuesta una página entera y InnerTubeX le da 15 s: con poca cobertura
+     * no llegaba nunca y ninguna canción empezaba. Si YouTube rechaza una URL, se tira (ver [refreshAfterStreamRejection]).
+     */
+    private fun YtConfigParser.resilient(): YtConfigParser = object : YtConfigParser by this {
+        override suspend fun fetchConfig(videoId: String, useLoginCookies: Boolean): PlayerConfig {
+            val saved = savedConfig(useLoginCookies)
+            if (saved != null && System.currentTimeMillis() - saved.second < CONFIG_MAX_AGE_MS) {
+                if (System.currentTimeMillis() - saved.second > CONFIG_REFRESH_MS && refreshing.compareAndSet(false, true)) {
+                    background.launch {
+                        try { runCatching { live(videoId, useLoginCookies) }.onFailure { Timber.tag(TAG).w(it, "No se pudo renovar la configuración") } }
+                        finally { refreshing.set(false) }
+                    }
+                }
+                return saved.first
             }
+            return try {
+                live(videoId, useLoginCookies)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                saved?.first ?: throw e
+            }
+        }
+
+        private suspend fun live(videoId: String, useLoginCookies: Boolean): PlayerConfig =
+            try {
+                this@resilient.fetchConfig(videoId, useLoginCookies)
+            } catch (_: IllegalStateException) {
+                this@resilient.fetchEmbeddedConfig(videoId, useLoginCookies = false)
+            }.also { saveConfig(useLoginCookies, it) }
     }
+
+    private val refreshing = AtomicBoolean(false)
+    private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val configPrefs by lazy {
+        requireNotNull(appContext) { "InnerTubeXPlayer sin inicializar" }.getSharedPreferences("oto_player_config", Context.MODE_PRIVATE)
+    }
+
+    private fun savedConfig(login: Boolean): Pair<PlayerConfig, Long>? = runCatching {
+        val o = JSONObject(configPrefs.getString(configKey(login), null) ?: return null)
+        PlayerConfig(
+            playerUrl = o.getString("playerUrl"),
+            signatureTimestamp = if (o.has("sts")) o.getInt("sts") else null,
+            visitorData = o.optString("visitorData").ifEmpty { null },
+            clientVersion = o.optString("clientVersion").ifEmpty { null },
+            encryptedHostFlags = o.optString("hostFlags").ifEmpty { null },
+        ) to o.getLong("at")
+    }.getOrNull()
+
+    private fun saveConfig(login: Boolean, c: PlayerConfig) {
+        val o = JSONObject().put("playerUrl", c.playerUrl).put("at", System.currentTimeMillis())
+            .put("visitorData", c.visitorData.orEmpty()).put("clientVersion", c.clientVersion.orEmpty()).put("hostFlags", c.encryptedHostFlags.orEmpty())
+        c.signatureTimestamp?.let { o.put("sts", it) }
+        configPrefs.edit().putString(configKey(login), o.toString()).apply()
+    }
+
+    private fun configKey(login: Boolean) = if (login) "login" else "visitor"
 
     private class PrefsPlayerConfigRepository(context: Context) : PlayerConfigRepository {
         private val prefs = context.getSharedPreferences("innertubex_player_config", Context.MODE_PRIVATE)

@@ -689,6 +689,7 @@ private fun SavedMark(saved: Saved, onClick: () -> Unit, modifier: Modifier) {
 /**
  * El corazón del doble toque: brota del centro de la carátula con un rebote, suelta un aro de acento y se va
  * hinchándose y desvaneciéndose. Cada [key] nuevo lo lanza otra vez, aunque el anterior no hubiera acabado.
+ * Solo los que llegan con él a la vista: al volver de la letra se crea de nuevo y no debe repetir el último.
  */
 @Composable
 private fun HeartBurst(key: Int, side: Dp, modifier: Modifier) {
@@ -696,8 +697,9 @@ private fun HeartBurst(key: Int, side: Dp, modifier: Modifier) {
     val scale = remember { Animatable(0f) }
     val alpha = remember { Animatable(0f) }
     val ring = remember { Animatable(1f) }
+    val shownAt = remember { key }
     LaunchedEffect(key) {
-        if (key == 0) return@LaunchedEffect
+        if (key == shownAt) return@LaunchedEffect
         scale.snapTo(0.35f); alpha.snapTo(1f); ring.snapTo(0f)
         launch { ring.animateTo(1f, tween(560, easing = Motion.EmphasizedDecelerate)) }
         // El rebote no se espera a que se calme: a su hora se va, aunque aún tiemble (y lo de irse lo corta).

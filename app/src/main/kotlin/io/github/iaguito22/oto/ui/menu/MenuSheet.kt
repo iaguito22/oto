@@ -100,6 +100,9 @@ import com.metrolist.innertube.models.YTItem
 import io.github.iaguito22.oto.BuildConfig
 import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.LIKED_ID
+import io.github.iaguito22.oto.Prefs
+import io.github.iaguito22.oto.QualityMode
+import io.github.iaguito22.oto.Storage
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.R
@@ -306,7 +309,12 @@ fun MenuSheet(
                 }
             }
             // Entrando con Google, el teclado es para la contraseña: el buscador sobra.
-            if (view != View.Account) SearchField(s.query, s.searching, vm::onQuery, onSearch = { focus.clearFocus() })
+            // Empezar a escribir con los ajustes, la importación o una página abierta lleva a los resultados (si no,
+            // se buscaba detrás, sin verse).
+            if (view != View.Account) SearchField(s.query, s.searching, onQuery = { q ->
+                if (q.isNotBlank() && s.query.isBlank()) { settings = false; importing = false; vm.closeAll() }
+                vm.onQuery(q)
+            }, onSearch = { focus.clearFocus() })
         }
 
         // ---- Lo que flota encima: acciones de una canción, opciones de una lista y pedir un nombre ----
@@ -809,6 +817,8 @@ private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () ->
             onAccount,
         )
         SettingRow("Importar de Spotify", importSummary(state), onImport)
+        AudioSettings(app.prefs)
+        SpaceRow(app)
         SettingRow("Ver los gestos otra vez", "El tutorial del principio", onTutorial)
         Spacer(Modifier.weight(1f))
         Text(
@@ -817,6 +827,109 @@ private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () ->
         )
     }
 }
+
+/** Calidad del audio (Auto o Máxima) y ahorro de datos. Lo cambiado vale desde la siguiente canción. */
+@Composable
+private fun AudioSettings(prefs: Prefs) {
+    val c = Oto.colors
+    val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    val mode by prefs.quality.collectAsStateWithLifecycle(initialValue = null)
+    val saver by prefs.dataSaver.collectAsStateWithLifecycle(initialValue = null)
+    val m = mode ?: return
+    Column(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.md)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Calidad del audio", style = OtoType.rowTitle, color = c.text, modifier = Modifier.weight(1f))
+            // Como las pestañas del Menú: el indicador se desliza a la opción elegida.
+            val at by animateFloatAsState(m.ordinal.toFloat(), spring(dampingRatio = 0.8f, stiffness = 500f), label = "quality")
+            Row(
+                Modifier
+                    .height(36.dp)
+                    .clip(CircleShape)
+                    .background(c.field)
+                    .drawBehind {
+                        val w = size.width / 2
+                        drawRoundRect(c.accent.copy(alpha = 0.22f), Offset(lerp(0f, w, at) + 3.dp.toPx(), 3.dp.toPx()), Size(w - 6.dp.toPx(), size.height - 6.dp.toPx()), CornerRadius(size.height))
+                    },
+            ) {
+                QualityMode.entries.forEach { q ->
+                    Box(
+                        Modifier
+                            .width(78.dp)
+                            .height(36.dp)
+                            .clip(CircleShape)
+                            .clickable(remember { MutableInteractionSource() }, null) {
+                                if (q != m) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                scope.launch { prefs.setQuality(q) }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        val fg by animateColorAsState(if (q == m) c.text else c.textMuted, tween(Motion.EFFECTS), label = "qualityFg")
+                        Text(if (q == QualityMode.Auto) "Auto" else "Máxima", style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = fg)
+                    }
+                }
+            }
+        }
+        AnimatedContent(
+            targetState = m,
+            transitionSpec = { fadeIn(tween(Motion.EFFECTS, delayMillis = 40)) togetherWith fadeOut(tween(Motion.EFFECTS_FAST)) },
+            label = "qualityBody",
+        ) { q ->
+            Text(
+                if (q == QualityMode.Auto) "La mejor que aguante tu conexión. Se elige al empezar cada canción y nunca cambia a mitad."
+                else "Siempre la mejor. Si la conexión va justa, tarda más en empezar, pero no baja.",
+                style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.padding(top = Space.xs, end = Space.xl),
+            )
+        }
+    }
+    val on = saver ?: return
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.lg))
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text)) {
+                haptics.performHapticFeedback(if (on) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn)
+                scope.launch { prefs.setDataSaver(!on) }
+            }
+            .padding(horizontal = Space.md, vertical = Space.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Ahorro de datos", style = OtoType.rowTitle, color = c.text)
+            Text("Con datos móviles, calidad baja (unos 48 kbps).", style = OtoType.rowSub, color = c.textMuted)
+        }
+        Spacer(Modifier.width(Space.md))
+        Check(on)
+    }
+}
+
+/** Lo que ocupa Oto en el móvil y su tope (ver [Storage]); tocar lo vacía. */
+@Composable
+private fun SpaceRow(app: OtoApp) {
+    val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    var used by remember { mutableStateOf<Long?>(null) }
+    var clearing by remember { mutableStateOf(false) }
+    LaunchedEffect(clearing) { if (!clearing) used = withContext(Dispatchers.IO) { Storage.used(app) } }
+    val body = when {
+        clearing -> "Vaciando…"
+        used == null -> "Midiendo…"
+        else -> "${bytes(used!!)} ahora · nunca más de ${bytes(Storage.TOTAL_BYTES)}. Toca para vaciarlo."
+    }
+    SettingRow("Espacio en el móvil", body) {
+        if (clearing) return@SettingRow
+        haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+        clearing = true
+        scope.launch {
+            withContext(Dispatchers.IO) { Storage.clear(app, app.player.state.value.id) }
+            clearing = false
+        }
+    }
+}
+
+/** 231 MB, 1,3 GB. */
+private fun bytes(n: Long): String =
+    if (n >= 1L shl 30) "%.1f GB".format(n / (1L shl 30).toDouble()) else "${(n + (1L shl 19)) shr 20} MB"
 
 @Composable
 private fun SettingRow(title: String, body: String, onClick: () -> Unit) {
