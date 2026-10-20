@@ -96,6 +96,8 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.input.pointer.pointerInput
@@ -398,15 +400,16 @@ private fun Stage(
     val like by rememberUpdatedState(onLike)
     val save by rememberUpdatedState(onSave)
 
-    Column(
-        modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(bottom = DROP_LIFT + DROP_HOST),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Spacer(Modifier.height(SOURCE_TOP))
-        SourceHeader(source.takeIf { np.id != null }, pull, onCenter = { sourceCenter = it }, onOpen = { onSource(sourceCenter) })
-        Spacer(Modifier.weight(1f))
+    // La carátula se queda con lo que dejan el origen y los títulos: en una pantalla baja (o con la letra o la
+    // pantalla agrandadas en Ajustes) encoge ella, en vez de empujar la barra de tiempo debajo de la gota.
+    Layout(
+        content = {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(Modifier.height(SOURCE_TOP))
+            SourceHeader(source.takeIf { np.id != null }, pull, onCenter = { sourceCenter = it }, onOpen = { onSource(sourceCenter) })
+        }
         BoxWithConstraints(Modifier.padding(horizontal = 36.dp), contentAlignment = Alignment.Center) {
-            val side = minOf(maxWidth, 340.dp)
+            val side = minOf(maxWidth, 340.dp, (maxHeight - LYRICS_EXTRA).coerceAtLeast(COVER_MIN))
             // La letra ocupa el sitio de la carátula: cambiar a ella es como cambiar de carátula, no de pantalla.
             AnimatedContent(
                 targetState = lyrics,
@@ -460,7 +463,7 @@ private fun Stage(
                 }
             }
         }
-        Spacer(Modifier.height(28.dp))
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         AnimatedContent(
             targetState = song,
             contentKey = { it.id },
@@ -488,7 +491,24 @@ private fun Stage(
         Spacer(Modifier.height(10.dp))
         if (np.id != null) Progress(np, connection, Modifier.padding(horizontal = 36.dp))
         else Spacer(Modifier.height(PROGRESS_H))
-        Spacer(Modifier.weight(1.25f))
+        }
+        },
+        modifier = modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(bottom = DROP_LIFT + DROP_HOST),
+    ) { (head, cover, tail), constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val h = head.measure(loose)
+        val t = tail.measure(loose)
+        val gap = TITLES_GAP.roundToPx()
+        val room = (constraints.maxHeight - h.height - gap - t.height - 2 * COVER_MARGIN.roundToPx()).coerceAtLeast(0)
+        val cv = cover.measure(loose.copy(maxHeight = room))
+        // Lo que sobra, como antes: algo menos encima de la carátula que debajo de la barra.
+        val above = COVER_MARGIN.roundToPx() + (room - cv.height).coerceAtLeast(0) * 4 / 9
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            fun Placeable.center(y: Int) = place((constraints.maxWidth - width) / 2, y)
+            h.center(0)
+            cv.center(h.height + above)
+            t.center(h.height + above + cv.height + gap)
+        }
     }
 }
 
@@ -916,6 +936,10 @@ private const val COVER_BEAT = 0.022f
 // La letra es algo más alta que la carátula: debajo sobra sitio.
 private val LYRICS_EXTRA = 56.dp
 private val PROGRESS_H = 72.dp
+private val TITLES_GAP = 28.dp
+// Lo mínimo que se deja encima y debajo de la carátula, y lo menos que encoge.
+private val COVER_MARGIN = 8.dp
+private val COVER_MIN = 160.dp
 private const val FLASH_MS = 650L
 private const val PEEK_MUTE_MS = 500L
 private const val BACKDROP_MS = 800
