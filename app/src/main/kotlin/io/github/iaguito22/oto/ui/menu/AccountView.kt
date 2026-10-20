@@ -43,6 +43,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.R
+import io.github.iaguito22.oto.account.CloudState
 import io.github.iaguito22.oto.account.Session
 import io.github.iaguito22.oto.ui.theme.Motion
 import io.github.iaguito22.oto.ui.theme.Oto
@@ -65,6 +66,8 @@ fun AccountView(onBack: () -> Unit, onSignedIn: () -> Unit) {
     val c = Oto.colors
     val account = (LocalContext.current.applicationContext as OtoApp).account
     val session by account.session.collectAsStateWithLifecycle()
+    val cloud = (LocalContext.current.applicationContext as OtoApp).cloud
+    val copy by cloud.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var web by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf<String?>(null) }
@@ -90,7 +93,7 @@ fun AccountView(onBack: () -> Unit, onSignedIn: () -> Unit) {
             label = "account",
         ) { step ->
             when (step) {
-                2 -> session?.let { s -> SignedIn(s, onSignOut = { scope.launch { account.signOut(); onSignedIn() } }) }
+                2 -> session?.let { s -> SignedIn(s, copy, onSignOut = { scope.launch { account.signOut(); cloud.forget(); onSignedIn() } }) }
                 1 -> SignInPage(
                     email = email,
                     modifier = Modifier.fillMaxSize().padding(bottom = Space.md).clip(RoundedCornerShape(Radius.lg)),
@@ -117,7 +120,7 @@ fun AccountView(onBack: () -> Unit, onSignedIn: () -> Unit) {
 }
 
 @Composable
-private fun SignedIn(s: Session, onSignOut: () -> Unit) {
+private fun SignedIn(s: Session, copy: CloudState, onSignOut: () -> Unit) {
     val c = Oto.colors
     Column {
         Row(
@@ -135,8 +138,19 @@ private fun SignedIn(s: Session, onSignOut: () -> Unit) {
             "Explorar y la radio salen de tus gustos. Lo que oyes cuenta en tu historial de YouTube y tus me gusta se guardan también allí.",
             style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.padding(Space.md),
         )
+        Block("Tus listas, a salvo", copyText(copy)) {}
+        Spacer(Modifier.height(Space.md))
         Box(Modifier.padding(horizontal = Space.sm)) { Pill("Cerrar sesión", onSignOut, filled = false) }
     }
+}
+
+/** Qué pasa con la copia de tus listas, en una frase. */
+private fun copyText(s: CloudState) = when (s) {
+    CloudState.Off -> "Se guardan en tu cuenta como listas privadas de YouTube Music. Si reinstalas Oto o cambias de móvil, vuelven al entrar."
+    is CloudState.Working -> s.what + "…"
+    is CloudState.Done -> "Guardadas en tu cuenta (" + (if (s.lists == 1) "1 lista" else "${s.lists} listas") +
+        ", como listas privadas de YouTube Music). Si reinstalas Oto o cambias de móvil, vuelven al entrar."
+    is CloudState.Failed -> "No se pudieron guardar ahora (${s.why}). Se reintenta con el próximo cambio o al volver a abrir Oto."
 }
 
 @SuppressLint("SetJavaScriptEnabled")

@@ -77,6 +77,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import timber.log.Timber
 import java.io.FilterInputStream
 import java.io.InputStream
@@ -2807,6 +2810,40 @@ object YouTube {
 
     suspend fun createPlaylist(title: String) =
         innerTube.createPlaylist(WEB_REMIX, title).body<CreatePlaylistResponse>().playlistId
+
+    /** Una lista privada que nace ya con [videoIds]; devuelve su id. */
+    suspend fun createPlaylist(
+        title: String,
+        videoIds: List<String>,
+    ) = runCatching {
+        innerTube.createPlaylist(WEB_REMIX, title, videoIds).body<CreatePlaylistResponse>().playlistId
+    }
+
+    /**
+     * Varios cambios a una lista tuya en una sola petición: añadir al final (sin repetir), quitar por id, renombrar y
+     * cambiar la descripción. YouTube contesta 200 aunque falle: lo que vale es su «status».
+     */
+    suspend fun editPlaylist(
+        playlistId: String,
+        add: List<String> = emptyList(),
+        remove: List<String> = emptyList(),
+        name: String? = null,
+        description: String? = null,
+    ) = runCatching {
+        val actions = buildList<JsonObject> {
+            name?.let { add(buildJsonObject { put("action", "ACTION_SET_PLAYLIST_NAME"); put("playlistName", it) }) }
+            description?.let { add(buildJsonObject { put("action", "ACTION_SET_PLAYLIST_DESCRIPTION"); put("playlistDescription", it) }) }
+            remove.forEach { add(buildJsonObject { put("action", "ACTION_REMOVE_VIDEO_BY_VIDEO_ID"); put("removedVideoId", it) }) }
+            add.forEach { add(buildJsonObject { put("action", "ACTION_ADD_VIDEO"); put("addedVideoId", it); put("dedupeOption", "DEDUPE_OPTION_SKIP") }) }
+        }
+        val body = innerTube.editPlaylist(WEB_REMIX, playlistId, actions).bodyAsText()
+        check("STATUS_SUCCEEDED" in body) { "editPlaylist: " + body.take(300) }
+    }
+
+    /** La página tal cual, para leer lo que los modelos no recogen (la descripción de una lista). Con la cuenta. */
+    suspend fun browseRaw(browseId: String) = runCatching {
+        innerTube.browse(WEB_REMIX, browseId, setLogin = true).bodyAsText()
+    }
 
     suspend fun renamePlaylist(
         playlistId: String,

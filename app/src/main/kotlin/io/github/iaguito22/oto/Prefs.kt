@@ -42,6 +42,7 @@ private val SHUFFLE = booleanPreferencesKey("shuffle")
 private val SORT_FLIPPED = stringSetPreferencesKey("sort_flipped")
 private val PINNED = stringSetPreferencesKey("pinned")
 private val FOLDERS = stringSetPreferencesKey("folders")
+private val CLOUD = stringPreferencesKey("cloud")
 
 /** Lo que se fija arriba en Tus listas: el id de una lista o «d:» y el nombre de una carpeta. */
 fun pinKey(list: LocalPlaylist) = list.folder?.let { "d:$it" } ?: list.id
@@ -168,6 +169,10 @@ class Prefs(private val context: Context) {
         context.store.edit { p -> p[LIKES_SENT] = p[LIKES_SENT].orEmpty().let { if (on) it + id else it - id } }
     }
 
+    suspend fun markLikesSent(ids: Collection<String>) {
+        context.store.edit { p -> p[LIKES_SENT] = p[LIKES_SENT].orEmpty() + ids }
+    }
+
     suspend fun clearLikesSent() {
         context.store.edit { it.remove(LIKES_SENT) }
     }
@@ -266,6 +271,28 @@ class Prefs(private val context: Context) {
 
     suspend fun removeFromPlaylist(id: String, songId: String) = editLists { l ->
         l.map { p -> if (p.id == id) p.copy(songs = p.songs.filter { it.id != songId }) else p }
+    }
+
+    // ---- Copia en la cuenta (ver Cloud) ----
+
+    /** Lo que ya está subido: junto a las listas, porque pesa lo mismo que ellas. */
+    suspend fun cloud(): String? = context.lists.data.first()[CLOUD]
+
+    suspend fun setCloud(s: String?) {
+        context.lists.edit { p -> if (s == null) p.remove(CLOUD) else p[CLOUD] = s }
+    }
+
+    /** Las que falten (por id) entran detrás, en el orden dado; y se suman las carpetas, fijadas y órdenes. */
+    suspend fun restore(lists: List<LocalPlaylist>, folders: Set<String>, pinned: Set<String>, flipped: Set<String>) {
+        editLists { l ->
+            val have = l.mapTo(HashSet()) { it.id }
+            l + lists.filter { have.add(it.id) }
+        }
+        context.store.edit { p ->
+            p[FOLDERS] = p[FOLDERS].orEmpty() + folders
+            p[PINNED] = p[PINNED].orEmpty() + pinned
+            p[SORT_FLIPPED] = p[SORT_FLIPPED].orEmpty() + flipped
+        }
     }
 
     private suspend fun editLists(f: (List<LocalPlaylist>) -> List<LocalPlaylist>) {

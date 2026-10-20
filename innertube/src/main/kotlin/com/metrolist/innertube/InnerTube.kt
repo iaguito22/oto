@@ -15,11 +15,16 @@ import io.ktor.client.plugins.compression.ContentEncoding
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.get
+import io.ktor.client.request.parameter
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.request.header
 import io.ktor.client.request.url
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.userAgent
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
@@ -29,6 +34,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import com.metrolist.innertubex.models.Context
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.security.MessageDigest
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -322,6 +334,71 @@ class InnerTube(
         title: String,
     ) = innerTubeX.createPlaylist(client, title).requireSuccess("createPlaylist")
 
+    /**
+     * Varias acciones en una sola edición (InnerTubeX solo manda una por petición): para subir cientos de canciones
+     * de golpe. Firmada como las suyas, con la sesión del momento.
+     */
+    suspend fun editPlaylist(
+        client: YouTubeClient,
+        playlistId: String,
+        actions: List<JsonObject>,
+    ): HttpResponse {
+        val s = innerTubeX.sessionSnapshot()
+        return httpClient.post("browse/edit_playlist") {
+            signed(client, s)
+            setBody(
+                buildJsonObject {
+                    put("context", context(client, s))
+                    put("playlistId", playlistId.removePrefix("VL"))
+                    put("actions", JsonArray(actions))
+                },
+            )
+        }.requireSuccess("editPlaylist")
+    }
+
+    /** Una lista privada que nace ya con [videoIds]. */
+    suspend fun createPlaylist(
+        client: YouTubeClient,
+        title: String,
+        videoIds: List<String>,
+    ): HttpResponse {
+        val s = innerTubeX.sessionSnapshot()
+        return httpClient.post("playlist/create") {
+            signed(client, s)
+            setBody(
+                buildJsonObject {
+                    put("context", context(client, s))
+                    put("title", title)
+                    put("privacyStatus", "PRIVATE")
+                    put("videoIds", JsonArray(videoIds.map(::JsonPrimitive)))
+                },
+            )
+        }.requireSuccess("createPlaylist")
+    }
+
+    // Los cuerpos de InnerTubeX son internos: se arman a mano, con su mismo contexto.
+    private fun context(client: YouTubeClient, s: InnerTubeX.SessionSnapshot) =
+        CONTEXT_JSON.encodeToJsonElement(Context.serializer(), client.toContext(s.locale, s.visitorData, s.dataSyncId))
+
+    private fun io.ktor.client.request.HttpRequestBuilder.signed(client: YouTubeClient, s: InnerTubeX.SessionSnapshot) {
+        val sapisid = s.sapisid ?: throw IOException("Sin sesión de YouTube")
+        val now = System.currentTimeMillis() / 1000
+        val hash = MessageDigest.getInstance("SHA-1").digest("$now $sapisid $ORIGIN".toByteArray()).joinToString("") { "%02x".format(it) }
+        parameter("prettyPrint", false)
+        contentType(ContentType.Application.Json)
+        userAgent(client.userAgent)
+        header("X-Goog-Api-Format-Version", "1")
+        header("X-YouTube-Client-Name", client.clientId)
+        header("X-YouTube-Client-Version", client.clientVersion)
+        header("Origin", ORIGIN)
+        header("X-Origin", ORIGIN)
+        header("Referer", "$ORIGIN/")
+        header("X-Goog-AuthUser", s.authUser)
+        s.visitorData?.let { header("X-Goog-Visitor-Id", it) }
+        header(HttpHeaders.Cookie, s.cookie)
+        header(HttpHeaders.Authorization, "SAPISIDHASH ${now}_$hash")
+    }
+
     suspend fun renamePlaylist(
         client: YouTubeClient,
         playlistId: String,
@@ -450,3 +527,6 @@ class InnerTube(
             )
         }
 }
+
+private const val ORIGIN = "https://music.youtube.com"
+private val CONTEXT_JSON = Json { encodeDefaults = true; explicitNulls = false }
