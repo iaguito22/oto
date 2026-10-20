@@ -3,6 +3,9 @@ package io.github.iaguito22.oto.ui.isla
 import android.icu.text.BreakIterator
 import android.util.LruCache
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateDpAsState
@@ -228,7 +231,6 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
     // Se pide igual aunque esté quitada: así volver a ponerla es al momento.
     val prefs = (LocalContext.current.applicationContext as OtoApp).prefs
     val romanize by prefs.romanize.collectAsStateWithLifecycle(initialValue = true)
-    val rom = fetched?.takeIf { romanize }
     // Mantener una línea quita o pone la romanización (solo si esta letra la tiene).
     val toggleRom: (() -> Unit)? = if (fetched == null) null else {
         {
@@ -267,8 +269,7 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
 
     // Seguir a la línea activa: easeOutQuart de 620 ms (como en Spotify). El destino se recalcula en cada fotograma
     // porque una pausa que se abre o se cierra mueve las líneas mientras tanto. Tras arrastrar a mano, 2,5 s de calma.
-    // Quitar o poner la romanización cambia el alto de todas: también vuelve a buscar su sitio.
-    LaunchedEffect(active, dragged, userAt, placed, rom != null) {
+    LaunchedEffect(active, dragged, userAt, placed) {
         if (dragged || !placed) return@LaunchedEffect
         val wait = userAt + USER_HOLD_MS - System.currentTimeMillis()
         if (wait > 0) delay(wait)
@@ -280,6 +281,16 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
         runCatching {
             val p = Animatable(0f)
             p.animateTo(1f, tween(SCROLL_MS, easing = EaseOutQuart)) { scroll.dispatchRawDelta(lerp(from, target(), value) - scroll.value) }
+        }
+    }
+    // Quitar o poner la romanización cambia el alto de todas mientras se despliega o se pliega: la que suena se queda
+    // quieta en el ancla todo ese rato, y lo demás se mueve a su alrededor.
+    LaunchedEffect(romanize) {
+        if (!placed || dragged || System.currentTimeMillis() - userAt < USER_HOLD_MS) return@LaunchedEffect
+        val end = System.nanoTime() + (ROM_MS + 80) * 1_000_000L
+        while (System.nanoTime() < end) withFrameNanos {
+            val i = active.coerceAtLeast(0)
+            scroll.dispatchRawDelta(tops.getOrElse(i) { 0f }.coerceIn(0f, scroll.maxValue.toFloat()) - scroll.value)
         }
     }
     // Al abrirse, ya en su sitio.
@@ -308,7 +319,7 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
             ) {
                 when (row) {
                     is Row.Gap -> GapDots(row, dist == 0, clock)
-                    is Row.Sung -> SungLine(row.line, dist, i - max(firstActive, 0), rom?.get(row.line.text), clock, toggleRom) {
+                    is Row.Sung -> SungLine(row.line, dist, i - max(firstActive, 0), fetched?.get(row.line.text), romanize, clock, toggleRom) {
                         haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                         connection.seekTo((row.line.start - LEAD_MS).coerceAtLeast(0))
                         userAt = 0
@@ -336,7 +347,7 @@ private fun Source(source: String, synced: Boolean) {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SungLine(line: Line, dist: Int, order: Int, rom: String?, clock: LyricsClock, onHold: (() -> Unit)?, onTap: () -> Unit) {
+private fun SungLine(line: Line, dist: Int, order: Int, rom: String?, showRom: Boolean, clock: LyricsClock, onHold: (() -> Unit)?, onTap: () -> Unit) {
     val c = Oto.colors
     val dur = ((line.end - line.start) * 0.3).toInt().coerceIn(420, 1000)
     val alphaTarget = when {
@@ -377,8 +388,15 @@ private fun SungLine(line: Line, dist: Int, order: Int, rom: String?, clock: Lyr
     ) {
         if (!bgOnly) Words(line.words, LYRIC, lit, clock, arrangement, c.text, letters = line.real)
         if (rom != null && !bgOnly) {
-            val romWords = remember(rom, line) { spread(rom, line.words.first().start, line.words.last().end) }
-            Words(romWords, ROM, lit, clock, arrangement, c.text.copy(alpha = 0.72f), rise = false, modifier = Modifier.padding(top = 2.dp))
+            // Se despliega (o se pliega) bajo su línea, en vez de aparecer de golpe.
+            AnimatedVisibility(
+                showRom,
+                enter = expandVertically(tween(ROM_MS, easing = EaseOutQuart), expandFrom = Alignment.Top) + fadeIn(tween(ROM_MS, delayMillis = ROM_MS / 4)),
+                exit = shrinkVertically(tween(ROM_MS, easing = EaseOutQuart), shrinkTowards = Alignment.Top) + fadeOut(tween(ROM_MS / 2)),
+            ) {
+                val romWords = remember(rom, line) { spread(rom, line.words.first().start, line.words.last().end) }
+                Words(romWords, ROM, lit, clock, arrangement, c.text.copy(alpha = 0.72f), rise = false, modifier = Modifier.padding(top = 2.dp))
+            }
         }
         if (line.bg.isNotEmpty()) {
             Words(line.bg, if (bgOnly) LYRIC.copy(fontSize = LYRIC.fontSize * 0.8f, lineHeight = LYRIC.lineHeight * 0.8f) else BG, lit, clock, arrangement,
@@ -623,5 +641,6 @@ private val EDGE = 20.dp
 private const val ANCHOR = 0.3f
 private const val SCROLL_MS = 620
 private const val USER_HOLD_MS = 2500L
+private const val ROM_MS = 420
 private const val GAP_MS = 6000L
 private const val GAP_INTRO_MS = 3500L

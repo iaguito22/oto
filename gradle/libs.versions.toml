@@ -1,4 +1,5 @@
 [versions]
+reorderable = "3.1.0"
 # AGP, Kotlin y compileSdk iguales que InnerTubeX y Metrolist: así se compila con lo mismo que ellos prueban.
 androidGradlePlugin = "9.4.1"
 kotlin = "2.4.20"
@@ -18,6 +19,7 @@ junit = "4.13.2"
 innertubex = "v0.10.0"
 
 [libraries]
+reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 compose-ui = { module = "androidx.compose.ui:ui" }
 compose-foundation = { module = "androidx.compose.foundation:foundation" }

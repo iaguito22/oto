@@ -74,7 +74,7 @@ object Suggest {
     }
 
     private const val SEEDS = 3
-    private const val COUNT = 10
+    private const val COUNT = 5
 }
 
 /** Al final de una lista tuya: parecidas, con un + para meterlas; «Otras» trae otra tanda. */

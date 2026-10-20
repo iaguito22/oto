@@ -5,6 +5,7 @@ import androidx.datastore.core.DataMigration
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -46,6 +47,7 @@ private val CLOUD = stringPreferencesKey("cloud")
 private val QUALITY = stringPreferencesKey("audio_quality")
 private val DATA_SAVER = booleanPreferencesKey("data_saver")
 private val LOOP = booleanPreferencesKey("loop")
+private val CROSSFADE = intPreferencesKey("crossfade")
 private val ROMANIZE = booleanPreferencesKey("romanize")
 private val DOWNLOAD_LISTS = stringSetPreferencesKey("download_lists")
 private val DOWNLOAD_SONGS = stringPreferencesKey("download_songs")
@@ -55,6 +57,11 @@ fun pinKey(list: LocalPlaylist) = list.folder?.let { "d:$it" } ?: list.id
 
 /** El id con el que «Me gusta» se abre y suena como si fuera una lista tuya más. */
 const val LIKED_ID = "liked"
+
+/** Lo que viene puesto: un fundido corto, que se note sin comerse los finales. */
+const val DEFAULT_CROSSFADE = 6
+/** Lo que se puede elegir en Ajustes. */
+val CROSSFADE_CHOICES = listOf(0, 3, 6, 10)
 
 /** Una canción oída o guardada. Lo justo para enseñarla y volver a ponerla. */
 data class Heard(val id: String, val title: String, val artist: String, val artwork: String?, val artistId: String? = null)
@@ -111,6 +118,13 @@ class Prefs(private val context: Context) {
     }
 
     /** Una lista que acaba vuelve a empezar; si no, siguen canciones parecidas (como la reproducción automática). */
+    /** Segundos de fundido entre canciones (0: sin fundido). Ver [io.github.iaguito22.oto.playback.Crossfade]. */
+    val crossfade: Flow<Int> = context.store.data.map { it[CROSSFADE] ?: DEFAULT_CROSSFADE }.distinctUntilChanged()
+
+    suspend fun setCrossfade(seconds: Int) {
+        context.store.edit { it[CROSSFADE] = seconds }
+    }
+
     val loop: Flow<Boolean> = context.store.data.map { it[LOOP] ?: false }.distinctUntilChanged()
 
     suspend fun setLoop(on: Boolean) {

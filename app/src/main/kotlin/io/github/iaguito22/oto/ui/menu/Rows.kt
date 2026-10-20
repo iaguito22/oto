@@ -26,7 +26,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.random.Random
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,13 +106,47 @@ fun SongRow(
         }
         if (current) {
             Spacer(Modifier.width(Space.sm))
-            Icon(painterResource(io.github.iaguito22.oto.R.drawable.ic_graphic_eq), null, Modifier.size(18.dp), tint = c.accent)
+            NowBars(LocalPlaying.current, c.accent)
         }
         if (trailing != null) {
             Spacer(Modifier.width(Space.xs))
             trailing()
         }
     }
+}
+
+/** Si lo que suena está sonando (y no en pausa): las barras de la que suena se mueven solo entonces. */
+val LocalPlaying = compositionLocalOf { false }
+
+/**
+ * Las barras de «esta es la que suena»: botan mientras suena, cada una a su ritmo, y en pausa se quedan bajas y
+ * quietas. Se mueven en el dibujo, sin recomponer la fila.
+ */
+@Composable
+fun NowBars(playing: Boolean, color: Color, modifier: Modifier = Modifier) {
+    val bars = remember { List(3) { Animatable(0.3f) } }
+    LaunchedEffect(playing) {
+        bars.forEachIndexed { i, bar ->
+            launch {
+                if (!playing) { bar.animateTo(0.3f, tween(260, easing = Motion.Standard)); return@launch }
+                delay(i * 70L)
+                while (true) {
+                    // Entre un 25 % y el alto entero, cada vez distinto, como un vúmetro.
+                    bar.animateTo(0.25f + Random.nextFloat() * 0.75f, tween(170 + Random.nextInt(170), easing = Motion.Standard))
+                }
+            }
+        }
+    }
+    Box(
+        modifier.size(16.dp).drawBehind {
+            val w = 3.dp.toPx()
+            val gap = (size.width - 3 * w) / 2
+            bars.forEachIndexed { i, bar ->
+                val h = size.height * bar.value
+                drawRoundRect(color, Offset(i * (w + gap), size.height - h), Size(w, h), CornerRadius(w / 2))
+            }
+        },
+    )
 }
 
 /** Carátula con el hueco ya pintado mientras carga, para que nada salte. */

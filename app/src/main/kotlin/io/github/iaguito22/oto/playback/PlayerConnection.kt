@@ -212,6 +212,20 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         if (it.mediaItemCount == 0) play(song) else it.addMediaItem(it.currentMediaItemIndex + 1, song.toMediaItem())
     }
 
+    /** Mueve una de la cola a otro sitio ([from] y [to]: posiciones en la lista del reproductor, como [QueueEntry.index]). */
+    fun move(from: Int, to: Int) = withController { if (from != to) it.moveMediaItem(from, to) }
+
+    /** Quita una de la cola, también de la lista que se rebaraja al tocar el aleatorio (si no, volvería). */
+    fun remove(index: Int) = withController {
+        if (index == it.currentMediaItemIndex) return@withController
+        val id = it.getMediaItemAt(index).mediaId
+        original?.indexOfFirst { m -> m.mediaId == id }?.takeIf { at -> at >= 0 }?.let { at ->
+            original = original!!.filterIndexed { i, _ -> i != at }
+            ages = ages.filterIndexed { i, _ -> i != at }
+        }
+        it.removeMediaItem(index)
+    }
+
     fun toggle() = withController { if (it.isPlaying) it.pause() else it.play() }
     fun next() = withController { it.seekToNextMediaItem() }
     /** Siempre a la anterior (la gota la enseña antes de soltar); sin anterior, al principio de esta. */

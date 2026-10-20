@@ -108,13 +108,18 @@ class PlaybackService : MediaSessionService() {
     // Lo que dura cada una, para saber qué parte se oyó al pasar a otra.
     private val durations = HashMap<String, Long>()
 
+    private lateinit var crossfade: Crossfade
+    @Volatile private var fadeMs = 0L
+    // El volumen es el de la normalización de cada canción ([gain]) por lo que lleva subido en un fundido ([fadeIn]).
+    private var gain = 1f
+    private var fadeIn = 1f
+
     override fun onCreate() {
         super.onCreate()
         InnerTubeXPlayer.initialize(this)
+        val sources = DefaultMediaSourceFactory(dataSourceFactory()).setLoadErrorHandlingPolicy(PatientErrorPolicy(::isConnectionLost))
         player = ExoPlayer.Builder(this, renderersFactory())
-            .setMediaSourceFactory(
-                DefaultMediaSourceFactory(dataSourceFactory()).setLoadErrorHandlingPolicy(PatientErrorPolicy(::isConnectionLost)),
-            )
+            .setMediaSourceFactory(sources)
             .setLoadControl(WholeSongLoadControl({ mode }, { playingIndex }))
             .setBandwidthMeter(bandwidth)
             .setAudioAttributes(
@@ -127,6 +132,8 @@ class PlaybackService : MediaSessionService() {
         // Sin la precarga de ExoPlayer: la siguiente ya la baja entera [WholeSongLoadControl] en cuanto esta termina de
         // bajar, y la precarga añadía 30 s de la de después, que casi nunca se oyen.
         player.addListener(listener)
+        crossfade = Crossfade(this, player, sources, scope, { fadeMs }, { gain }, onFadeIn = { fadeIn = it; applyVolume() })
+        crossfade.start()
 
         session = MediaSession.Builder(this, player)
             .setSessionActivity(
@@ -145,6 +152,7 @@ class PlaybackService : MediaSessionService() {
         }
 
         scope.launch { prefs.quality.collect { mode = it } }
+        scope.launch { prefs.crossfade.collect { fadeMs = it * 1000L } }
 
         // El corazón de la notificación sigue a Prefs: lo cambie quien lo cambie, aquí se ve.
         scope.launch { prefs.likedIds.collect { liked = it; showLike() } }
@@ -165,6 +173,7 @@ class PlaybackService : MediaSessionService() {
     override fun onDestroy() {
         connectivity.unregisterNetworkCallback(networkCallback)
         scope.cancel()
+        crossfade.release()
         session.release()
         player.release()
         super.onDestroy()
@@ -301,7 +310,12 @@ class PlaybackService : MediaSessionService() {
     /** YouTube normaliza bajando las canciones que suenan por encima de su referencia, nunca subiendo. */
     private fun applyLoudness() {
         val db = player.currentMediaItem?.mediaId?.let(loudness::get)
-        player.volume = if (db == null || db <= 0) 1f else 10f.pow(-db.toFloat() / 20f)
+        gain = if (db == null || db <= 0) 1f else 10f.pow(-db.toFloat() / 20f)
+        applyVolume()
+    }
+
+    private fun applyVolume() {
+        player.volume = gain * fadeIn
     }
 
     // --- Errores ---

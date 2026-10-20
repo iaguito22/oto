@@ -48,6 +48,16 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfigs.findByName("release")?.let { signingConfig = it }
         }
+        // La que usa él a diario: la release (R8, sin depurar) en el paquete y con la firma de la debug, donde están sus
+        // datos. La debug corre en parte interpretada: abrir el Menú o la letra iba a tirones. Una debug instalada
+        // encima (para `run-as`) conserva los datos, y esta encima de esa también.
+        create("phone") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".debug"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+            isProfileable = true
+        }
         // La release tal cual (R8 incluido) firmada con la clave de debug: para medir rendimiento en el móvil.
         create("bench") {
             initWith(getByName("release"))
@@ -89,6 +99,7 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.animation)
     implementation(libs.compose.material3)
+    implementation(libs.reorderable)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.activity.compose)

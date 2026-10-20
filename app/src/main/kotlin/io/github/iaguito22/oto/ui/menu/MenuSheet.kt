@@ -103,6 +103,7 @@ import io.github.iaguito22.oto.BuildConfig
 import io.github.iaguito22.oto.Heard
 import androidx.media3.exoplayer.offline.Download
 import io.github.iaguito22.oto.LIKED_ID
+import io.github.iaguito22.oto.CROSSFADE_CHOICES
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.QualityMode
 import io.github.iaguito22.oto.Storage
@@ -145,6 +146,8 @@ const val FOLDER_PREFIX = "folder:"
 fun MenuSheet(
     connection: PlayerConnection,
     currentId: String?,
+    /** Abierto: cerrado sigue montado (ver [io.github.iaguito22.oto.ui.isla.SheetHost]), pero sin atender a atrás. */
+    open: Boolean,
     onClose: () -> Unit,
     onTutorial: () -> Unit,
     vm: MenuViewModel = viewModel(),
@@ -185,9 +188,6 @@ fun MenuSheet(
     val downloadSongs by prefs.downloadSongs.collectAsStateWithLifecycle(initialValue = emptyList())
     val downloadStates by app.downloads.states.collectAsStateWithLifecycle()
     val saver by prefs.dataSaver.collectAsStateWithLifecycle(initialValue = false)
-    // Quitar la descarga de una lista pide un segundo toque.
-    var unDownloading by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(unDownloading) { if (unDownloading != null) { delay(3000); unDownloading = null } }
     val context = LocalContext.current
     val waitsForWifi = { saver && context.getSystemService(android.net.ConnectivityManager::class.java).isActiveNetworkMetered }
 
@@ -199,7 +199,7 @@ fun MenuSheet(
         s.query.isNotBlank() -> View.Search
         else -> View.Tabs
     }
-    BackHandler(view != View.Tabs) {
+    BackHandler(open && view != View.Tabs) {
         when (view) {
             View.Account -> accounting = false
             View.Import -> importing = false
@@ -210,8 +210,18 @@ fun MenuSheet(
         }
     }
     // Después del de arriba: con algo flotando, atrás lo cierra primero.
-    BackHandler(held != null || naming != null || listMenu != null || saving != null || moving != null || folderMenu != null || creating || filling != null) {
+    BackHandler(open && (held != null || naming != null || listMenu != null || saving != null || moving != null || folderMenu != null || creating || filling != null)) {
         held = null; naming = null; listMenu = null; saving = null; moving = null; folderMenu = null; creating = false; filling = null
+    }
+
+    // Al cerrarse, vuelve a como se abre siempre: «Tu música», sin páginas, ajustes ni nada flotando.
+    LaunchedEffect(open) {
+        if (open) return@LaunchedEffect
+        held = null; naming = null; listMenu = null; saving = null; moving = null; folderMenu = null; creating = false; filling = null
+        notice = null; settings = false; importing = false; accounting = false
+        focus.clearFocus()
+        vm.closeAll()
+        pager.scrollToPage(0)
     }
 
     val play: (SongItem) -> Unit = { focus.clearFocus(); connection.play(it); onClose() }
@@ -294,19 +304,6 @@ fun MenuSheet(
                             onPlay = { list, i, newest -> connection.playLocal(list, i, newest); onClose() },
                             onHold = { song -> hold(song, p.id) }, onMenu = { listMenu = it },
                             downloaded = p.id in downloadLists.orEmpty(), downloadStates = downloadStates,
-                            onDownload = { list ->
-                                if (list.id !in downloadLists.orEmpty()) {
-                                    scope.launch { prefs.setDownloadList(list.id, true) }
-                                    notice = "Descargando «${list.name}»" + if (waitsForWifi()) " cuando haya wifi" else ""
-                                } else if (unDownloading == list.id) {
-                                    unDownloading = null
-                                    scope.launch { prefs.setDownloadList(list.id, false) }
-                                    notice = "«${list.name}» ya no está descargada"
-                                } else {
-                                    unDownloading = list.id
-                                    notice = "Toca otra vez para quitar la descarga"
-                                }
-                            },
                             play = play, onHoldOther = { hold(it, null) },
                             onAdd = { list, h -> scope.launch { if (list.id == LIKED_ID) prefs.setLiked(h, true) else prefs.addToPlaylist(list.id, h) } },
                         )
@@ -393,6 +390,13 @@ fun MenuSheet(
             ListActions(
                 list,
                 pinned = list.id in pinned,
+                downloaded = list.id in downloadLists.orEmpty(),
+                onDownload = {
+                    listMenu = null
+                    val on = list.id !in downloadLists.orEmpty()
+                    scope.launch { prefs.setDownloadList(list.id, on) }
+                    notice = if (on) "Descargando «${list.name}»" + (if (waitsForWifi()) " cuando haya wifi" else "") else "«${list.name}» ya no está descargada"
+                },
                 onPin = { listMenu = null; scope.launch { prefs.togglePin(list.id) } },
                 onRename = { listMenu = null; naming = Naming(rename = list) },
                 onMove = { listMenu = null; moving = list },
@@ -677,14 +681,22 @@ fun LoopButton() {
 
 /** La cabecera de una página: atrás, la carátula, el nombre, una línea de datos y los botones. */
 @Composable
-private fun PageHeader(onBack: () -> Unit, art: @Composable () -> Unit, title: String, sub: String?, onMenu: (() -> Unit)? = null, actions: @Composable () -> Unit) {
+private fun PageHeader(
+    onBack: () -> Unit,
+    art: @Composable () -> Unit,
+    title: String,
+    sub: String?,
+    onMenu: (() -> Unit)? = null,
+    menuIcon: Int = R.drawable.ic_more_horiz,
+    actions: @Composable () -> Unit,
+) {
     val c = Oto.colors
     Column(Modifier.fillMaxWidth().padding(bottom = Space.md)) {
         // Las opciones (···) arriba, frente a atrás: junto a los botones no caben.
         Row(Modifier.fillMaxWidth()) {
             RoundIcon(R.drawable.ic_arrow_back, onClick = onBack)
             Spacer(Modifier.weight(1f))
-            if (onMenu != null) RoundIcon(R.drawable.ic_more_horiz, onClick = onMenu)
+            if (onMenu != null) RoundIcon(menuIcon, onClick = onMenu)
         }
         Row(Modifier.padding(horizontal = Space.sm), verticalAlignment = Alignment.CenterVertically) {
             art()
@@ -716,7 +728,8 @@ private fun DetailView(
                 is PlaylistItem -> listOfNotNull(i.author?.name, i.songCountText).joinToString(" · ")
                 else -> ""
             }
-            PageHeader(onBack, { Art(d.item.thumbnail, 112.dp, Radius.md) }, d.item.title, sub) {
+            val context = LocalContext.current
+            PageHeader(onBack, { Art(d.item.thumbnail, 112.dp, Radius.md) }, d.item.title, sub, onMenu = { shareItem(context, d.item) }, menuIcon = R.drawable.ic_share) {
                 if (!songs.isNullOrEmpty()) {
                     Pill("Reproducir", { onPlay(songs, null) }, icon = R.drawable.ic_play_arrow)
                     ShuffleButton()
@@ -752,7 +765,12 @@ private fun ArtistView(
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = Space.lg)) {
         item(key = "head") {
             Column(Modifier.fillMaxWidth().padding(horizontal = Space.sm)) {
-                RoundIcon(R.drawable.ic_arrow_back, onClick = onBack)
+                val context = LocalContext.current
+                Row(Modifier.fillMaxWidth()) {
+                    RoundIcon(R.drawable.ic_arrow_back, onClick = onBack)
+                    Spacer(Modifier.weight(1f))
+                    RoundIcon(R.drawable.ic_share) { shareItem(context, d.item) }
+                }
                 Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                     Art(d.item.thumbnail, 148.dp, 148.dp)
                     Spacer(Modifier.height(Space.md))
@@ -797,7 +815,6 @@ private fun LocalView(
     onMenu: (LocalPlaylist) -> Unit,
     downloaded: Boolean,
     downloadStates: Map<String, Int>,
-    onDownload: (LocalPlaylist) -> Unit,
     play: (SongItem) -> Unit,
     onHoldOther: (SongItem) -> Unit,
     onAdd: (LocalPlaylist, Heard) -> Unit,
@@ -825,12 +842,10 @@ private fun LocalView(
                 got == list.songs.size -> " · descargada"
                 else -> " · descargando ($got de ${list.songs.size})"
             }
-            // Me gusta no se renombra ni se borra.
-            PageHeader(onBack, { if (likes) LikedArt(112.dp) else Mosaic(list.songs, 112.dp) }, list.name, sub, onMenu = if (likes) null else { { onMenu(list) } }) {
+            PageHeader(onBack, { if (likes) LikedArt(112.dp) else Mosaic(list.songs, 112.dp) }, list.name, sub, onMenu = { onMenu(list) }) {
                 if (list.songs.isNotEmpty()) {
                     Pill("Reproducir", { onPlay(shown, null, newest) }, icon = R.drawable.ic_play_arrow)
                     ShuffleButton()
-                    RoundAction(if (downloaded) R.drawable.ic_download_done else R.drawable.ic_download, "Descargar", downloaded) { onDownload(list) }
                 }
             }
         }
@@ -900,6 +915,7 @@ private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () ->
             )
             SettingRow(R.drawable.ic_playlist_add, "Importar de Spotify", importSummary(state), onImport)
             AudioSettings(app.prefs)
+            CrossfadeRow(app.prefs)
             SpaceRow(app)
             SettingRow(R.drawable.ic_swipe_up, "Ver los gestos otra vez", "El tutorial del principio", onTutorial)
         }
@@ -988,6 +1004,57 @@ private fun AudioSettings(prefs: Prefs) {
         }
         Spacer(Modifier.width(Space.md))
         Check(on)
+    }
+}
+
+/** Cuántos segundos se funden una canción y la siguiente (ver [io.github.iaguito22.oto.playback.Crossfade]). */
+@Composable
+private fun CrossfadeRow(prefs: Prefs) {
+    val c = Oto.colors
+    val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    val secs by prefs.crossfade.collectAsStateWithLifecycle(initialValue = null)
+    val now = secs ?: return
+    val at by animateFloatAsState(CROSSFADE_CHOICES.indexOf(now).coerceAtLeast(0).toFloat(), spring(dampingRatio = 0.8f, stiffness = 500f), label = "crossfade")
+    Row(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.md)) {
+        SettingIcon(R.drawable.ic_transition_fade)
+        Spacer(Modifier.width(Space.md))
+        Column(Modifier.weight(1f)) {
+            Text("Fundido entre canciones", style = OtoType.rowTitle, color = c.text)
+            Text(
+                if (now == 0) "Cada canción acaba del todo antes de que empiece la siguiente."
+                else "Los últimos $now segundos de una canción suenan a la vez que el principio de la siguiente. Solo cuando acaba sola, no al pasarla tú.",
+                style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.padding(top = 2.dp, bottom = Space.sm),
+            )
+            // Como el de la calidad: el indicador se desliza a lo elegido.
+            Row(
+                Modifier
+                    .height(36.dp)
+                    .clip(CircleShape)
+                    .background(c.field)
+                    .drawBehind {
+                        val w = size.width / CROSSFADE_CHOICES.size
+                        drawRoundRect(c.accent.copy(alpha = 0.22f), Offset(w * at + 3.dp.toPx(), 3.dp.toPx()), Size(w - 6.dp.toPx(), size.height - 6.dp.toPx()), CornerRadius(size.height))
+                    },
+            ) {
+                CROSSFADE_CHOICES.forEach { n ->
+                    Box(
+                        Modifier
+                            .width(60.dp)
+                            .height(36.dp)
+                            .clip(CircleShape)
+                            .clickable(remember { MutableInteractionSource() }, null) {
+                                if (n != now) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                scope.launch { prefs.setCrossfade(n) }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        val fg by animateColorAsState(if (n == now) c.text else c.textMuted, tween(Motion.EFFECTS), label = "crossfadeFg")
+                        Text(if (n == 0) "No" else "$n s", style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = fg)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1323,6 +1390,7 @@ private fun ColumnScope.SongActions(
     here: String?,
 ) {
     val c = Oto.colors
+    val context = LocalContext.current
     val song = h.song
     Row(Modifier.padding(Space.sm), verticalAlignment = Alignment.CenterVertically) {
         Art(song.thumbnail, 48.dp, Radius.sm)
@@ -1337,16 +1405,36 @@ private fun ColumnScope.SongActions(
     ActionRow(R.drawable.ic_add, "Guardar en…", onClick = onSave)
     if (download != null) ActionRow(if (download) R.drawable.ic_download else R.drawable.ic_close, if (download) "Descargar" else "Quitar la descarga", onClick = onDownload)
     song.artists.firstOrNull { it.id != null && it.id != here }?.let { a -> ActionRow(R.drawable.ic_person, "Ir a ${a.name}") { onArtist(a.id!!, a.name) } }
+    ActionRow(R.drawable.ic_share, "Compartir") { shareSong(context, song.id, song.title, song.artists.joinToString { it.name }) }
     if (onRemove != null) ActionRow(R.drawable.ic_delete, if (h.list == LIKED_ID) "Quitar de Me gusta" else "Quitar de esta lista", onClick = onRemove)
 }
 
 @Composable
-private fun ColumnScope.ListActions(list: LocalPlaylist, pinned: Boolean, onPin: () -> Unit, onRename: () -> Unit, onMove: () -> Unit, onDelete: () -> Unit) {
+private fun ColumnScope.ListActions(
+    list: LocalPlaylist,
+    pinned: Boolean,
+    downloaded: Boolean,
+    onDownload: () -> Unit,
+    onPin: () -> Unit,
+    onRename: () -> Unit,
+    onMove: () -> Unit,
+    onDelete: () -> Unit,
+) {
     val c = Oto.colors
-    // Borrar pide un segundo toque: no hay deshacer.
+    // Borrar y quitar la descarga piden un segundo toque: no hay deshacer, y volver a bajarla gasta datos.
     var confirm by remember(list) { mutableStateOf(false) }
     LaunchedEffect(confirm) { if (confirm) { delay(3000); confirm = false } }
+    var unDownload by remember(list) { mutableStateOf(false) }
+    LaunchedEffect(unDownload) { if (unDownload) { delay(3000); unDownload = false } }
     Text(list.name, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(Space.md))
+    if (list.songs.isNotEmpty() || downloaded) {
+        if (!downloaded) ActionRow(R.drawable.ic_download, "Descargar", onClick = onDownload)
+        else ActionRow(R.drawable.ic_download_done, if (unDownload) "Toca otra vez para quitarla" else "Quitar la descarga", tint = if (unDownload) Color(0xFFFF8A80) else c.text) {
+            if (unDownload) onDownload() else unDownload = true
+        }
+    }
+    // Me gusta no se fija, ni se renombra, ni se mueve ni se borra.
+    if (list.id == LIKED_ID) return
     // Dentro de una carpeta, lo que se fija es la carpeta.
     if (list.folder == null) ActionRow(R.drawable.ic_keep, if (pinned) "Quitar de arriba" else "Fijar arriba", onClick = onPin)
     ActionRow(R.drawable.ic_edit, "Cambiar el nombre", onClick = onRename)

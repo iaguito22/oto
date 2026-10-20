@@ -109,6 +109,11 @@ fun ColumnScope.SaveTo(what: Saving, onDone: () -> Unit) {
             Text(what.title, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(what.sub, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        // Una canción (lo que suena, al mantener la carátula): también se puede mandar a alguien.
+        songs.singleOrNull()?.let { h ->
+            val context = LocalContext.current
+            RoundIcon(R.drawable.ic_share) { shareSong(context, h.id, h.title, h.artist) }
+        }
     }
     Text(
         "GUARDAR EN", style = OtoType.label, color = c.textMuted,

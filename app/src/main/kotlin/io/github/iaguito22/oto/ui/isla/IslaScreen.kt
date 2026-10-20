@@ -23,6 +23,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.iaguito22.oto.playback.Source
 import io.github.iaguito22.oto.playback.StreamInfo
 import io.github.iaguito22.oto.ui.menu.DOWNLOADS_ID
+import io.github.iaguito22.oto.ui.menu.LocalPlaying
 import io.github.iaguito22.oto.ui.menu.FOLDER_PREFIX
 import io.github.iaguito22.oto.ui.menu.MenuViewModel
 import kotlin.math.tanh
@@ -63,6 +64,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -148,7 +150,9 @@ fun IslaScreen() {
     val connection = app.player
     val np by connection.state.collectAsStateWithLifecycle()
     val accent = rememberAccent(np.artwork)
-    OtoTheme(accent) { Isla(np, connection, app) }
+    OtoTheme(accent) {
+        CompositionLocalProvider(LocalPlaying provides np.playing) { Isla(np, connection, app) }
+    }
 }
 
 @Composable
@@ -297,13 +301,16 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
             saving, onDismiss = { saving = null },
             cardModifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime)),
         ) { song -> SaveTo(Saving(song), onDone = { saving = null }) }
-        SheetHost(sheet, { dropCenter }, dropRadius) { kind ->
+        SheetHost(sheet, { dropCenter }, dropRadius, warm = SheetKind.Menu) { kind ->
             when (kind) {
-                SheetKind.Menu -> MenuSheet(connection, np.id, onClose = sheet::close, onTutorial = {
-                    sheet.close()
-                    lyrics = false
-                    scope.launch { delay(350); tutorial.start() }
-                }, vm = menu)
+                // Cerrado sigue montado (ver [SheetHost]): sus barras de «sonando» no se mueven donde no se ven.
+                SheetKind.Menu -> CompositionLocalProvider(LocalPlaying provides (np.playing && sheet.kind == SheetKind.Menu)) {
+                    MenuSheet(connection, np.id, open = sheet.kind == SheetKind.Menu, onClose = sheet::close, onTutorial = {
+                        sheet.close()
+                        lyrics = false
+                        scope.launch { delay(350); tutorial.start() }
+                    }, vm = menu)
+                }
                 SheetKind.Queue -> QueueSheet(connection, onClose = sheet::close)
             }
         }

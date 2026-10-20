@@ -131,7 +131,7 @@ internal fun DownloadsView(
         if (listIds != null && singles != null && lists.isEmpty() && songs.isEmpty()) item(key = "empty") {
             Empty(
                 R.drawable.ic_download_for_offline, "Nada descargado",
-                "En una lista tuya, toca la flecha de arriba: se descarga entera, con lo que añadas después. Una canción suelta: mantenla pulsada y elige «Descargar».",
+                "En una lista tuya, toca ··· y elige «Descargar»: se descarga entera, con lo que añadas después. Una canción suelta: mantenla pulsada y elige «Descargar».",
                 Modifier.height(320.dp),
             )
         }

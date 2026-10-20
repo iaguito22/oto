@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -135,21 +136,27 @@ fun rememberSheetState(): SheetState {
 /**
  * [dropCenter] es el centro de la gota en coordenadas de la pantalla y [dropRadius] su radio: de ahí sale la hoja.
  * El contenido se mide ya al tamaño final y se recorta con la forma que crece, así no se rehace en cada fotograma.
+ *
+ * El de [warm] (el Menú) está siempre montado, también con la hoja cerrada: fuera de la pantalla, sin verse ni
+ * tocarse. Montarlo al abrir costaba dos o tres fotogramas (componer, medir y pintar «Tu música» entera), justo
+ * cuando la gota empieza a crecer; así, abrir solo es la animación.
  */
 @Composable
 fun SheetHost(
     state: SheetState,
     dropCenter: () -> Offset,
     dropRadius: Float,
+    warm: SheetKind? = null,
     content: @Composable (SheetKind) -> Unit,
 ) {
-    val kind = state.kind ?: return
+    val kind = state.kind
+    if (kind == null && warm == null) return
     val c = Oto.colors
     val density = LocalDensity.current
     val dropBody = lerp(Color(0xFF151515), c.accent, 0.26f)
     val bright = lerp(Color.White, c.accent, 0.82f)
 
-    PredictiveBackHandler(enabled = true) { progress ->
+    PredictiveBackHandler(enabled = kind != null) { progress ->
         state.toDrop()
         try {
             progress.collect { e -> state.morph.snapTo(1f - 0.16f * (1f - (1f - e.progress) * (1f - e.progress))) }
@@ -168,7 +175,7 @@ fun SheetHost(
         val margin = with(density) { 10.dp.toPx() }
         val target = Rect(
             left = margin,
-            top = if (kind == SheetKind.Queue) h * 0.34f else top + with(density) { 6.dp.toPx() },
+            top = if ((kind ?: warm) == SheetKind.Queue) h * 0.34f else top + with(density) { 6.dp.toPx() },
             right = w - margin,
             bottom = h - bottom - margin,
         )
@@ -177,7 +184,7 @@ fun SheetHost(
         val flingAt = with(density) { 1200.dp.toPx() }
 
         // Fuera de la hoja: oscurece lo de detrás y un toque cierra.
-        Box(
+        if (kind != null) Box(
             Modifier
                 .fillMaxSize()
                 .graphicsLayer { alpha = state.morph.value.coerceIn(0f, 1f) }
@@ -217,7 +224,8 @@ fun SheetHost(
             Modifier
                 .layout { measurable, _ ->
                     val p = measurable.measure(Constraints.fixed(target.width.roundToInt(), target.height.roundToInt()))
-                    layout(constraints.maxWidth, constraints.maxHeight) { p.place(target.left.roundToInt(), target.top.roundToInt()) }
+                    // Cerrada, debajo de la pantalla: ahí no se ve ni recibe toques, pero sigue montada.
+                    layout(constraints.maxWidth, constraints.maxHeight) { p.place(target.left.roundToInt(), if (state.kind == null) constraints.maxHeight * 2 else target.top.roundToInt()) }
                 }
                 .graphicsLayer {
                     translationY = state.drag * state.morph.value.coerceIn(0f, 1f)
@@ -225,6 +233,7 @@ fun SheetHost(
                     clip = true
                 }
                 .drawBehind {
+                    if (state.kind == null) return@drawBehind
                     val m = state.morph.value
                     val r = shape.localRect(m)
                     val from = if (state.origin == null) dropBody else Color(0xFF161616).copy(alpha = 0.78f)
@@ -256,8 +265,20 @@ fun SheetHost(
                     onDragStopped = { v -> state.release(v, closeAt, flingAt) },
                 ),
         ) {
-            Box(Modifier.fillMaxSize().graphicsLayer { alpha = ((state.morph.value - 0.55f) / 0.45f).coerceIn(0f, 1f) }) {
-                content(kind)
+            // La de [warm] siempre; otra, solo mientras está abierta. La que no toca, fuera de la pantalla.
+            val shown = listOfNotNull(warm, kind?.takeIf { it != warm })
+            for (k in shown) key(k) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .layout { measurable, constraints ->
+                            val p = measurable.measure(constraints)
+                            layout(p.width, p.height) { p.place(0, if (state.kind == k) 0 else constraints.maxHeight * 3) }
+                        }
+                        .graphicsLayer { alpha = if (state.kind == k) ((state.morph.value - 0.55f) / 0.45f).coerceIn(0f, 1f) else 0f },
+                ) {
+                    content(k)
+                }
             }
         }
     }
