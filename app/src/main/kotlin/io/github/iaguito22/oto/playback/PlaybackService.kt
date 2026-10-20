@@ -278,7 +278,10 @@ class PlaybackService : MediaSessionService() {
             val meta = mediaItem.mediaMetadata
             scope.launch(Dispatchers.IO) {
                 (application as OtoApp).prefs.addHeard(
-                    Heard(id, meta.title?.toString().orEmpty(), meta.artist?.toString().orEmpty(), meta.artworkUri?.toString()),
+                    Heard(
+                        id, meta.title?.toString().orEmpty(), meta.artist?.toString().orEmpty(), meta.artworkUri?.toString(),
+                        meta.extras?.getStringArray(ARTIST_IDS)?.firstOrNull()?.ifEmpty { null },
+                    ),
                 )
             }
         }

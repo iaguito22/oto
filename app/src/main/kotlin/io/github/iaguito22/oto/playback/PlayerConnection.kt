@@ -8,8 +8,11 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.metrolist.innertube.models.AlbumItem
+import com.metrolist.innertube.models.ArtistItem
 import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
+import io.github.iaguito22.oto.LocalPlaylist
+import io.github.iaguito22.oto.toSong
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,6 +22,9 @@ data class NowPlaying(
     val id: String? = null,
     val title: String = "",
     val artist: String = "",
+    /** Los artistas uno a uno (nombre e id de YouTube Music, si lo hay). */
+    val artists: List<Pair<String, String?>> = emptyList(),
+    val album: String? = null,
     val artwork: String? = null,
     val playing: Boolean = false,
     val buffering: Boolean = false,
@@ -28,8 +34,11 @@ data class NowPlaying(
     val error: String? = null,
 )
 
-/** De dónde sale lo que suena: un álbum, una lista o la radio de una canción. [item] es lo que se abre al pedirlo. */
-data class Source(val kind: String, val title: String, val item: YTItem? = null)
+/**
+ * De dónde sale lo que suena: un álbum, una lista o la radio de una canción. [item] (de YouTube) o [local] (el id de
+ * una lista tuya) es lo que se abre al pedirlo.
+ */
+data class Source(val kind: String, val title: String, val item: YTItem? = null, val local: String? = null)
 
 /** Una canción de la cola; [index] es su posición en la lista del reproductor. */
 data class QueueEntry(val index: Int, val id: String, val title: String, val artist: String, val artwork: String?)
@@ -89,8 +98,17 @@ class PlayerConnection(private val context: Context) {
 
     /** Suena la lista entera (un álbum, una playlist) desde [start], sin radio. */
     fun playAll(songs: List<SongItem>, start: Int, from: YTItem? = null) = withController {
-        _source.value = from?.let { f -> Source(if (f is AlbumItem) "Álbum" else "Lista", f.title, f) }
+        _source.value = from?.let { f -> Source(when (f) { is AlbumItem -> "Álbum"; is ArtistItem -> "Artista"; else -> "Lista" }, f.title, f) }
         it.setMediaItems(songs.map(SongItem::toMediaItem), start, 0)
+        it.prepare()
+        it.play()
+    }
+
+    /** Una lista tuya desde [start]. */
+    fun playLocal(list: LocalPlaylist, start: Int) = withController {
+        if (list.songs.isEmpty()) return@withController
+        _source.value = Source("Tu lista", list.name, local = list.id)
+        it.setMediaItems(list.songs.map { h -> h.toSong().toMediaItem() }, start, 0)
         it.prepare()
         it.play()
     }
@@ -123,11 +141,19 @@ class PlayerConnection(private val context: Context) {
 
     private fun publish(p: Player) {
         val item = p.currentMediaItem
-        val meta = p.mediaMetadata
+        // Los del propio MediaItem, no p.mediaMetadata: al pasar de canción, el controlador da un instante el id
+        // nuevo con los metadatos de la anterior (y la carátula vieja entraba como si fuera la nueva).
+        val meta = item?.mediaMetadata ?: p.mediaMetadata
         _state.value = NowPlaying(
             id = item?.mediaId,
             title = meta.title?.toString().orEmpty(),
             artist = meta.artist?.toString().orEmpty(),
+            artists = meta.extras?.let { e ->
+                val names = e.getStringArray(ARTIST_NAMES) ?: return@let null
+                val ids = e.getStringArray(ARTIST_IDS)
+                names.mapIndexed { i, n -> n to ids?.getOrNull(i)?.ifEmpty { null } }
+            } ?: listOf(meta.artist?.toString().orEmpty() to null),
+            album = meta.albumTitle?.toString(),
             artwork = meta.artworkUri?.toString(),
             playing = p.isPlaying,
             buffering = p.playbackState == Player.STATE_BUFFERING,

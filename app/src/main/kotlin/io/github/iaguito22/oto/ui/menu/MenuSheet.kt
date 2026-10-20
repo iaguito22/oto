@@ -5,12 +5,16 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -20,6 +24,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,6 +36,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -38,6 +44,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -55,17 +62,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -77,17 +95,12 @@ import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
 import io.github.iaguito22.oto.BuildConfig
 import io.github.iaguito22.oto.Heard
+import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.OtoApp
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.graphicsLayer
-import com.metrolist.innertube.models.Artist
 import io.github.iaguito22.oto.R
 import io.github.iaguito22.oto.playback.PlayerConnection
+import io.github.iaguito22.oto.toHeard
+import io.github.iaguito22.oto.toSong
 import io.github.iaguito22.oto.ui.theme.Motion
 import io.github.iaguito22.oto.ui.theme.Oto
 import io.github.iaguito22.oto.ui.theme.OtoType
@@ -96,11 +109,21 @@ import io.github.iaguito22.oto.ui.theme.Space
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class View { Tabs, Search, Detail, Settings }
+private enum class View { Tabs, Search, Page, Settings }
+
+/** Qué se ve: la vista y, en las páginas, cuántas hay apiladas (cada una entra como un paso más hondo). */
+private data class Nav(val view: View, val depth: Int)
+
+/** Una canción mantenida pulsada. [list]: la lista tuya en la que está, si es una. */
+private data class Held(val song: SongItem, val list: String? = null)
+
+/** Pedir un nombre: para una lista nueva (con [song] dentro, si la hay) o para renombrar [rename]. */
+private data class Naming(val rename: LocalPlaylist? = null, val song: SongItem? = null)
 
 /**
- * Lo que sale al subir la gota: pestañas Explorar | Tu música, el buscador abajo (al alcance del pulgar) y los
- * ajustes en la esquina. Buscar, un álbum o los ajustes se abren dentro de la misma hoja y atrás vuelve.
+ * Lo que sale al subir la gota: pestañas Tu música | Explorar, el buscador abajo (al alcance del pulgar) y los
+ * ajustes en la esquina. Buscar, un álbum, un artista, una lista o los ajustes se abren dentro de la misma hoja
+ * y atrás vuelve. Mantener una canción abre lo que se puede hacer con ella.
  */
 @Composable
 fun MenuSheet(
@@ -111,100 +134,180 @@ fun MenuSheet(
     vm: MenuViewModel = viewModel(),
 ) {
     val s by vm.state.collectAsStateWithLifecycle()
-    val history by (LocalContext.current.applicationContext as OtoApp).prefs.history.collectAsStateWithLifecycle(initialValue = null)
+    val prefs = (LocalContext.current.applicationContext as OtoApp).prefs
+    val history by prefs.history.collectAsStateWithLifecycle(initialValue = null)
+    val playlists by prefs.playlists.collectAsStateWithLifecycle(initialValue = null)
     val pager = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
     val focus = LocalFocusManager.current
     val haptics = LocalHapticFeedback.current
     var settings by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(notice) { if (notice != null) { delay(1600); notice = null } }
+    LaunchedEffect(notice) { if (notice != null) { delay(1800); notice = null } }
+    var held by remember { mutableStateOf<Held?>(null) }
+    var naming by remember { mutableStateOf<Naming?>(null) }
+    var listMenu by remember { mutableStateOf<LocalPlaylist?>(null) }
 
     val view = when {
         settings -> View.Settings
-        s.detail != null -> View.Detail
+        s.pages.isNotEmpty() -> View.Page
         s.query.isNotBlank() -> View.Search
         else -> View.Tabs
     }
     BackHandler(view != View.Tabs) {
         when (view) {
             View.Settings -> settings = false
-            View.Detail -> vm.closeDetail()
+            View.Page -> vm.closeDetail()
             View.Search -> { vm.onQuery(""); focus.clearFocus() }
             View.Tabs -> Unit
         }
     }
+    // Después del de arriba: con algo flotando, atrás lo cierra primero.
+    BackHandler(held != null || naming != null || listMenu != null) { held = null; naming = null; listMenu = null }
 
     val play: (SongItem) -> Unit = { focus.clearFocus(); connection.play(it); onClose() }
-    val queueNext: (SongItem) -> Unit = {
+    val hold: (SongItem, String?) -> Unit = { song, list ->
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-        connection.playNext(it)
-        notice = "«${it.title}» va después de esta"
+        focus.clearFocus()
+        held = Held(song, list)
     }
 
-    Column(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxWidth().padding(top = 10.dp), contentAlignment = Alignment.Center) {
-            Box(Modifier.size(36.dp, 4.dp).clip(CircleShape).background(Oto.colors.textFaint))
-        }
-        Row(Modifier.fillMaxWidth().padding(start = Space.lg, end = Space.sm, top = Space.md, bottom = Space.sm), verticalAlignment = Alignment.CenterVertically) {
-            Tabs(pager, onSelect = { i ->
-                settings = false; vm.closeDetail(); vm.onQuery(""); focus.clearFocus()
-                scope.launch { pager.animateScrollToPage(i, animationSpec = Motion.spatial()) }
-            })
-            Spacer(Modifier.weight(1f))
-            RoundIcon(R.drawable.ic_settings, selected = settings) { settings = !settings; focus.clearFocus() }
-        }
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxWidth().padding(top = 10.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(36.dp, 4.dp).clip(CircleShape).background(Oto.colors.textFaint))
+            }
+            Row(Modifier.fillMaxWidth().padding(start = Space.lg, end = Space.sm, top = Space.md, bottom = Space.sm), verticalAlignment = Alignment.CenterVertically) {
+                Tabs(pager, onSelect = { i ->
+                    settings = false; vm.closeAll(); vm.onQuery(""); focus.clearFocus()
+                    scope.launch { pager.animateScrollToPage(i, animationSpec = Motion.spatial()) }
+                })
+                Spacer(Modifier.weight(1f))
+                RoundIcon(R.drawable.ic_settings, selected = settings) { settings = !settings; focus.clearFocus() }
+            }
 
-        AnimatedContent(
-            targetState = view,
-            transitionSpec = {
-                val deeper = targetState.ordinal > initialState.ordinal
-                val d = if (deeper) 1 else -1
-                (fadeIn(tween(Motion.EFFECTS, delayMillis = 40)) + slideInHorizontally(spring(dampingRatio = 0.85f, stiffness = 420f)) { d * it / 10 }) togetherWith
-                    (fadeOut(tween(Motion.EFFECTS_FAST)) + slideOutHorizontally(tween(Motion.EFFECTS_FAST)) { -d * it / 14 })
-            },
-            // Lo de arriba se desvanece antes de llegar al buscador, en vez de cortarse contra él.
-            modifier = Modifier
-                .weight(1f)
-                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                .drawWithContent {
-                    drawContent()
-                    val fade = 28.dp.toPx()
-                    drawRect(
-                        Brush.verticalGradient(listOf(Color.Black, Color.Transparent), startY = size.height - fade, endY = size.height),
-                        Offset(0f, size.height - fade), Size(size.width, fade), blendMode = BlendMode.DstOut,
-                    )
+            AnimatedContent(
+                targetState = Nav(view, s.pages.size),
+                transitionSpec = {
+                    val deeper = targetState.view.ordinal > initialState.view.ordinal ||
+                        (targetState.view == initialState.view && targetState.depth > initialState.depth)
+                    val d = if (deeper) 1 else -1
+                    (fadeIn(tween(Motion.EFFECTS, delayMillis = 40)) + slideInHorizontally(spring(dampingRatio = 0.85f, stiffness = 420f)) { d * it / 10 }) togetherWith
+                        (fadeOut(tween(Motion.EFFECTS_FAST)) + slideOutHorizontally(tween(Motion.EFFECTS_FAST)) { -d * it / 14 })
                 },
-            label = "menuView",
-        ) { v ->
-            when (v) {
-                View.Tabs -> HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
-                    if (page == 0) YourMusic(history, currentId, play, queueNext)
-                    else Explore(s, currentId, play, queueNext, onOpen = { item ->
-                        if (item is ArtistItem) vm.onQuery(item.title) else vm.open(item)
-                    }, onRetry = vm::loadHome)
+                // Lo de arriba se desvanece antes de llegar al buscador, en vez de cortarse contra él.
+                modifier = Modifier
+                    .weight(1f)
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .drawWithContent {
+                        drawContent()
+                        val fade = 28.dp.toPx()
+                        drawRect(
+                            Brush.verticalGradient(listOf(Color.Black, Color.Transparent), startY = size.height - fade, endY = size.height),
+                            Offset(0f, size.height - fade), Size(size.width, fade), blendMode = BlendMode.DstOut,
+                        )
+                    },
+                label = "menuView",
+            ) { nav ->
+                when (nav.view) {
+                    View.Tabs -> HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
+                        if (page == 0) YourMusic(history, playlists, currentId, play, onHold = { hold(it, null) }, onOpen = vm::openLocal, onNew = { naming = Naming() })
+                        else Explore(s, currentId, play, onHold = { hold(it, null) }, onOpen = vm::open, onRetry = vm::loadHome)
+                    }
+                    View.Search -> Results(s, currentId, play, onHold = { hold(it, null) })
+                    View.Page -> when (val p = s.pages.getOrNull(nav.depth - 1)) {
+                        is Page.Remote -> if (p.item is ArtistItem) ArtistView(
+                            p, currentId, onBack = vm::closeDetail,
+                            onPlay = { songs, i -> connection.playAll(songs, i, p.item); onClose() },
+                            play = play, onOpen = vm::open, onHold = { hold(it, null) },
+                        ) else DetailView(
+                            p, currentId, onBack = vm::closeDetail,
+                            onPlay = { songs, i -> connection.playAll(songs, i, p.item); onClose() }, onHold = { hold(it, null) },
+                        )
+                        is Page.Local -> LocalView(
+                            playlists?.firstOrNull { it.id == p.id }, currentId, onBack = vm::closeDetail,
+                            onPlay = { list, i -> connection.playLocal(list, i); onClose() },
+                            onHold = { song -> hold(song, p.id) }, onMenu = { listMenu = it },
+                        )
+                        null -> Unit
+                    }
+                    View.Settings -> Settings(onBack = { settings = false }, onTutorial = onTutorial)
                 }
-                View.Search -> Results(s, currentId, play, queueNext)
-                View.Detail -> s.detail?.let { d -> DetailView(d, currentId, onBack = vm::closeDetail, onPlay = { songs, i -> connection.playAll(songs, i, d.item); onClose() }, onLong = queueNext) }
-                View.Settings -> Settings(onBack = { settings = false }, onTutorial = onTutorial)
             }
+
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                androidx.compose.animation.AnimatedVisibility(
+                    notice != null,
+                    enter = fadeIn(tween(Motion.EFFECTS)) + scaleIn(spring(dampingRatio = 0.7f, stiffness = 600f), initialScale = 0.9f),
+                    exit = fadeOut(tween(Motion.EFFECTS_FAST)) + scaleOut(tween(Motion.EFFECTS_FAST), targetScale = 0.95f),
+                ) {
+                    var last by remember { mutableStateOf("") }
+                    notice?.let { last = it }
+                    Text(
+                        last, style = OtoType.rowSub, color = Oto.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(bottom = Space.sm).widthIn(max = 320.dp).clip(CircleShape).background(Oto.colors.field).padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
+                }
+            }
+            SearchField(s.query, s.searching, vm::onQuery, onSearch = { focus.clearFocus() })
         }
 
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            androidx.compose.animation.AnimatedVisibility(
-                notice != null,
-                enter = fadeIn(tween(Motion.EFFECTS)) + scaleIn(spring(dampingRatio = 0.7f, stiffness = 600f), initialScale = 0.9f),
-                exit = fadeOut(tween(Motion.EFFECTS_FAST)) + scaleOut(tween(Motion.EFFECTS_FAST), targetScale = 0.95f),
-            ) {
-                var last by remember { mutableStateOf("") }
-                notice?.let { last = it }
-                Text(
-                    last, style = OtoType.rowSub, color = Oto.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(bottom = Space.sm).widthIn(max = 320.dp).clip(CircleShape).background(Oto.colors.field).padding(horizontal = 14.dp, vertical = 8.dp),
-                )
-            }
+        // ---- Lo que flota encima: acciones de una canción, opciones de una lista y pedir un nombre ----
+
+        Floating(held, onDismiss = { held = null }) { h ->
+            SongActions(
+                h, playlists.orEmpty(),
+                onNext = {
+                    connection.playNext(h.song)
+                    notice = "«${h.song.title}» va después de esta"
+                    held = null
+                },
+                onAdd = { list ->
+                    held = null
+                    scope.launch {
+                        notice = if (prefs.addToPlaylist(list.id, h.song.toHeard())) "Añadida a «${list.name}»" else "Ya estaba en «${list.name}»"
+                    }
+                },
+                onNew = { held = null; naming = Naming(song = h.song) },
+                onArtist = { id, name -> held = null; vm.openArtist(id, name) },
+                onRemove = h.list?.let { list ->
+                    {
+                        held = null
+                        scope.launch { prefs.removeFromPlaylist(list, h.song.id) }
+                    }
+                },
+                // En la página de un artista no se ofrece ir a él.
+                here = ((s.pages.lastOrNull() as? Page.Remote)?.item as? ArtistItem)?.id,
+            )
         }
-        SearchField(s.query, s.searching, vm::onQuery, onSearch = { focus.clearFocus() })
+        Floating(listMenu, onDismiss = { listMenu = null }) { list ->
+            ListActions(
+                list,
+                onRename = { listMenu = null; naming = Naming(rename = list) },
+                onDelete = {
+                    listMenu = null
+                    vm.closeDetail()
+                    scope.launch { prefs.deletePlaylist(list.id) }
+                    notice = "«${list.name}» borrada"
+                },
+            )
+        }
+        Floating(naming, onDismiss = { naming = null }) { n ->
+            NameField(n, onDone = { name ->
+                naming = null
+                scope.launch {
+                    when {
+                        n.rename != null -> prefs.renamePlaylist(n.rename.id, name)
+                        n.song != null -> {
+                            prefs.createPlaylist(name, n.song.toHeard())
+                            notice = "«${n.song.title}» está en «$name»"
+                        }
+                        // Una lista vacía se abre: así se ve qué hacer para llenarla.
+                        else -> vm.openLocal(prefs.createPlaylist(name))
+                    }
+                }
+            })
+        }
     }
 }
 
@@ -291,29 +394,33 @@ private fun SearchField(query: String, searching: Boolean, onQuery: (String) -> 
 }
 
 @Composable
-private fun Explore(
-    s: MenuState,
-    currentId: String?,
-    play: (SongItem) -> Unit,
-    queueNext: (SongItem) -> Unit,
-    onOpen: (YTItem) -> Unit,
-    onRetry: () -> Unit,
-) {
-    val shelves = s.shelves
-    when {
-        shelves == null && s.homeError != null -> Empty(R.drawable.ic_library_music, "No se pudo cargar", s.homeError) { Pill("Reintentar", onRetry, filled = false) }
-        shelves == null -> Skeleton(modifier = Modifier.padding(Space.md))
-        else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = Space.lg)) {
-            // YouTube repite a veces títulos y canciones: las claves llevan la posición para no chocar.
-            itemsIndexed(shelves, key = { i, it -> "$i:${it.title}" }) { _, shelf ->
-                Text(shelf.title, style = OtoType.title.copy(fontSize = OtoType.title.fontSize * 0.86f), color = Oto.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = Space.lg, end = Space.lg, top = Space.lg, bottom = Space.sm))
-                LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-                    itemsIndexed(shelf.items, key = { i, it -> "$i:${it.id}" }) { _, item ->
-                        Card(item, current = item.id == currentId, onClick = { if (item is SongItem) play(item) else onOpen(item) }, onLongClick = (item as? SongItem)?.let { { queueNext(it) } })
-                    }
-                }
+private fun SectionTitle(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text, style = OtoType.title.copy(fontSize = OtoType.title.fontSize * 0.86f), color = Oto.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        modifier = modifier.padding(start = Space.lg, end = Space.lg, top = Space.lg, bottom = Space.sm),
+    )
+}
+
+/** Un carrusel (de Explorar o de un artista). YouTube repite a veces canciones: las claves llevan la posición. */
+private fun LazyListScope.shelves(list: List<Shelf>, currentId: String?, play: (SongItem) -> Unit, onHold: (SongItem) -> Unit, onOpen: (YTItem) -> Unit) {
+    itemsIndexed(list, key = { i, it -> "$i:${it.title}" }) { _, shelf ->
+        SectionTitle(shelf.title)
+        LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            itemsIndexed(shelf.items, key = { i, it -> "$i:${it.id}" }) { _, item ->
+                Card(item, current = item.id == currentId, onClick = { if (item is SongItem) play(item) else onOpen(item) }, onLongClick = (item as? SongItem)?.let { { onHold(it) } })
             }
+        }
+    }
+}
+
+@Composable
+private fun Explore(s: MenuState, currentId: String?, play: (SongItem) -> Unit, onHold: (SongItem) -> Unit, onOpen: (YTItem) -> Unit, onRetry: () -> Unit) {
+    val list = s.shelves
+    when {
+        list == null && s.homeError != null -> Empty(R.drawable.ic_library_music, "No se pudo cargar", s.homeError) { Pill("Reintentar", onRetry, filled = false) }
+        list == null -> Skeleton(modifier = Modifier.padding(Space.md))
+        else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = Space.lg)) {
+            shelves(list, currentId, play, onHold, onOpen)
         }
     }
 }
@@ -327,7 +434,7 @@ private fun Card(item: YTItem, current: Boolean, onClick: () -> Unit, onLongClic
     Column(
         Modifier
             .width(size + Space.md)
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(Radius.lg))
+            .clip(RoundedCornerShape(Radius.lg))
             .combinedClickable(remember { MutableInteractionSource() }, ripple(color = c.text), onLongClick = onLongClick, onClick = onClick)
             .padding(Space.xs + 2.dp),
         horizontalAlignment = if (round) Alignment.CenterHorizontally else Alignment.Start,
@@ -348,7 +455,7 @@ private fun Card(item: YTItem, current: Boolean, onClick: () -> Unit, onLongClic
 }
 
 @Composable
-private fun Results(s: MenuState, currentId: String?, play: (SongItem) -> Unit, queueNext: (SongItem) -> Unit) {
+private fun Results(s: MenuState, currentId: String?, play: (SongItem) -> Unit, onHold: (SongItem) -> Unit) {
     when {
         s.searchError != null && s.results.isEmpty() -> Empty(R.drawable.ic_search, "La búsqueda falló", s.searchError)
         s.results.isEmpty() && s.searching -> Skeleton(modifier = Modifier.padding(Space.md))
@@ -356,49 +463,137 @@ private fun Results(s: MenuState, currentId: String?, play: (SongItem) -> Unit, 
         s.results.isEmpty() -> Empty(R.drawable.ic_search, "Sin resultados", "Prueba con otro nombre o con el artista.")
         else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = Space.sm, vertical = Space.xs)) {
             items(s.results, key = { it.id }) { song ->
-                SongRow(song.title, song.subtitle(), song.thumbnail, song.id == currentId, onClick = { play(song) }, onLongClick = { queueNext(song) },
+                SongRow(song.title, song.subtitle(), song.thumbnail, song.id == currentId, onClick = { play(song) }, onLongClick = { onHold(song) },
                     modifier = Modifier.animateItem())
             }
         }
     }
 }
 
+/** La cabecera de una página: atrás, la carátula, el nombre, una línea de datos y los botones. */
 @Composable
-private fun DetailView(d: Detail, currentId: String?, onBack: () -> Unit, onPlay: (List<SongItem>, Int) -> Unit, onLong: (SongItem) -> Unit) {
+private fun PageHeader(onBack: () -> Unit, art: @Composable () -> Unit, title: String, sub: String?, actions: @Composable () -> Unit) {
     val c = Oto.colors
+    Column(Modifier.fillMaxWidth().padding(bottom = Space.md)) {
+        RoundIcon(R.drawable.ic_arrow_back, onClick = onBack)
+        Row(Modifier.padding(horizontal = Space.sm), verticalAlignment = Alignment.CenterVertically) {
+            art()
+            Spacer(Modifier.width(Space.lg))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = OtoType.title, color = c.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                if (!sub.isNullOrEmpty()) Text(sub, style = OtoType.rowSub, color = c.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(Space.md))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) { actions() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailView(d: Page.Remote, currentId: String?, onBack: () -> Unit, onPlay: (List<SongItem>, Int) -> Unit, onHold: (SongItem) -> Unit) {
     val songs = d.songs
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
         item(key = "head") {
-            Column(Modifier.fillMaxWidth().padding(bottom = Space.md)) {
-                RoundIcon(R.drawable.ic_arrow_back, onClick = onBack)
-                Row(Modifier.padding(horizontal = Space.sm), verticalAlignment = Alignment.CenterVertically) {
-                    Art(d.item.thumbnail, 112.dp, Radius.md)
-                    Spacer(Modifier.width(Space.lg))
-                    Column(Modifier.weight(1f)) {
-                        Text(d.item.title, style = OtoType.title, color = c.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                        val sub = when (val i = d.item) {
-                            is AlbumItem -> listOfNotNull(i.artists?.joinToString { it.name }, i.year?.toString()).joinToString(" · ")
-                            is PlaylistItem -> listOfNotNull(i.author?.name, i.songCountText).joinToString(" · ")
-                            else -> ""
-                        }
-                        if (sub.isNotEmpty()) Text(sub, style = OtoType.rowSub, color = c.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        if (!songs.isNullOrEmpty()) {
-                            Spacer(Modifier.height(Space.md))
-                            Pill("Reproducir", { onPlay(songs, 0) }, icon = R.drawable.ic_play_arrow)
-                        }
-                    }
-                }
+            val sub = when (val i = d.item) {
+                is AlbumItem -> listOfNotNull(i.artists?.joinToString { it.name }, i.year?.toString()).joinToString(" · ")
+                is PlaylistItem -> listOfNotNull(i.author?.name, i.songCountText).joinToString(" · ")
+                else -> ""
+            }
+            PageHeader(onBack, { Art(d.item.thumbnail, 112.dp, Radius.md) }, d.item.title, sub) {
+                if (!songs.isNullOrEmpty()) Pill("Reproducir", { onPlay(songs, 0) }, icon = R.drawable.ic_play_arrow)
             }
         }
         when {
             d.error != null -> item(key = "error") { Empty(R.drawable.ic_library_music, "No se pudo abrir", d.error, Modifier.height(240.dp)) }
             songs == null -> item(key = "loading") { Skeleton(rows = 8) }
             else -> itemsIndexed(songs, key = { i, it -> "${it.id}-$i" }) { i, song ->
-                SongRow(song.title, song.subtitle(), song.thumbnail, song.id == currentId, onClick = { onPlay(songs, i) }, onLongClick = { onLong(song) })
+                SongRow(song.title, song.subtitle(), song.thumbnail, song.id == currentId, onClick = { onPlay(songs, i) }, onLongClick = { onHold(song) })
             }
         }
     }
 }
+
+/** La página de un artista: su foto, lo más oído y sus carruseles (álbumes, sencillos, parecidos…). */
+@Composable
+private fun ArtistView(
+    d: Page.Remote,
+    currentId: String?,
+    onBack: () -> Unit,
+    onPlay: (List<SongItem>, Int) -> Unit,
+    play: (SongItem) -> Unit,
+    onOpen: (YTItem) -> Unit,
+    onHold: (SongItem) -> Unit,
+) {
+    val c = Oto.colors
+    val songs = d.songs
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = Space.lg)) {
+        item(key = "head") {
+            Column(Modifier.fillMaxWidth().padding(horizontal = Space.sm)) {
+                RoundIcon(R.drawable.ic_arrow_back, onClick = onBack)
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Art(d.item.thumbnail, 148.dp, 148.dp)
+                    Spacer(Modifier.height(Space.md))
+                    Text(d.item.title, style = OtoType.display.copy(fontSize = OtoType.display.fontSize * 0.86f), color = c.text, maxLines = 2,
+                        overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = Space.lg))
+                    if (!d.sub.isNullOrEmpty()) Text(d.sub, style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
+                    if (!songs.isNullOrEmpty()) {
+                        Spacer(Modifier.height(Space.md))
+                        Pill("Reproducir", { onPlay(songs, 0) }, icon = R.drawable.ic_play_arrow)
+                    }
+                }
+            }
+        }
+        when {
+            d.error != null -> item(key = "error") { Empty(R.drawable.ic_person, "No se pudo abrir", d.error, Modifier.height(240.dp)) }
+            songs == null -> item(key = "loading") { Skeleton(rows = 6, modifier = Modifier.padding(top = Space.lg)) }
+            else -> {
+                if (songs.isNotEmpty()) {
+                    item(key = "topTitle") { SectionTitle("Lo más oído") }
+                    itemsIndexed(songs.take(TOP_SONGS), key = { i, it -> "top-${it.id}-$i" }) { i, song ->
+                        SongRow(song.title, song.subtitle(), song.thumbnail, song.id == currentId, onClick = { onPlay(songs, i) }, onLongClick = { onHold(song) },
+                            modifier = Modifier.padding(horizontal = Space.sm))
+                    }
+                }
+                shelves(d.shelves, currentId, play, onHold, onOpen)
+            }
+        }
+    }
+}
+
+/** Una lista tuya. */
+@Composable
+private fun LocalView(
+    list: LocalPlaylist?,
+    currentId: String?,
+    onBack: () -> Unit,
+    onPlay: (LocalPlaylist, Int) -> Unit,
+    onHold: (SongItem) -> Unit,
+    onMenu: (LocalPlaylist) -> Unit,
+) {
+    if (list == null) {
+        Column(Modifier.fillMaxSize().padding(horizontal = Space.sm)) {
+            RoundIcon(R.drawable.ic_arrow_back, onClick = onBack)
+            Empty(R.drawable.ic_queue_music, "Esta lista ya no existe", "")
+        }
+        return
+    }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
+        item(key = "head") {
+            PageHeader(onBack, { Mosaic(list.songs, 112.dp) }, list.name, count(list.songs.size)) {
+                if (list.songs.isNotEmpty()) Pill("Reproducir", { onPlay(list, 0) }, icon = R.drawable.ic_play_arrow)
+                RoundIcon(R.drawable.ic_more_horiz) { onMenu(list) }
+            }
+        }
+        if (list.songs.isEmpty()) item(key = "empty") {
+            Empty(R.drawable.ic_add, "Está vacía", "Mantén pulsada cualquier canción, aquí o en Explorar, y elige «Añadir a una lista».", Modifier.height(260.dp))
+        }
+        itemsIndexed(list.songs, key = { _, it -> it.id }) { i, h ->
+            SongRow(h.title, h.artist, h.artwork, h.id == currentId, onClick = { onPlay(list, i) }, onLongClick = { onHold(h.toSong()) }, modifier = Modifier.animateItem())
+        }
+    }
+}
+
+private fun count(n: Int) = if (n == 1) "1 canción" else "$n canciones"
 
 @Composable
 private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit) {
@@ -412,7 +607,7 @@ private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit) {
         SettingRow("Ver los gestos otra vez", "El tutorial del principio", onTutorial)
         Spacer(Modifier.weight(1f))
         Text(
-            "Oto ${BuildConfig.VERSION_NAME} · GPL-3.0\nCon InnerTubeX y partes de Metrolist.\ngithub.com/iaguito22/oto",
+            "Oto ${BuildConfig.VERSION_NAME} · GPL-3.0\nCon InnerTubeX y partes de Metrolist.\nLetras de lyricsplus, NetEase, LRCLIB y YouTube Music.\ngithub.com/iaguito22/oto",
             style = OtoType.rowSub, color = c.textFaint, modifier = Modifier.padding(Space.md),
         )
     }
@@ -424,7 +619,7 @@ private fun SettingRow(title: String, body: String, onClick: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(Radius.lg))
+            .clip(RoundedCornerShape(Radius.lg))
             .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
             .padding(horizontal = Space.md, vertical = Space.md),
     ) {
@@ -433,21 +628,281 @@ private fun SettingRow(title: String, body: String, onClick: () -> Unit) {
     }
 }
 
-/** Lo último que ha sonado; los me gusta y las listas propias llegan con la biblioteca (fase 6). */
+/** Tus listas arriba (con crear una nueva a mano) y lo último que ha sonado debajo. */
 @Composable
-private fun YourMusic(history: List<Heard>?, currentId: String?, play: (SongItem) -> Unit, queueNext: (SongItem) -> Unit) {
-    when {
-        history == null -> Unit
-        history.isEmpty() -> Empty(R.drawable.ic_favorite, "Aún no hay nada", "Lo que vayas oyendo aparecerá aquí. Busca algo abajo o mira en Explorar.")
-        else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
-            item(key = "title") {
-                Text("Oído hace poco", style = OtoType.title.copy(fontSize = OtoType.title.fontSize * 0.86f), color = Oto.colors.text,
-                    modifier = Modifier.padding(start = Space.sm, end = Space.sm, top = Space.sm, bottom = Space.sm))
+private fun YourMusic(
+    history: List<Heard>?,
+    playlists: List<LocalPlaylist>?,
+    currentId: String?,
+    play: (SongItem) -> Unit,
+    onHold: (SongItem) -> Unit,
+    onOpen: (String) -> Unit,
+    onNew: () -> Unit,
+) {
+    if (history == null || playlists == null) return
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = Space.lg)) {
+        item(key = "listsTitle") {
+            Row(Modifier.fillMaxWidth().padding(end = Space.md), verticalAlignment = Alignment.CenterVertically) {
+                SectionTitle("Tus listas", Modifier.weight(1f))
+                // El título lleva más aire arriba que abajo: el botón baja lo mismo para quedar a su altura.
+                if (playlists.isNotEmpty()) Box(Modifier.padding(top = Space.sm)) { Pill("Nueva", onNew, filled = false, icon = R.drawable.ic_add) }
             }
-            items(history, key = { it.id }) { h ->
-                val song = SongItem(id = h.id, title = h.title, artists = listOf(Artist(h.artist, null)), thumbnail = h.artwork.orEmpty())
-                SongRow(h.title, h.artist, h.artwork, h.id == currentId, onClick = { play(song) }, onLongClick = { queueNext(song) }, modifier = Modifier.animateItem())
+        }
+        item(key = "lists") {
+            LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                items(playlists, key = { it.id }) { p -> PlaylistCard(p, onClick = { onOpen(p.id) }, modifier = Modifier.animateItem()) }
+                if (playlists.isEmpty()) item(key = "new") { NewListCard(onNew) }
             }
+        }
+        item(key = "historyTitle") { SectionTitle("Oído hace poco") }
+        if (history.isEmpty()) item(key = "historyEmpty") {
+            Text("Lo que vayas oyendo aparecerá aquí.", style = OtoType.rowSub, color = Oto.colors.textMuted, modifier = Modifier.padding(horizontal = Space.lg))
+        }
+        items(history, key = { it.id }) { h ->
+            SongRow(h.title, h.artist, h.artwork, h.id == currentId, onClick = { play(h.toSong()) }, onLongClick = { onHold(h.toSong()) },
+                modifier = Modifier.padding(horizontal = Space.sm).animateItem())
         }
     }
 }
+
+@Composable
+private fun PlaylistCard(p: LocalPlaylist, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val c = Oto.colors
+    Column(
+        modifier
+            .width(140.dp + Space.md)
+            .clip(RoundedCornerShape(Radius.lg))
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
+            .padding(Space.xs + 2.dp),
+    ) {
+        Mosaic(p.songs, 140.dp)
+        Spacer(Modifier.height(Space.sm))
+        Text(p.name, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(count(p.songs.size), style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
+    }
+}
+
+/** Aún sin listas: un hueco con el borde suave que invita a crear la primera. */
+@Composable
+private fun NewListCard(onClick: () -> Unit) {
+    val c = Oto.colors
+    Column(
+        Modifier
+            .width(140.dp + Space.md)
+            .clip(RoundedCornerShape(Radius.lg))
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
+            .padding(Space.xs + 2.dp),
+    ) {
+        Box(
+            Modifier.size(140.dp).clip(RoundedCornerShape(Radius.md)).background(c.field),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.size(52.dp).clip(CircleShape).background(c.accent.copy(alpha = 0.22f)), contentAlignment = Alignment.Center) {
+                Icon(painterResource(R.drawable.ic_add), null, Modifier.size(28.dp), tint = c.accent)
+            }
+        }
+        Spacer(Modifier.height(Space.sm))
+        Text("Nueva lista", style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = c.text, maxLines = 1)
+        Text("Crea la primera", style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
+    }
+}
+
+/** La portada de una lista: las cuatro primeras carátulas en cuadrícula (o la primera, si hay menos). */
+@Composable
+private fun Mosaic(songs: List<Heard>, size: Dp) {
+    val c = Oto.colors
+    val arts = songs.mapNotNull { it.artwork }.distinct()
+    Box(Modifier.size(size).clip(RoundedCornerShape(Radius.md)).background(c.field), contentAlignment = Alignment.Center) {
+        when {
+            arts.size >= 4 -> Column {
+                Row { Art(arts[0], size / 2, 0.dp); Art(arts[1], size / 2, 0.dp) }
+                Row { Art(arts[2], size / 2, 0.dp); Art(arts[3], size / 2, 0.dp) }
+            }
+            arts.isNotEmpty() -> Art(arts[0], size, 0.dp)
+            else -> Icon(painterResource(R.drawable.ic_queue_music), null, Modifier.size(size * 0.3f), tint = c.textFaint)
+        }
+    }
+}
+
+// ---- Lo que flota ----
+
+/**
+ * Una tarjeta que sube desde abajo sobre un velo; tocar el velo la cierra. Guarda lo último que enseñó para
+ * poder irse con ello puesto.
+ */
+@Composable
+private fun <T : Any> Floating(value: T?, onDismiss: () -> Unit, content: @Composable ColumnScope.(T) -> Unit) {
+    var last by remember { mutableStateOf(value) }
+    if (value != null) last = value
+    Box(Modifier.fillMaxSize()) {
+        AnimatedVisibility(value != null, enter = fadeIn(tween(Motion.EFFECTS)), exit = fadeOut(tween(Motion.EFFECTS))) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)).clickable(remember { MutableInteractionSource() }, null, onClick = onDismiss))
+        }
+        AnimatedVisibility(
+            value != null,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(tween(Motion.EFFECTS)) + slideInVertically(spring(dampingRatio = 0.82f, stiffness = 420f)) { it / 3 } +
+                scaleIn(spring(dampingRatio = 0.82f, stiffness = 420f), initialScale = 0.94f),
+            exit = fadeOut(tween(Motion.EFFECTS_FAST)) + slideOutVertically(tween(Motion.SPATIAL_FAST, easing = Motion.EmphasizedAccelerate)) { it / 4 } +
+                scaleOut(tween(Motion.SPATIAL_FAST), targetScale = 0.96f),
+        ) {
+            Column(
+                Modifier
+                    .padding(Space.md)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(Radius.xl))
+                    .background(Color(0xFF1C1C1C))
+                    .background(Oto.colors.accent.copy(alpha = 0.06f))
+                    .clickable(remember { MutableInteractionSource() }, null) {}
+                    .padding(Space.sm),
+            ) { last?.let { content(it) } }
+        }
+    }
+}
+
+@Composable
+private fun ActionRow(icon: Int, text: String, tint: Color = Oto.colors.text, trailing: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+    val c = Oto.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.lg))
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
+            .padding(horizontal = Space.md, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(painterResource(icon), null, Modifier.size(22.dp), tint = if (tint == c.text) c.textMuted else tint)
+        Spacer(Modifier.width(Space.lg))
+        Text(text, style = OtoType.rowTitle, color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        trailing?.invoke()
+    }
+}
+
+@Composable
+private fun ColumnScope.SongActions(
+    h: Held,
+    playlists: List<LocalPlaylist>,
+    onNext: () -> Unit,
+    onAdd: (LocalPlaylist) -> Unit,
+    onNew: () -> Unit,
+    onArtist: (String, String) -> Unit,
+    onRemove: (() -> Unit)?,
+    here: String?,
+) {
+    val c = Oto.colors
+    val song = h.song
+    var adding by remember(h) { mutableStateOf(false) }
+    Row(Modifier.padding(Space.sm), verticalAlignment = Alignment.CenterVertically) {
+        Art(song.thumbnail, 48.dp, Radius.sm)
+        Spacer(Modifier.width(Space.md))
+        Column(Modifier.weight(1f)) {
+            Text(song.title, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(song.artists.joinToString { it.name }, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+    Spacer(Modifier.height(Space.xs))
+    ActionRow(R.drawable.ic_queue_music, "Reproducir a continuación", onClick = onNext)
+    ActionRow(R.drawable.ic_add, "Añadir a una lista", trailing = {
+        val turn by androidx.compose.animation.core.animateFloatAsState(if (adding) 1f else 0f, spring(dampingRatio = 0.8f, stiffness = 500f), label = "chevron")
+        Icon(painterResource(R.drawable.ic_arrow_back), null, Modifier.size(18.dp).graphicsLayer { rotationZ = 270f - 180f * turn }, tint = c.textFaint)
+    }) { adding = !adding }
+    AnimatedVisibility(
+        adding,
+        enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = 420f)) + fadeIn(tween(Motion.EFFECTS, delayMillis = 60)),
+        exit = shrinkVertically(tween(Motion.SPATIAL_FAST, easing = Motion.Standard)) + fadeOut(tween(Motion.EFFECTS_FAST)),
+    ) {
+        Column(Modifier.padding(start = Space.xl).fillMaxWidth()) {
+            playlists.filter { it.id != h.list }.forEach { p ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(Radius.lg))
+                        .clickable(remember { MutableInteractionSource() }, ripple(color = c.text)) { onAdd(p) }
+                        .padding(horizontal = Space.sm, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Mosaic(p.songs, 36.dp)
+                    Spacer(Modifier.width(Space.md))
+                    Text(p.name, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    if (p.songs.any { it.id == song.id }) Icon(painterResource(R.drawable.ic_check), null, Modifier.size(18.dp), tint = c.accent)
+                }
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(Radius.lg))
+                    .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onNew)
+                    .padding(horizontal = Space.sm, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(36.dp).clip(RoundedCornerShape(Radius.md)).background(c.accent.copy(alpha = 0.22f)), contentAlignment = Alignment.Center) {
+                    Icon(painterResource(R.drawable.ic_add), null, Modifier.size(20.dp), tint = c.accent)
+                }
+                Spacer(Modifier.width(Space.md))
+                Text("Nueva lista…", style = OtoType.rowTitle, color = c.accent)
+            }
+        }
+    }
+    song.artists.firstOrNull { it.id != null && it.id != here }?.let { a -> ActionRow(R.drawable.ic_person, "Ir a ${a.name}") { onArtist(a.id!!, a.name) } }
+    if (onRemove != null) ActionRow(R.drawable.ic_delete, "Quitar de esta lista", onClick = onRemove)
+}
+
+@Composable
+private fun ColumnScope.ListActions(list: LocalPlaylist, onRename: () -> Unit, onDelete: () -> Unit) {
+    val c = Oto.colors
+    // Borrar pide un segundo toque: no hay deshacer.
+    var confirm by remember(list) { mutableStateOf(false) }
+    LaunchedEffect(confirm) { if (confirm) { delay(3000); confirm = false } }
+    Text(list.name, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(Space.md))
+    ActionRow(R.drawable.ic_edit, "Cambiar el nombre", onClick = onRename)
+    ActionRow(R.drawable.ic_delete, if (confirm) "Toca otra vez para borrarla" else "Borrar la lista", tint = if (confirm) Color(0xFFFF8A80) else c.text) {
+        if (confirm) onDelete() else confirm = true
+    }
+}
+
+@Composable
+private fun ColumnScope.NameField(n: Naming, onDone: (String) -> Unit) {
+    val c = Oto.colors
+    var name by remember(n) { mutableStateOf(n.rename?.name.orEmpty()) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(n) { delay(120); focus.requestFocus() }
+    val ok = name.isNotBlank()
+    Text(
+        if (n.rename != null) "Cambiar el nombre" else "Nueva lista",
+        style = OtoType.title, color = c.text, modifier = Modifier.padding(start = Space.md, top = Space.md, end = Space.md),
+    )
+    if (n.song != null) Text("Con «${n.song.title}» dentro", style = OtoType.rowSub, color = c.textMuted, maxLines = 1,
+        overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = Space.md))
+    Spacer(Modifier.height(Space.md))
+    Box(
+        Modifier
+            .padding(horizontal = Space.sm)
+            .fillMaxWidth()
+            .height(50.dp)
+            .clip(CircleShape)
+            .background(c.field)
+            .padding(horizontal = 18.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        val style = OtoType.body.copy(fontSize = OtoType.body.fontSize * 1.07f)
+        if (name.isEmpty()) Text("Ponle un nombre", style = style, color = c.textFaint)
+        BasicTextField(
+            value = name,
+            onValueChange = { name = it.take(60) },
+            singleLine = true,
+            textStyle = style.copy(color = c.text),
+            cursorBrush = SolidColor(c.accent),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, capitalization = KeyboardCapitalization.Sentences),
+            keyboardActions = KeyboardActions(onDone = { if (ok) onDone(name) }),
+            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+        )
+    }
+    Spacer(Modifier.height(Space.md))
+    Row(Modifier.fillMaxWidth().padding(horizontal = Space.sm, vertical = Space.xs), horizontalArrangement = Arrangement.End) {
+        Box(Modifier.graphicsLayer { alpha = if (ok) 1f else 0.4f }) {
+            Pill(if (n.rename != null) "Guardar" else "Crear", { if (ok) onDone(name) }, icon = R.drawable.ic_check)
+        }
+    }
+}
+
+private const val TOP_SONGS = 5

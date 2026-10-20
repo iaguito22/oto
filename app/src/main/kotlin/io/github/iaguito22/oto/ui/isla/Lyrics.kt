@@ -2,28 +2,50 @@ package io.github.iaguito22.oto.ui.isla
 
 import android.util.LruCache
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -31,56 +53,71 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.metrolist.innertube.YouTube
-import com.metrolist.innertube.models.WatchEndpoint
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.util.lerp
+import io.github.iaguito22.oto.lyrics.Line
+import io.github.iaguito22.oto.lyrics.Lyrics
+import io.github.iaguito22.oto.lyrics.LyricsQuery
+import io.github.iaguito22.oto.lyrics.LyricsSource
+import io.github.iaguito22.oto.lyrics.Word
 import io.github.iaguito22.oto.playback.NowPlaying
+import io.github.iaguito22.oto.playback.PlayerConnection
 import io.github.iaguito22.oto.ui.menu.Skeleton
 import io.github.iaguito22.oto.ui.theme.Motion
 import io.github.iaguito22.oto.ui.theme.Oto
 import io.github.iaguito22.oto.ui.theme.OtoType
 import io.github.iaguito22.oto.ui.theme.Space
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sin
 
-private sealed interface Lyrics {
-    data object Loading : Lyrics
-    data object Missing : Lyrics
-    data class Plain(val lines: List<String>) : Lyrics
-}
+// Ir y volver de la letra no vuelve a pedirla. Los fallos de red no se guardan.
+private val cache = LruCache<String, Lyrics>(48)
+private val romCache = LruCache<String, Map<String, String>>(48)
 
-// Ir y volver de la letra no vuelve a pedirla.
-private val cache = LruCache<String, Lyrics>(32)
+/** La letra de una canción en concreto: así nunca se pinta la de la anterior mientras llega la nueva. */
+private data class Loaded(val id: String?, val lyrics: Lyrics?)
 
 /**
- * La letra en el sitio de la carátula, con los bordes desvanecidos. De momento la de YouTube Music, sin
- * sincronizar; la palabra a palabra (lyricsplus, Netease, LRCLIB) es la fase 5.
+ * La letra en el sitio de la carátula. Sincronizada, palabra a palabra cuando la fuente lo trae (como en el tema de
+ * Spotify): cada sílaba se rellena letra a letra y da un pequeño salto, los coros van debajo en su fila, la
+ * pronunciación debajo del japonés, chino, coreano y cirílico, y tres puntos en las pausas largas.
  */
 @Composable
-fun LyricsPanel(np: NowPlaying, side: Dp) {
-    val lyrics by produceState(np.id?.let(cache::get) ?: Lyrics.Loading, np.id) {
-        val id = np.id ?: run { value = Lyrics.Missing; return@produceState }
-        cache.get(id)?.let { value = it; return@produceState }
-        value = Lyrics.Loading
-        val text = withContext(Dispatchers.IO) {
-            runCatching { YouTube.next(WatchEndpoint(videoId = id)).getOrThrow().lyricsEndpoint?.let { YouTube.lyrics(it).getOrThrow() } }
-        }
-        // Un fallo de red no se guarda: la próxima vez se vuelve a intentar.
-        val result = text.getOrNull()
-        value = if (result.isNullOrBlank()) Lyrics.Missing else Lyrics.Plain(result.trim().lines())
-        if (text.isSuccess) cache.put(id, value)
+fun LyricsPanel(np: NowPlaying, connection: PlayerConnection, width: Dp, height: Dp) {
+    val loaded by produceState(Loaded(np.id, np.id?.let(cache::get)), np.id) {
+        val id = np.id ?: run { value = Loaded(null, Lyrics.Missing); return@produceState }
+        cache.get(id)?.let { value = Loaded(id, it); return@produceState }
+        value = Loaded(id, null)
+        val r = LyricsSource.fetch(LyricsQuery(id, np.title, np.artist, np.album, np.durationMs))
+        if (r != null) cache.put(id, r)
+        value = Loaded(id, r ?: Lyrics.Missing)
     }
+    val current = if (loaded.id == np.id) loaded else Loaded(np.id, null)
     val c = Oto.colors
     Box(
         Modifier
-            .size(side)
+            .size(width, height)
             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
             .drawWithContent {
                 drawContent()
-                val fade = 36.dp.toPx()
+                val fade = 40.dp.toPx()
                 drawRect(Brush.verticalGradient(listOf(Color.Black, Color.Transparent), endY = fade), size = Size(size.width, fade), blendMode = BlendMode.DstOut)
                 drawRect(
                     Brush.verticalGradient(listOf(Color.Transparent, Color.Black), startY = size.height - fade, endY = size.height),
@@ -89,37 +126,405 @@ fun LyricsPanel(np: NowPlaying, side: Dp) {
             },
     ) {
         AnimatedContent(
-            targetState = np.id to lyrics,
-            contentKey = { (id, l) -> id to (l is Lyrics.Plain) },
+            targetState = current,
+            contentKey = { it.id to (it.lyrics != null) },
             transitionSpec = { fadeIn(tween(Motion.EFFECTS, delayMillis = 60)) togetherWith fadeOut(tween(Motion.EFFECTS_FAST)) },
             label = "lyrics",
-        ) { (_, l) ->
-            when (l) {
-                Lyrics.Loading -> Skeleton(rows = 5, modifier = Modifier.padding(top = Space.xl))
+        ) { (id, lyrics) ->
+            when (lyrics) {
+                null -> Skeleton(rows = 5, modifier = Modifier.padding(top = Space.xl))
                 Lyrics.Missing -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        if (np.id == null) "No suena nada" else "YouTube Music no tiene\nla letra de esta canción",
+                        if (id == null) "No suena nada" else "No hay letra\npara esta canción",
                         style = OtoType.body, color = c.textMuted, textAlign = TextAlign.Center,
                     )
                 }
-                is Lyrics.Plain -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 32.dp)) {
-                    item {
-                        Row(Modifier.padding(bottom = Space.md).clip(CircleShape).background(c.field).padding(horizontal = 10.dp, vertical = 4.dp)) {
-                            Text("Sin sincronizar", style = OtoType.label, color = c.textMuted)
-                        }
-                    }
-                    items(l.lines.size) { i ->
-                        val line = l.lines[i]
-                        if (line.isBlank()) Spacer(Modifier.height(Space.lg))
-                        else Text(
-                            line,
-                            style = OtoType.lyric.copy(fontSize = OtoType.lyric.fontSize * 0.8f, lineHeight = OtoType.lyric.lineHeight * 0.8f),
-                            color = c.text, modifier = Modifier.padding(vertical = 3.dp),
-                        )
-                    }
-                }
+                is Lyrics.Plain -> PlainLyrics(lyrics)
+                is Lyrics.Synced -> SyncedLyrics(id.orEmpty(), lyrics, np.playing, connection, height)
             }
         }
     }
 }
 
+@Composable
+private fun PlainLyrics(l: Lyrics.Plain) {
+    val c = Oto.colors
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 36.dp)) {
+        Row(Modifier.padding(bottom = Space.md).clip(CircleShape).background(c.field).padding(horizontal = 10.dp, vertical = 4.dp)) {
+            Text("Sin sincronizar", style = OtoType.label, color = c.textMuted)
+        }
+        l.lines.forEach { line ->
+            if (line.isBlank()) Spacer(Modifier.height(Space.lg))
+            else Text(line, style = LYRIC.copy(fontSize = LYRIC.fontSize * 0.86f, lineHeight = LYRIC.lineHeight * 0.86f), color = c.text, modifier = Modifier.padding(vertical = 3.dp))
+        }
+        Source(l.source, synced = false)
+    }
+}
+
+/** El reloj de la letra: la posición del reproductor interpolada por fotograma, para que nada vaya a saltos. */
+@Stable
+private class LyricsClock {
+    var ms by mutableLongStateOf(0L)
+}
+
+/** Una fila de la letra: una línea cantada o una pausa larga (tres puntos). */
+private sealed interface Row {
+    val start: Long
+    val end: Long
+
+    data class Sung(val line: Line) : Row {
+        override val start get() = line.start
+        override val end get() = line.end
+    }
+
+    data class Gap(override val start: Long, override val end: Long) : Row
+}
+
+private fun rowsOf(lines: List<Line>): List<Row> = buildList {
+    val first = lines.firstOrNull() ?: return@buildList
+    if (first.start > GAP_INTRO_MS) add(Row.Gap(0, first.start))
+    lines.forEachIndexed { i, l ->
+        add(Row.Sung(l))
+        val next = lines.getOrNull(i + 1) ?: return@forEachIndexed
+        val sungEnd = max(l.words.lastOrNull()?.end ?: l.end, l.bg.lastOrNull()?.end ?: 0)
+        if (next.start - sungEnd > GAP_MS) add(Row.Gap(sungEnd + 400, next.start))
+    }
+}
+
+@Composable
+private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connection: PlayerConnection, height: Dp) {
+    val haptics = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val rows = remember(l) { rowsOf(l.lines) }
+    val rom by produceState(romCache.get(id), id, l) {
+        if (value != null || !LyricsSource.needsRomanization(l.lines)) return@produceState
+        LyricsSource.romanize(l.lines, l.language)?.let { romCache.put(id, it); value = it }
+    }
+
+    val clock = remember { LyricsClock() }
+    LaunchedEffect(id, playing) {
+        // Se ancla a la posición y avanza con el tiempo del fotograma; si el reproductor se separa mucho (un salto,
+        // un corte), se vuelve a anclar, y si se separa poco se le acerca sin que se note.
+        if (!playing) {
+            while (true) { clock.ms = connection.position() + LEAD_MS; delay(200) }
+        }
+        var anchorPos = connection.position().toDouble()
+        var anchorT = -1L
+        while (true) withFrameNanos { now ->
+            if (anchorT < 0) anchorT = now
+            val est = anchorPos + (now - anchorT) / 1e6
+            val real = connection.position().toDouble()
+            val diff = real - est
+            if (abs(diff) > 180) { anchorPos = real; anchorT = now } else anchorPos += diff * 0.08
+            clock.ms = (anchorPos + (now - anchorT) / 1e6).toLong() + LEAD_MS
+        }
+    }
+    val active by remember(rows) { derivedStateOf { val t = clock.ms; rows.indexOfLast { it.start <= t } } }
+
+    val scroll = rememberScrollState()
+    val tops = remember(rows) { FloatArray(rows.size) }
+    val dragged by scroll.interactionSource.collectIsDraggedAsState()
+    var userAt by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(dragged) { if (dragged) userAt = System.currentTimeMillis() }
+    var placed by remember(rows) { mutableStateOf(false) }
+
+    // Seguir a la línea activa: easeOutQuart de 620 ms (como en Spotify). El destino se recalcula en cada fotograma
+    // porque una pausa que se abre o se cierra mueve las líneas mientras tanto. Tras arrastrar a mano, 2,5 s de calma.
+    LaunchedEffect(active, dragged, userAt, placed) {
+        if (dragged || !placed) return@LaunchedEffect
+        val wait = userAt + USER_HOLD_MS - System.currentTimeMillis()
+        if (wait > 0) delay(wait)
+        val i = active.coerceAtLeast(0)
+        // El relleno de arriba mide lo mismo que el ancla: con la línea en tops[i], scroll = tops[i] la deja en el ancla.
+        fun target() = tops.getOrElse(i) { 0f }.coerceIn(0f, scroll.maxValue.toFloat())
+        val from = scroll.value.toFloat()
+        if (abs(target() - from) < 1f) return@LaunchedEffect
+        runCatching {
+            val p = Animatable(0f)
+            p.animateTo(1f, tween(SCROLL_MS, easing = EaseOutQuart)) { scroll.dispatchRawDelta(lerp(from, target(), value) - scroll.value) }
+        }
+    }
+    // Al abrirse, ya en su sitio.
+    LaunchedEffect(placed) {
+        if (!placed) return@LaunchedEffect
+        val i = active.coerceAtLeast(0)
+        scroll.scrollTo(tops.getOrElse(i) { 0f }.coerceIn(0f, scroll.maxValue.toFloat()).toInt())
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(scroll)
+            .padding(top = height * ANCHOR, bottom = height * (1 - ANCHOR)),
+    ) {
+        val firstActive = remember(rows) { active }
+        rows.forEachIndexed { i, row ->
+            val dist = if (active < 0) i + 1 else i - active
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .onPlaced {
+                        tops[i] = it.positionInParent().y
+                        if (i == rows.lastIndex) placed = true
+                    },
+            ) {
+                when (row) {
+                    is Row.Gap -> GapDots(row, dist == 0, clock)
+                    is Row.Sung -> SungLine(row.line, dist, i - max(firstActive, 0), rom?.get(row.line.text), clock) {
+                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                        connection.seekTo((row.line.start - LEAD_MS).coerceAtLeast(0))
+                        userAt = 0
+                    }
+                }
+            }
+        }
+        Source(l.source, synced = l.wordByWord)
+    }
+}
+
+@Composable
+private fun Source(source: String, synced: Boolean) {
+    Text(
+        "Letra de $source" + if (synced) "" else " · por líneas",
+        style = OtoType.label.copy(fontSize = 11.sp), color = Oto.colors.textFaint,
+        modifier = Modifier.padding(top = 36.dp),
+    )
+}
+
+/**
+ * Una línea. Su brillo depende de la distancia a la que suena ([dist]: 0 la actual, −1 la que acaba de terminar).
+ * El relevo entre frases dura un 30 % de la frase (420–1000 ms): la nueva se enciende en la mitad y la que se va
+ * se apaga algo más despacio, así nunca queda la letra sin frase marcada.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SungLine(line: Line, dist: Int, order: Int, rom: String?, clock: LyricsClock, onTap: () -> Unit) {
+    val c = Oto.colors
+    val dur = ((line.end - line.start) * 0.3).toInt().coerceIn(420, 1000)
+    val alphaTarget = when {
+        dist == 0 -> 1f
+        dist < 0 -> 0.34f
+        dist == 1 -> 0.62f
+        dist == 2 -> 0.42f
+        dist == 3 -> 0.3f
+        else -> 0.24f
+    }
+    val alpha by animateFloatAsState(alphaTarget, tween(if (dist == 0) dur / 2 else if (dist < 0) (dur * 1.4f).toInt() else dur, easing = EaseOutQuart), label = "lineAlpha")
+    val scale by animateFloatAsState(if (dist == 0) 1.03f else 1f, tween(if (dist == 0) dur else (dur * 1.2f).toInt(), easing = EaseOutQuart), label = "lineScale")
+    // Al abrir la letra las líneas suben en cascada desde la activa.
+    val enter = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        delay(30L + 70L * order.coerceIn(0, 6))
+        enter.animateTo(1f, tween(820, easing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)))
+    }
+    val lit = dist == 0 || dist == -1
+    val align = if (line.duet) Alignment.End else Alignment.Start
+    val arrangement = if (line.duet) Arrangement.End else Arrangement.Start
+    val bgOnly = line.words.isEmpty()
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                val e = enter.value
+                this.alpha = alpha * e
+                translationY = (1 - e) * 46.dp.toPx()
+                val s = scale * lerp(0.965f, 1f, e)
+                scaleX = s; scaleY = s
+                transformOrigin = TransformOrigin(if (line.duet) 1f else 0f, 0.5f)
+            }
+            .clickable(remember { MutableInteractionSource() }, null, onClick = onTap)
+            .padding(vertical = 9.dp),
+        horizontalAlignment = align,
+    ) {
+        if (!bgOnly) Words(line.words, LYRIC, lit, clock, arrangement, c.text)
+        if (rom != null && !bgOnly) {
+            val romWords = remember(rom, line) { spread(rom, line.words.first().start, line.words.last().end) }
+            Words(romWords, ROM, lit, clock, arrangement, c.text.copy(alpha = 0.72f), rise = false, modifier = Modifier.padding(top = 2.dp))
+        }
+        if (line.bg.isNotEmpty()) {
+            Words(line.bg, if (bgOnly) LYRIC.copy(fontSize = LYRIC.fontSize * 0.8f, lineHeight = LYRIC.lineHeight * 0.8f) else BG, lit, clock, arrangement,
+                c.text.copy(alpha = if (bgOnly) 0.9f else 0.78f), modifier = Modifier.padding(top = if (bgOnly) 0.dp else 4.dp))
+        }
+    }
+}
+
+/**
+ * Las palabras de una fila, que se parten entre renglones por los espacios (el japonés, letra a letra). Mientras la
+ * línea está encendida cada sílaba es su propio texto, con su relleno y su salto; apagada, cada palabra es un texto.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun Words(
+    words: List<Word>,
+    style: TextStyle,
+    lit: Boolean,
+    clock: LyricsClock,
+    arrangement: Arrangement.Horizontal,
+    color: Color,
+    rise: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    val groups = remember(words) { groupsOf(words) }
+    val space = with(LocalDensity.current) { (style.fontSize * 0.27f).toDp() }
+    FlowRow(modifier.fillMaxWidth(), horizontalArrangement = arrangement) {
+        groups.forEach { g ->
+            val gap = if (g.last().space) Modifier.padding(end = space) else Modifier
+            if (!lit) {
+                BasicText(g.joinToString("") { it.text }, gap, style = style.copy(color = color))
+            } else Row(gap) {
+                val hold = g.last().end
+                val wordDur = hold - g.first().start
+                g.forEach { w -> Syllable(w, hold, wordDur, style, color, clock, rise) }
+            }
+        }
+    }
+}
+
+/** La pronunciación se rellena a la vez que la voz: de su primera a su última sílaba, repartida por letras. */
+private fun spread(text: String, start: Long, end: Long): List<Word> {
+    val parts = text.split(' ').filter { it.isNotEmpty() }
+    val total = parts.sumOf { it.length }.coerceAtLeast(1)
+    var acc = 0
+    return parts.mapIndexed { i, p ->
+        val s = start + (end - start) * acc / total
+        acc += p.length
+        Word(s, start + (end - start) * acc / total, p, i < parts.lastIndex)
+    }
+}
+
+// Una palabra puede venir en varias sílabas: van juntas (no se parten) hasta el espacio. El japonés y el chino
+// se pueden partir en cualquier sitio.
+// Una palabra en katakana partida en sílabas («ミス» «テリ» «アス») tampoco se parte.
+private val CJK_CHAR = Regex("[\\u3040-\\u30ff\\u3400-\\u9fff\\uac00-\\ud7af]")
+private val KATAKANA = Regex("^[\\u30a0-\\u30ff]+$")
+
+private fun groupsOf(words: List<Word>): List<List<Word>> {
+    val out = ArrayList<List<Word>>()
+    var cur = ArrayList<Word>()
+    words.forEachIndexed { i, w ->
+        cur += w
+        val next = words.getOrNull(i + 1)
+        val katakanaWord = next != null && KATAKANA.matches(w.text) && KATAKANA.matches(next.text)
+        if (w.space || (CJK_CHAR.containsMatchIn(w.text) && !katakanaWord)) { out += cur; cur = ArrayList() }
+    }
+    if (cur.isNotEmpty()) out += cur
+    return out
+}
+
+/**
+ * Una sílaba encendida. El relleno avanza letra a letra (los signos pesan poco y, si la sílaba se alarga, la
+ * última letra se queda con el resto); sube con un rebote al empezar a cantarse y se asienta despacio cuando
+ * acaba la palabra entera ([hold]), más alto cuanto más se alarga. Todo se lee del reloj al dibujar.
+ */
+@Composable
+private fun Syllable(w: Word, hold: Long, wordDur: Long, style: TextStyle, color: Color, clock: LyricsClock, rise: Boolean) {
+    val weights = remember(w) {
+        val chars = w.text.toList()
+        val ws = FloatArray(chars.size) { if (chars[it].isLetterOrDigit()) 1f else 0.3f }
+        val d = w.end - w.start
+        if (d > 800 && ws.isNotEmpty()) ws[ws.lastIndex] *= 1 + min(2.5f, (d - 800) / 600f)
+        ws
+    }
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val sw = min(0.085f, 0.032f + wordDur / 1000f * 0.03f)
+    val ud = (hold - w.start).coerceIn(120, 420)
+    val dim = color.copy(alpha = color.alpha * 0.62f)
+    BasicText(
+        w.text,
+        Modifier
+            .graphicsLayer {
+                compositingStrategy = CompositingStrategy.Offscreen
+                if (!rise) return@graphicsLayer
+                val t = clock.ms
+                val up = when {
+                    t < w.start -> 0f
+                    t < w.start + ud -> Overshoot.transform((t - w.start) / ud.toFloat())
+                    else -> 1f
+                }
+                val down = if (t > hold) 1f - EaseOutExpo.transform(((t - hold) / 900f).coerceIn(0f, 1f)) else 1f
+                val r = up * down
+                translationY = -sw * style.fontSize.toPx() * 1.05f * r
+                val s = 1f + sw * r
+                scaleX = s; scaleY = s
+                transformOrigin = TransformOrigin(0.5f, 0.88f)
+            }
+            .drawWithContent {
+                drawContent()
+                val t = clock.ms
+                val f = ((t - w.start).toFloat() / max(1L, w.end - w.start)).coerceIn(0f, 1f)
+                val x = fillX(f, weights, layout, size.width)
+                val soft = max(6.dp.toPx(), size.width * 0.12f)
+                when {
+                    f <= 0f -> drawRect(dim, blendMode = BlendMode.SrcIn)
+                    f >= 1f -> drawRect(color, blendMode = BlendMode.SrcIn)
+                    else -> drawRect(
+                        Brush.horizontalGradient(0f to color, ((x - soft) / size.width).coerceIn(0f, 1f) to color, (x / size.width).coerceIn(0.001f, 1f) to dim, 1f to dim),
+                        blendMode = BlendMode.SrcIn,
+                    )
+                }
+            },
+        style = style.copy(color = Color.White),
+        onTextLayout = { layout = it },
+    )
+}
+
+/** Hasta dónde llega el relleno, en px: el progreso repartido por letras según su peso. */
+private fun fillX(f: Float, weights: FloatArray, layout: TextLayoutResult?, width: Float): Float {
+    if (layout == null || weights.isEmpty()) return f * width
+    val target = f * weights.sum()
+    var acc = 0f
+    for (i in weights.indices) {
+        if (acc + weights[i] >= target) {
+            val box = layout.getBoundingBox(i)
+            val frac = if (weights[i] > 0) (target - acc) / weights[i] else 1f
+            return lerp(box.left, box.right, frac) + 0.12f * width * f
+        }
+        acc += weights[i]
+    }
+    return width * 1.12f
+}
+
+/** Una pausa larga: tres puntos que se llenan poco a poco y respiran; solo ocupan sitio mientras suena la pausa. */
+@Composable
+private fun GapDots(gap: Row.Gap, active: Boolean, clock: LyricsClock) {
+    val c = Oto.colors
+    val h by animateDpAsState(if (active) 46.dp else 0.dp, tween(Motion.SPATIAL_FAST, easing = Motion.Standard), label = "gap")
+    val shown by animateFloatAsState(if (active) 1f else 0f, tween(Motion.SPATIAL_FAST), label = "gapAlpha")
+    Box(
+        Modifier
+            .size(64.dp, h)
+            .graphicsLayer { alpha = shown }
+            .drawBehind {
+                if (!active && shown == 0f) return@drawBehind
+                val t = clock.ms
+                val p = ((t - gap.start).toFloat() / max(1L, gap.end - gap.start)).coerceIn(0f, 1f)
+                // Al final se encogen de golpe, como quien toma aire antes de la frase.
+                val out = ((gap.end - t) / 420f).coerceIn(0f, 1f)
+                val breathe = 1f + 0.08f * sin(t / 1000f * 2f * PI.toFloat() * 0.8f)
+                val r = 5.dp.toPx() * breathe * lerp(0.4f, 1f, out)
+                val step = 18.dp.toPx()
+                for (k in 0..2) {
+                    val fk = ((p * 3f) - k).coerceIn(0f, 1f)
+                    drawCircle(c.text.copy(alpha = lerp(0.28f, 1f, fk)), r, Offset(r + 4.dp.toPx() + k * step, size.height / 2))
+                }
+            },
+    )
+}
+
+private val LYRIC = TextStyle(fontFamily = OtoType.lyric.fontFamily, fontWeight = FontWeight.Bold, fontSize = 25.sp, lineHeight = 31.sp, letterSpacing = (-0.3).sp)
+private val BG = LYRIC.copy(fontSize = 16.sp, lineHeight = 21.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.sp)
+private val ROM = LYRIC.copy(fontSize = 14.sp, lineHeight = 19.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.sp)
+
+private val EaseOutQuart = CubicBezierEasing(0.25f, 1f, 0.5f, 1f)
+private val EaseOutExpo = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+private val Overshoot = CubicBezierEasing(0.34f, 1.56f, 0.64f, 1f)
+
+// La letra exacta parece ir atrasada al leerla: va un poco por delante (en el tema de Spotify, 250 ms).
+private const val LEAD_MS = 150L
+// La línea activa queda a esta altura del panel.
+private const val ANCHOR = 0.3f
+private const val SCROLL_MS = 620
+private const val USER_HOLD_MS = 2500L
+private const val GAP_MS = 6000L
+private const val GAP_INTRO_MS = 3500L

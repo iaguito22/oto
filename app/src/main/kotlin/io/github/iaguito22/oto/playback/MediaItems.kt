@@ -1,5 +1,6 @@
 package io.github.iaguito22.oto.playback
 
+import android.os.Bundle
 import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -24,6 +25,11 @@ fun SongItem.toMediaItem(): MediaItem = MediaItem.Builder()
             .setIsPlayable(true)
             .setIsBrowsable(false)
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+            // Cada artista con su id, para abrir su página desde la pantalla principal.
+            .setExtras(Bundle().apply {
+                putStringArray(ARTIST_NAMES, artists.map { it.name }.toTypedArray())
+                putStringArray(ARTIST_IDS, artists.map { it.id.orEmpty() }.toTypedArray())
+            })
             .build(),
     )
     .build()
@@ -31,6 +37,9 @@ fun SongItem.toMediaItem(): MediaItem = MediaItem.Builder()
 /** Un MediaItem que llega de un MediaController pierde su URI por el camino: se reconstruye desde el mediaId. */
 fun MediaItem.withPlaybackUri(): MediaItem =
     buildUpon().setUri(mediaId).setCustomCacheKey(mediaId).build()
+
+const val ARTIST_NAMES = "oto_artist_names"
+const val ARTIST_IDS = "oto_artist_ids"
 
 // Lo que ocupa la carátula a pantalla completa en un móvil de 1080 px de ancho.
 const val ARTWORK_PX = 1080

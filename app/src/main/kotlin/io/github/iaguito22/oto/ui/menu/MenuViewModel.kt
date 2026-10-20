@@ -10,7 +10,6 @@ import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,8 +24,20 @@ import kotlinx.coroutines.withContext
 /** Una fila de Explorar: un carrusel de la portada de YouTube Music. */
 data class Shelf(val title: String, val items: List<YTItem>)
 
-/** Un álbum o una playlist abiertos dentro del Menú. */
-data class Detail(val item: YTItem, val songs: List<SongItem>? = null, val error: String? = null)
+/** Lo que se abre dentro del Menú, apilado: atrás vuelve al anterior (un álbum abierto desde un artista, por ejemplo). */
+sealed interface Page {
+    /** Un álbum, una playlist o un artista de YouTube Music. [shelves]: los carruseles del artista (álbumes, sencillos…). */
+    data class Remote(
+        val item: YTItem,
+        val songs: List<SongItem>? = null,
+        val shelves: List<Shelf> = emptyList(),
+        val sub: String? = null,
+        val error: String? = null,
+    ) : Page
+
+    /** Una lista tuya, por su id: el contenido se lee de Prefs, que es quien la cambia. */
+    data class Local(val id: String) : Page
+}
 
 data class MenuState(
     val query: String = "",
@@ -35,14 +46,13 @@ data class MenuState(
     val searchError: String? = null,
     val shelves: List<Shelf>? = null,
     val homeError: String? = null,
-    val detail: Detail? = null,
+    val pages: List<Page> = emptyList(),
 )
 
 @OptIn(FlowPreview::class)
 class MenuViewModel : ViewModel() {
     private val _state = MutableStateFlow(MenuState())
     val state: StateFlow<MenuState> = _state.asStateFlow()
-    private var detailJob: Job? = null
 
     init {
         loadHome()
@@ -75,26 +85,46 @@ class MenuViewModel : ViewModel() {
     }
 
     fun open(item: YTItem) {
-        detailJob?.cancel()
-        _state.update { it.copy(detail = Detail(item)) }
-        detailJob = viewModelScope.launch {
-            val songs = withContext(Dispatchers.IO) {
-                when (item) {
-                    is AlbumItem -> YouTube.album(item.browseId).map { it.songs }
-                    is PlaylistItem -> YouTube.playlist(item.id).map { it.songs }
-                    else -> Result.success(emptyList())
-                }
-            }
+        _state.update { it.copy(pages = it.pages + Page.Remote(item)) }
+        viewModelScope.launch {
+            val loaded = withContext(Dispatchers.IO) { load(item) }
             _state.update { s ->
-                if (s.detail?.item != item) return@update s
-                songs.fold({ s.copy(detail = Detail(item, it)) }, { e -> s.copy(detail = Detail(item, error = e.message ?: e::class.simpleName)) })
+                s.copy(pages = s.pages.map { p -> if (p is Page.Remote && p.item == item && p.songs == null && p.error == null) loaded else p })
             }
         }
     }
 
-    fun closeDetail() {
-        detailJob?.cancel()
-        _state.update { it.copy(detail = null) }
+    fun openArtist(id: String, name: String) =
+        open(ArtistItem(id = id, title = name, thumbnail = null, shuffleEndpoint = null, radioEndpoint = null))
+
+    fun openLocal(id: String) = _state.update { it.copy(pages = it.pages + Page.Local(id)) }
+
+    /** Atrás: la página anterior. */
+    fun closeDetail() = _state.update { it.copy(pages = it.pages.dropLast(1)) }
+
+    fun closeAll() = _state.update { it.copy(pages = emptyList()) }
+
+    private suspend fun load(item: YTItem): Page.Remote {
+        val r: Result<Page.Remote> = when (item) {
+            is AlbumItem -> YouTube.album(item.browseId).map { Page.Remote(item, it.songs) }
+            is PlaylistItem -> YouTube.playlist(item.id).map { Page.Remote(item, it.songs) }
+            is ArtistItem -> YouTube.artist(item.id).map { page ->
+                // Las canciones más oídas son la lista que se reproduce; el resto, carruseles como en Explorar.
+                val top = page.sections.firstOrNull { s -> s.items.isNotEmpty() && s.items.all { it is SongItem } }
+                val shelves = page.sections.filter { it !== top }.mapNotNull { s ->
+                    val items = s.items.filter { it is SongItem || it is AlbumItem || it is PlaylistItem || it is ArtistItem }
+                    if (items.isEmpty()) null else Shelf(s.title, items)
+                }
+                Page.Remote(
+                    page.artist.copy(title = page.artist.title.ifEmpty { item.title }),
+                    top?.items?.filterIsInstance<SongItem>().orEmpty(),
+                    shelves,
+                    sub = page.monthlyListenerCount ?: page.subscriberCountText,
+                )
+            }
+            else -> Result.success(Page.Remote(item, emptyList()))
+        }
+        return r.getOrElse { e -> Page.Remote(item, error = e.message ?: e::class.simpleName) }
     }
 
     private suspend fun search(q: String) {

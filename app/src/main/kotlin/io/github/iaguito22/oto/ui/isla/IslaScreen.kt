@@ -1,6 +1,17 @@
 package io.github.iaguito22.oto.ui.isla
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.composed
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withLink
+import kotlin.math.abs
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -149,12 +160,18 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
     val next by connection.queue.collectAsStateWithLifecycle()
     val previous by connection.previousEntry.collectAsStateWithLifecycle()
     val openSource: (Offset) -> Unit = { origin ->
-        val item = connection.source.value?.item
+        val src = connection.source.value
         haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-        if (item != null) {
-            menu.open(item)
-            sheet.open(SheetKind.Menu, origin)
-        } else sheet.open(SheetKind.Queue, origin)
+        when {
+            src?.item != null -> { menu.open(src.item); sheet.open(SheetKind.Menu, origin) }
+            src?.local != null -> { menu.openLocal(src.local); sheet.open(SheetKind.Menu, origin) }
+            else -> sheet.open(SheetKind.Queue, origin)
+        }
+    }
+    val openArtist: (String, String, Offset) -> Unit = { id, name, origin ->
+        haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+        menu.openArtist(id, name)
+        sheet.open(SheetKind.Menu, origin)
     }
 
     PrefetchArtwork(connection)
@@ -174,7 +191,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
             }
             Gesture.Next -> { haptics.performHapticFeedback(HapticFeedbackType.Confirm); connection.next() }
             Gesture.Previous -> { haptics.performHapticFeedback(HapticFeedbackType.Confirm); connection.previous() }
-            Gesture.Menu -> { menu.closeDetail(); sheet.open(SheetKind.Menu) }
+            Gesture.Menu -> { menu.closeAll(); sheet.open(SheetKind.Menu) }
             Gesture.Queue -> sheet.open(SheetKind.Queue)
             Gesture.Lyrics -> { haptics.performHapticFeedback(HapticFeedbackType.Confirm); lyrics = !lyrics }
         }
@@ -183,7 +200,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
     Box(Modifier.fillMaxSize().background(c.base)) {
         Backdrop(np.artwork)
         Stage(
-            np, connection, drop, lyrics, openSource,
+            np, connection, drop, lyrics, openSource, openArtist,
             Modifier.graphicsLayer {
                 // Lo de detrás se aleja y se desenfoca mientras la hoja crece: hace de cristal sin capturar la pantalla.
                 val m = sheet.morph.value.coerceIn(0f, 1.2f)
@@ -274,29 +291,43 @@ private fun Stage(
     drop: DropState,
     lyrics: Boolean,
     onSource: (Offset) -> Unit,
+    onArtist: (String, String, Offset) -> Unit,
     modifier: Modifier,
 ) {
     val c = Oto.colors
+    val density = LocalDensity.current
     // Hacia dónde entra la canción nueva: de la derecha si avanza, de la izquierda si retrocede.
     var lastIndex by remember { mutableIntStateOf(np.index) }
     var lastId by remember { mutableStateOf(np.id) }
     var dir by remember { mutableIntStateOf(1) }
+    val peekGate = remember { PeekGate() }
     if (np.id != lastId) {
         dir = if (np.index < lastIndex) -1 else 1
         lastIndex = np.index
         lastId = np.id
+        // La carátula que se asomaba es la que entra: el asomo se esconde hasta que la gota vuelva al centro.
+        peekGate.mute()
     }
-    val titleShift = with(LocalDensity.current) { 26.dp.roundToPx() }
+    // Lo que anima el cambio de canción es solo la canción: el resto de NowPlaying (cargando, duración, cola) cambia
+    // varias veces mientras entra, y cada cambio reiniciaba la transición y se llevaba de golpe la carátula vieja.
+    val song = remember(np.id, np.title, np.artist, np.artists, np.artwork) { Shown(np.id, np.title, np.artist, np.artists, np.artwork) }
+    val titleShift = with(density) { 26.dp.roundToPx() }
+    val screenW = LocalConfiguration.current.screenWidthDp.dp
     val paused by animateFloatAsState(if (np.id != null && !np.playing && !np.buffering) 1f else 0f, spring(dampingRatio = 0.62f, stiffness = 300f), label = "paused")
     val source by connection.source.collectAsStateWithLifecycle()
     val next by connection.queue.collectAsStateWithLifecycle()
     val previous by connection.previousEntry.collectAsStateWithLifecycle()
+    // Tirar hacia abajo del origen o de la carátula abre de dónde viene lo que suena.
+    val pull = remember { Animatable(0f) }
+    var sourceCenter by remember { mutableStateOf(Offset.Zero) }
+    val canPull = np.id != null && source != null
 
     Column(
         modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(bottom = DROP_LIFT + DROP_HOST),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        SourceHeader(source.takeIf { np.id != null }, onSource)
+        Spacer(Modifier.height(SOURCE_TOP))
+        SourceHeader(source.takeIf { np.id != null }, pull, onCenter = { sourceCenter = it }, onOpen = { onSource(sourceCenter) })
         Spacer(Modifier.weight(1f))
         BoxWithConstraints(Modifier.padding(horizontal = 36.dp), contentAlignment = Alignment.Center) {
             val side = minOf(maxWidth, 340.dp)
@@ -313,23 +344,33 @@ private fun Stage(
                 contentAlignment = Alignment.Center,
                 label = "coverOrLyrics",
             ) { showLyrics ->
-                if (showLyrics) LyricsPanel(np, side)
-                else Box(contentAlignment = Alignment.Center) {
+                if (showLyrics) LyricsPanel(np, connection, side, side + LYRICS_EXTRA)
+                else Box(
+                    Modifier.pullToOpen(canPull, pull, onOpen = { onSource(sourceCenter) }),
+                    contentAlignment = Alignment.Center,
+                ) {
                     // Al llevar la gota a un lado se asoma por ese lado la canción que vendría.
-                    Peek(next.firstOrNull()?.artwork, side, drop, toRight = true)
-                    Peek(previous?.artwork, side, drop, toRight = false)
+                    Peek(next.firstOrNull()?.artwork, side, drop, peekGate, toRight = true)
+                    Peek(previous?.artwork, side, drop, peekGate, toRight = false)
+                    // La nueva sale de donde se asomaba (a su tamaño) y crece hasta el centro; la que se va se encoge
+                    // hacia el otro lado. Con muelles: si se pasa otra vez a mitad, sigue desde donde va.
+                    val from = with(density) { (screenW / 2 + side * PEEK_SCALE / 2 + 8.dp - PEEK_REVEAL).roundToPx() }
                     AnimatedContent(
-                        targetState = np,
+                        targetState = song,
                         contentKey = { it.id },
                         transitionSpec = {
                             val d = dir
-                            (fadeIn(tween(220, delayMillis = 40)) + slideInHorizontally(spring(dampingRatio = 0.78f, stiffness = 260f)) { d * it / 7 } + scaleIn(spring(dampingRatio = 0.78f, stiffness = 260f), 0.94f)) togetherWith
-                                (fadeOut(tween(Motion.EFFECTS_FAST)) + slideOutHorizontally(tween(Motion.SPATIAL_FAST, easing = Motion.EmphasizedAccelerate)) { -d * it / 9 } + scaleOut(tween(Motion.SPATIAL_FAST), 0.94f)) using
+                            val move = spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 0.84f, stiffness = 230f)
+                            // Opaca desde el principio: la que se asomaba ya se veía entera.
+                            (slideInHorizontally(move) { d * from } + scaleIn(spring(dampingRatio = 0.84f, stiffness = 230f), PEEK_SCALE)) togetherWith
+                                (slideOutHorizontally(move) { -d * (it * 0.62f).toInt() } + scaleOut(tween(Motion.SPATIAL_FAST, easing = Motion.Standard), 0.8f) +
+                                    fadeOut(tween(280, easing = Motion.Standard))) using
                                 SizeTransform(clip = false)
                         },
                         modifier = Modifier.graphicsLayer {
                             drop.frame
-                            translationX = -drop.lean * side.toPx() * 0.1f
+                            translationX = -drop.lean * side.toPx() * COVER_LEAN
+                            translationY = COVER_PULL * pullOffset(pull.value, density)
                         },
                         label = "cover",
                     ) { song -> Cover(song.artwork, side, paused) }
@@ -338,12 +379,13 @@ private fun Stage(
         }
         Spacer(Modifier.height(28.dp))
         AnimatedContent(
-            targetState = np,
+            targetState = song,
             contentKey = { it.id },
             transitionSpec = {
                 val d = dir
-                (fadeIn(tween(Motion.EFFECTS, delayMillis = 60)) + slideInHorizontally(spring(dampingRatio = 0.72f, stiffness = 380f)) { d * titleShift }) togetherWith
-                    fadeOut(tween(Motion.EFFECTS_FAST)) using SizeTransform(clip = false)
+                (fadeIn(tween(Motion.EFFECTS, delayMillis = 90)) + slideInHorizontally(spring(dampingRatio = 0.8f, stiffness = 300f)) { d * titleShift * 2 }) togetherWith
+                    (fadeOut(tween(Motion.EFFECTS_FAST)) + slideOutHorizontally(tween(Motion.SPATIAL_FAST, easing = Motion.Standard)) { -d * titleShift }) using
+                    SizeTransform(clip = false)
             },
             label = "titles",
         ) { song ->
@@ -356,10 +398,7 @@ private fun Stage(
                         modifier = Modifier.basicMarquee(initialDelayMillis = 2500, repeatDelayMillis = 2500, velocity = 36.dp, spacing = MarqueeSpacing(48.dp)),
                     )
                 }
-                Text(
-                    song.artist.ifEmpty { if (song.id == null) "Sube la gota para buscar" else "" },
-                    style = OtoType.body.copy(fontSize = 15.sp), color = c.textMuted, maxLines = 1, textAlign = TextAlign.Center,
-                )
+                Artists(song, onArtist)
             }
         }
         StatusLine(np)
@@ -372,21 +411,15 @@ private fun Stage(
 
 /**
  * Lo que suena viene de algún sitio (un álbum, una lista, la radio de una canción): se dice arriba, y tirar de
- * ahí hacia abajo (o tocarlo) lo abre. Sigue al dedo con resistencia y vibra al pasar el umbral, como la gota.
+ * ahí (o de la carátula) hacia abajo, o tocarlo, lo abre.
  */
 @Composable
-private fun SourceHeader(source: Source?, onOpen: (Offset) -> Unit) {
+private fun SourceHeader(source: Source?, pull: Animatable<Float, *>, onCenter: (Offset) -> Unit, onOpen: () -> Unit) {
     val c = Oto.colors
-    val haptics = LocalHapticFeedback.current
-    val scope = rememberCoroutineScope()
-    val pull = remember { Animatable(0f) }
-    var center by remember { mutableStateOf(Offset.Zero) }
+    val density = LocalDensity.current
     var shown by remember { mutableStateOf(source) }
     if (source != null) shown = source
     val alpha by animateFloatAsState(if (source != null) 1f else 0f, tween(Motion.EFFECTS, easing = Motion.Standard), label = "source")
-    val density = LocalDensity.current
-    val k = with(density) { 64.dp.toPx() }
-    val threshold = with(density) { 48.dp.toPx() }
 
     Column(
         Modifier
@@ -394,40 +427,17 @@ private fun SourceHeader(source: Source?, onOpen: (Offset) -> Unit) {
             .height(SOURCE_H)
             .graphicsLayer {
                 this.alpha = alpha
-                translationY = k * tanh(pull.value / k)
+                translationY = pullOffset(pull.value, density)
             }
-            .onGloballyPositioned { center = it.boundsInRoot().center }
-            .pointerInput(source != null) {
-                if (source == null) return@pointerInput
-                var armed = false
-                detectVerticalDragGestures(
-                    onDragEnd = {
-                        if (armed) onOpen(center)
-                        armed = false
-                        scope.launch { pull.animateTo(0f, Motion.spatial()) }
-                    },
-                    onDragCancel = {
-                        armed = false
-                        scope.launch { pull.animateTo(0f, Motion.spatial()) }
-                    },
-                ) { change, dy ->
-                    change.consume()
-                    val d = (pull.value + dy).coerceAtLeast(0f)
-                    if ((d > threshold) != armed) {
-                        armed = !armed
-                        if (armed) haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                    }
-                    scope.launch { pull.snapTo(d) }
-                }
-            }
-            .pointerInput(source != null) { if (source != null) detectTapGestures { onOpen(center) } }
-            .padding(top = 6.dp),
+            .onGloballyPositioned { onCenter(it.boundsInRoot().center) }
+            .pullToOpen(source != null, pull, onOpen)
+            .pointerInput(source != null) { if (source != null) detectTapGestures { onOpen() } },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         val s = shown ?: return@Column
         Text(
-            (if (s.item == null) s.kind else "Desde ${s.kind.lowercase()}").uppercase(),
+            (if (s.item == null && s.local == null) s.kind else "Desde ${s.kind.lowercase()}").uppercase(),
             style = OtoType.label.copy(fontSize = 11.sp), color = c.textMuted, maxLines = 1,
         )
         Text(
@@ -437,12 +447,70 @@ private fun SourceHeader(source: Source?, onOpen: (Offset) -> Unit) {
     }
 }
 
+/** El tirón con resistencia, en px: sigue al dedo al principio y cada vez cuesta más. */
+private fun pullOffset(pull: Float, density: androidx.compose.ui.unit.Density): Float {
+    val k = with(density) { 64.dp.toPx() }
+    return k * tanh(pull / k)
+}
+
+/** Arrastrar hacia abajo: sigue al dedo, vibra al pasar el umbral y, si se suelta pasado, abre. */
+private fun Modifier.pullToOpen(enabled: Boolean, pull: Animatable<Float, *>, onOpen: () -> Unit): Modifier = composed {
+    val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    val threshold = with(LocalDensity.current) { 48.dp.toPx() }
+    pointerInput(enabled) {
+        if (!enabled) return@pointerInput
+        var armed = false
+        val settle = {
+            armed = false
+            scope.launch { pull.animateTo(0f, Motion.spatial()) }
+        }
+        detectVerticalDragGestures(
+            onDragEnd = {
+                if (armed) onOpen()
+                settle()
+            },
+            onDragCancel = { settle() },
+        ) { change, dy ->
+            val d = (pull.value + dy).coerceAtLeast(0f)
+            if (d == 0f && dy < 0) return@detectVerticalDragGestures
+            change.consume()
+            if ((d > threshold) != armed) {
+                armed = !armed
+                if (armed) haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+            }
+            scope.launch { pull.snapTo(d) }
+        }
+    }
+}
+
+/** Lo que se ve de la canción (sin el estado de reproducción). */
+private data class Shown(val id: String?, val title: String, val artist: String, val artists: List<Pair<String, String?>>, val artwork: String?)
+
+/**
+ * Mientras cambia la canción, los asomos no se ven (enseñarían la de después) hasta que la gota se ha asentado en
+ * el centro: el muelle cruza el centro varias veces al volver.
+ */
+private class PeekGate {
+    var mutedAt = 0L
+
+    fun mute() {
+        mutedAt = android.os.SystemClock.uptimeMillis()
+    }
+
+    fun muted(lean: Float): Boolean {
+        if (mutedAt == 0L) return false
+        if (android.os.SystemClock.uptimeMillis() - mutedAt > PEEK_MUTE_MS && abs(lean) < 0.02f) mutedAt = 0L
+        return mutedAt != 0L
+    }
+}
+
 /** La carátula de al lado, escondida fuera de la pantalla hasta que la gota se lleva hacia su lado. */
 @Composable
-private fun Peek(artwork: String?, side: Dp, drop: DropState, toRight: Boolean) {
+private fun Peek(artwork: String?, side: Dp, drop: DropState, gate: PeekGate, toRight: Boolean) {
     if (artwork == null) return
     val screen = LocalConfiguration.current.screenWidthDp.dp
-    val peekSide = side * 0.8f
+    val peekSide = side * PEEK_SCALE
     AsyncImage(
         model = artwork,
         contentDescription = null,
@@ -455,11 +523,36 @@ private fun Peek(artwork: String?, side: Dp, drop: DropState, toRight: Boolean) 
                 val f = (drop.lean * sign).coerceIn(0f, 1f)
                 val hidden = screen.toPx() / 2 + peekSide.toPx() / 2 + 8.dp.toPx()
                 translationX = sign * (hidden - PEEK_REVEAL.toPx() * f)
-                alpha = (f * 2.5f).coerceIn(0f, 1f)
+                alpha = if (gate.muted(drop.lean)) 0f else (f * 2.5f).coerceIn(0f, 1f)
                 rotationZ = sign * 4f * (1f - f)
-                shape = RoundedCornerShape(22.dp)
+                shape = RoundedCornerShape(24.dp)
                 clip = true
             },
+    )
+}
+
+/** Los artistas, cada uno pulsable si YouTube Music da su página. */
+@Composable
+private fun Artists(song: Shown, onArtist: (String, String, Offset) -> Unit) {
+    val c = Oto.colors
+    val style = OtoType.body.copy(fontSize = 15.sp)
+    if (song.id == null || song.artist.isEmpty()) {
+        Text(if (song.id == null) "Sube la gota para buscar" else "", style = style, color = c.textMuted, maxLines = 1, textAlign = TextAlign.Center)
+        return
+    }
+    var bounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
+    val text = buildAnnotatedString {
+        song.artists.forEachIndexed { i, (name, id) ->
+            if (i > 0) append(", ")
+            if (id == null) append(name)
+            else withLink(
+                LinkAnnotation.Clickable(id, TextLinkStyles(pressedStyle = SpanStyle(color = c.text))) { onArtist(id, name, bounds.center) },
+            ) { append(name) }
+        }
+    }
+    Text(
+        text, style = style, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+        modifier = Modifier.onGloballyPositioned { bounds = it.boundsInRoot() },
     )
 }
 
@@ -524,6 +617,9 @@ private fun StatusLine(np: NowPlaying) {
 private fun Progress(np: NowPlaying, connection: PlayerConnection, modifier: Modifier) {
     val c = Oto.colors
     val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    val prefs = (LocalContext.current.applicationContext as OtoApp).prefs
+    val remaining by prefs.showRemaining.collectAsStateWithLifecycle(initialValue = true)
     val pos = remember { mutableLongStateOf(0L) }
     var drag by remember { mutableStateOf<Float?>(null) }
     val dur = np.durationMs
@@ -559,17 +655,40 @@ private fun Progress(np: NowPlaying, connection: PlayerConnection, modifier: Mod
                     if (f > 0f) drawRoundRect(c.accent, Offset(0f, y), Size(maxOf(h, size.width * f), h), CornerRadius(h / 2))
                 },
         )
+        val style = OtoType.label.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.sp, fontFeatureSettings = "tnum")
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            val style = OtoType.label.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.sp, fontFeatureSettings = "tnum")
             Text(time(shownSecs), style = style, color = c.textMuted)
-            // La calidad con la que llega, en medio: lo que dio YouTube (o lo que se guardó con la caché).
-            val quality by StreamInfo.quality.collectAsStateWithLifecycle()
-            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                Crossfade(quality[np.id]?.toString(), animationSpec = tween(Motion.EFFECTS), label = "quality") { q ->
-                    if (q != null) Text(q, style = style.copy(fontSize = 11.sp, letterSpacing = 0.04.em), color = c.textFaint, maxLines = 1)
+            Spacer(Modifier.weight(1f))
+            // Tocar el de la derecha cambia entre lo que falta y lo que dura (y se recuerda).
+            Box(
+                Modifier
+                    .clip(CircleShape)
+                    .clickable(remember { MutableInteractionSource() }, null) {
+                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                        scope.launch { prefs.setShowRemaining(!remaining) }
+                    }
+                    .padding(start = 12.dp, top = 2.dp, bottom = 2.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                AnimatedContent(
+                    targetState = remaining,
+                    transitionSpec = {
+                        (fadeIn(tween(Motion.EFFECTS, delayMillis = 40)) + slideInVertically(spring(dampingRatio = 0.8f, stiffness = 500f)) { it / 2 }) togetherWith
+                            (fadeOut(tween(Motion.EFFECTS_FAST)) + slideOutVertically(tween(Motion.EFFECTS_FAST)) { -it / 2 }) using SizeTransform(clip = false)
+                    },
+                    contentAlignment = Alignment.CenterEnd,
+                    label = "tail",
+                ) { r ->
+                    Text(if (totalSecs <= 0) "" else if (r) "-" + time((totalSecs - shownSecs).coerceAtLeast(0)) else time(totalSecs), style = style, color = c.textMuted)
                 }
             }
-            Text(if (totalSecs > 0) "-" + time((totalSecs - shownSecs).coerceAtLeast(0)) else "", style = style, color = c.textMuted)
+        }
+        // La calidad con la que llega, debajo: lo que dio YouTube (o lo que se guardó con la caché).
+        val quality by StreamInfo.quality.collectAsStateWithLifecycle()
+        Box(Modifier.fillMaxWidth().padding(top = 10.dp).height(16.dp), contentAlignment = Alignment.Center) {
+            Crossfade(quality[np.id]?.toString(), animationSpec = tween(Motion.EFFECTS), label = "quality") { q ->
+                if (q != null) Text(q, style = style.copy(fontSize = 11.sp, letterSpacing = 0.04.em), color = c.textFaint, maxLines = 1)
+            }
         }
     }
 }
@@ -619,7 +738,16 @@ private val DROP_HOST = 168.dp
 private val DROP_LIFT = 24.dp
 private val DROP_RADIUS = 43.dp
 private val SOURCE_H = 52.dp
-private val PEEK_REVEAL = 84.dp
-private val PROGRESS_H = 46.dp
+// El origen no va pegado a la barra de estado: hay sitio de sobra.
+private val SOURCE_TOP = 22.dp
+private val PEEK_REVEAL = 136.dp
+private const val PEEK_SCALE = 0.86f
+// Cuánto se aparta la carátula al asomarse la de al lado, y cuánto baja con el tirón (el origen baja entero).
+private const val COVER_LEAN = 0.16f
+private const val COVER_PULL = 0.5f
+// La letra es algo más alta que la carátula: debajo sobra sitio.
+private val LYRICS_EXTRA = 56.dp
+private val PROGRESS_H = 72.dp
 private const val FLASH_MS = 650L
+private const val PEEK_MUTE_MS = 500L
 private const val BACKDROP_MS = 800
