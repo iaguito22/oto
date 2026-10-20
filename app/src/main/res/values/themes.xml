@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- El color de fondo es el mismo que el primer fotograma de Compose: sin destello al abrir. -->
+    <style name="Theme.Oto" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/oto_base</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowSplashScreenBackground">@color/oto_base</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+    </style>
+</resources>
