@@ -13,6 +13,7 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.GZIPInputStream
 import kotlin.math.abs
 import kotlin.math.max
@@ -20,60 +21,106 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * De dónde sale la letra, en orden (lo mismo que el tema de Spotify, sin la base de Spotify):
- * 1. lyricsplus: la letra de Apple Music con tiempos por sílaba y los coros aparte.
- * 2. Netease (yrc): tiempos por palabra; aquí no pide captcha porque no sale de Spotify.
- * 3. LRCLIB: tiempos por línea; las palabras se reparten a ritmo de canto ([estimate]).
+ * De dónde sale la letra. Primero lo que trae tiempos por palabra; si nadie los tiene, la mejor sincronizada por
+ * líneas, con las palabras repartidas a ritmo de canto ([estimate], como en el tema de Spotify); sin sincronizar, lo
+ * último de todo:
+ * 1. lyricsplus: la letra de Apple Music, por sílabas (con los coros aparte) o por líneas.
+ * 2. Netease: yrc, por palabra; o su lrc, por líneas. Aquí no pide captcha porque no sale de Spotify.
+ * 3. LRCLIB: por líneas.
  * 4. YouTube Music, sin sincronizar.
  */
 object LyricsSource {
     private val LP_HOSTS = listOf("lyricsplus.binimum.org", "lyricsplus.prjktla.workers.dev")
-    // El que falla (cupo diario agotado, caído) se salta el resto de la sesión.
-    private val lpDown = mutableSetOf<String>()
+    // Hasta cuándo se salta cada uno: con 429 aun después de esperar, medio minuto; con otro error, uno.
+    // Antes era para toda la sesión, y un solo fallo dejaba el resto del día sin letra palabra a palabra.
+    private val lpDown = ConcurrentHashMap<String, Long>()
 
-    /** null si no se pudo preguntar (sin red): no se guarda y se vuelve a intentar. */
-    suspend fun fetch(q: LyricsQuery): Lyrics? = withContext(Dispatchers.IO) {
-        var offline = false
+    /** [final]: false si alguna fuente no contestó (sin red, cupo agotado). Entonces no se guarda y se vuelve a pedir. */
+    data class Fetched(val lyrics: Lyrics?, val final: Boolean)
+
+    suspend fun fetch(q: LyricsQuery): Fetched = withContext(Dispatchers.IO) {
+        var transient = false
         suspend fun <T> attempt(name: String, block: suspend () -> T?): T? = try {
             block()
         } catch (e: IOException) {
-            Timber.w(e, "Letra: $name sin red")
-            offline = true
+            Timber.w(e, "Letra: $name no contesta")
+            transient = true
             null
         } catch (e: Exception) {
             Timber.w(e, "Letra: $name falló")
             null
         }
         val title = cleanTitle(q.title)
-        attempt("lyricsplus") { lyricsPlus(title, q) }?.let { return@withContext it }
-        attempt("netease") { netease(title, q) }?.let { return@withContext it }
+        val lp = attempt("lyricsplus") { lyricsPlus(title, q) }
+        if (lp.byWord()) return@withContext Fetched(lp, true)
+        val ne = attempt("netease") { netease(title, q) }
+        if (ne.byWord()) return@withContext Fetched(ne, true)
         val lrc = attempt("lrclib") { lrclib(title, q) }
-        if (lrc is Lyrics.Synced) return@withContext lrc
-        attempt("youtube") { youtube(q.id) }?.let { return@withContext it }
-        lrc ?: if (offline) null else Lyrics.Missing
+        listOf(lp, lrc, ne).firstOrNull { it is Lyrics.Synced }?.let { return@withContext Fetched(it, !transient) }
+        val plain = listOf(lp, lrc).firstOrNull { it is Lyrics.Plain } ?: attempt("youtube") { youtube(q.id) }
+        Fetched(plain ?: if (transient) null else Lyrics.Missing, !transient)
     }
+
+    private fun Lyrics?.byWord() = this is Lyrics.Synced && wordByWord
 
     // ---- lyricsplus -------------------------------------------------------------------------------
 
-    private fun lyricsPlus(title: String, q: LyricsQuery): Lyrics? {
+    internal fun lyricsPlus(title: String, q: LyricsQuery): Lyrics? {
         val params = buildString {
-            append("title=").append(enc(title)).append("&artist=").append(enc(q.artist))
+            append("title=").append(enc(title)).append("&artist=").append(enc(firstArtist(q.artist)))
             append("&album=").append(enc(q.album.orEmpty()))
             if (q.durationMs > 0) append("&duration=").append((q.durationMs / 1000.0).roundToInt())
         }
         var json: JSONObject? = null
+        var failed: Exception? = null
         for (host in LP_HOSTS) {
-            if (host in lpDown) continue
+            if ((lpDown[host] ?: 0L) > System.currentTimeMillis()) continue
+            val url = "https://$host/v2/lyrics/get?$params"
             try {
-                json = JSONObject(get("https://$host/v2/lyrics/get?$params", timeout = 9000) ?: return null) // 404: el espejo tampoco la tiene
+                // Deja 2 peticiones cada 10 s: si se pasa (cambiar de canción deprisa), se espera lo que pide y otra vez.
+                val body = try {
+                    get(url, timeout = 9000)
+                } catch (e: IOException) {
+                    if (e.message != "HTTP 429") throw e
+                    Thread.sleep(LP_WAIT_MS)
+                    get(url, timeout = 9000)
+                }
+                json = JSONObject(body ?: return null) // 404: el espejo tampoco la tiene
                 break
             } catch (e: Exception) {
-                lpDown += host
+                Timber.w(e, "Letra: lyricsplus %s", host)
+                lpDown[host] = System.currentTimeMillis() + if (e.message == "HTTP 429") LP_QUOTA_MS else LP_ERROR_MS
+                failed = e
             }
         }
-        val d = json ?: return null
-        if (!Regex("word|syllable", RegexOption.IGNORE_CASE).containsMatchIn(d.optString("type"))) return null
+        // Ninguno contestó (o los dos están en pausa): no es que no la tenga.
+        val d = json ?: throw IOException("lyricsplus no contesta", failed)
         val arr = d.optJSONArray("lyrics") ?: return null
+        val meta = d.optJSONObject("metadata")
+        val source = when (meta?.optString("source")) {
+            "qApple", "Apple" -> "Apple Music"
+            "Spotify" -> "Spotify"
+            "Musixmatch" -> "Musixmatch"
+            else -> "lyricsplus"
+        }
+        val language = meta?.optString("language")?.ifBlank { null }
+        val items = (0 until arr.length()).map(arr::getJSONObject)
+        // Sin ningún tiempo es la letra sin sincronizar; mejor que nada, peor que cualquier sincronizada.
+        if (items.none { it.optLong("time") > 0 }) {
+            val text = items.map { it.optString("text").trim() }.filter { it.isNotEmpty() }
+            return if (text.isEmpty()) null else Lyrics.Plain(text, source)
+        }
+        if (!Regex("word|syllable", RegexOption.IGNORE_CASE).containsMatchIn(d.optString("type"))) {
+            // Por líneas: las palabras se reparten hasta que empieza la siguiente.
+            val lines = items.mapIndexedNotNull { i, l ->
+                val text = l.optString("text").trim()
+                if (text.isEmpty()) return@mapIndexedNotNull null
+                val t = l.optLong("time")
+                val next = items.getOrNull(i + 1)?.optLong("time") ?: (t + max(l.optLong("duration"), 3000L))
+                estimate(text, t, next)
+            }
+            return if (lines.isEmpty()) null else Lyrics.Synced(lines, source, language)
+        }
         val lines = (0 until arr.length()).mapNotNull { i ->
             val l = arr.getJSONObject(i)
             val syl = l.optJSONArray("syllabus") ?: return@mapNotNull null
@@ -92,19 +139,12 @@ object LyricsSource {
             Line(l.optLong("time"), l.optLong("time") + l.optLong("duration"), main, bg, real = true, duet = singer == "v2")
         }
         if (lines.isEmpty()) return null
-        val meta = d.optJSONObject("metadata")
-        val source = when (meta?.optString("source")) {
-            "qApple", "Apple" -> "Apple Music"
-            "Spotify" -> "Spotify"
-            "Musixmatch" -> "Musixmatch"
-            else -> "lyricsplus"
-        }
-        return Lyrics.Synced(lines, source, meta?.optString("language")?.ifBlank { null })
+        return Lyrics.Synced(lines, source, language)
     }
 
     // ---- Netease ----------------------------------------------------------------------------------
 
-    private fun netease(title: String, q: LyricsQuery): Lyrics? {
+    internal fun netease(title: String, q: LyricsQuery): Lyrics? {
         val firstArtist = q.artist.split(", ", " & ", " x ").first()
         val search = JSONObject(get("https://music.163.com/api/search/get?type=1&limit=8&s=${enc("$title $firstArtist")}") ?: return null)
         val songs = search.optJSONObject("result")?.optJSONArray("songs") ?: return null
@@ -128,7 +168,11 @@ object LyricsSource {
         val r = JSONObject(get("https://music.163.com/api/song/lyric?id=${best.optLong("id")}&lv=1&kv=1&tv=-1&yv=1") ?: return null)
         val yrc = r.optJSONObject("yrc")?.optString("lyric").orEmpty()
         val lines = parseYrc(yrc)
-        return if (lines.isEmpty()) null else Lyrics.Synced(lines, "NetEase")
+        if (lines.isNotEmpty()) return Lyrics.Synced(lines, "NetEase")
+        // Sin tiempos por palabra, su lrc por líneas (sin los créditos del principio ni el «纯音乐» de las instrumentales).
+        val lrc = r.optJSONObject("lrc")?.optString("lyric").orEmpty()
+        val byLine = parseLrc(lrc).filterIndexed { i, l -> !(i < 12 && CREDIT.containsMatchIn(l.text)) }
+        return if (byLine.isEmpty() || byLine.any { "纯音乐" in it.text }) null else Lyrics.Synced(byLine, "NetEase")
     }
 
     private val YRC_LINE = Regex("""^\[(\d+),(\d+)](.*)$""")
@@ -171,17 +215,20 @@ object LyricsSource {
 
     // ---- LRCLIB -----------------------------------------------------------------------------------
 
-    private fun lrclib(title: String, q: LyricsQuery): Lyrics? {
+    internal fun lrclib(title: String, q: LyricsQuery): Lyrics? {
         val secs = (q.durationMs / 1000.0).roundToInt()
-        val direct = get(
-            "https://lrclib.net/api/get?track_name=${enc(title)}&artist_name=${enc(q.artist)}" +
-                (q.album?.let { "&album_name=${enc(it)}" } ?: "") + (if (secs > 0) "&duration=$secs" else ""),
-        )?.let(::JSONObject)
-        val hit = direct ?: run {
-            val arr = JSONArray(get("https://lrclib.net/api/search?track_name=${enc(title)}&artist_name=${enc(q.artist)}") ?: return null)
+        val artist = firstArtist(q.artist)
+        // La exacta (título, artista y duración); si no, buscando, y si tampoco, buscando todo junto.
+        val direct = retry { get("https://lrclib.net/api/get?track_name=${enc(title)}&artist_name=${enc(artist)}" + (if (secs > 0) "&duration=$secs" else "")) }
+            ?.let(::JSONObject)
+        val hit = direct ?: sequenceOf(
+            "https://lrclib.net/api/search?track_name=${enc(title)}&artist_name=${enc(artist)}",
+            "https://lrclib.net/api/search?q=${enc("$title $artist")}",
+        ).firstNotNullOfOrNull { url ->
+            val arr = JSONArray(retry { get(url) } ?: return@firstNotNullOfOrNull null)
             (0 until arr.length()).map(arr::getJSONObject)
                 .filter { secs <= 0 || abs(it.optDouble("duration") - secs) <= 3 }
-                .maxByOrNull { if (it.optString("syncedLyrics").isNotBlank()) 1 else 0 }
+                .maxByOrNull { if (it.optString("syncedLyrics").isNotBlank() && it.optString("syncedLyrics") != "null") 1 else 0 }
         } ?: return null
         val synced = hit.optString("syncedLyrics").takeIf { it.isNotBlank() && it != "null" }
         if (synced != null) {
@@ -376,6 +423,18 @@ object LyricsSource {
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
 
+    /** LRCLIB a veces contesta 503 si se le pregunta seguido: un segundo y otra vez. */
+    private fun <T> retry(block: () -> T): T = try {
+        block()
+    } catch (e: IOException) {
+        if (e.message?.startsWith("HTTP 5") != true) throw e
+        Thread.sleep(1200)
+        block()
+    }
+
+    /** «Ariana Grande, Nicki Minaj» → «Ariana Grande»: las webs de letras guardan al principal. */
+    private fun firstArtist(a: String) = a.split(", ", " & ").first().trim()
+
     private fun norm(t: String) = t.lowercase().filter { it.isLetterOrDigit() }
 
     // «(Official Video)», «[Lyrics]»…: ninguna web de letras los tiene en el título.
@@ -384,5 +443,12 @@ object LyricsSource {
         RegexOption.IGNORE_CASE,
     )
 
-    private fun cleanTitle(t: String) = t.replace(NOISE, "").trim().ifEmpty { t }
+    // «(con Nicki Minaj)», «(feat. …)»: YouTube Music pone a los invitados en el título; las webs de letras, no.
+    private val FEAT = Regex("""\s*[(\[](feat\.?|ft\.?|featuring|with|con)\s[^)\]]*[)\]]""", RegexOption.IGNORE_CASE)
+
+    internal fun cleanTitle(t: String) = t.replace(NOISE, "").replace(FEAT, "").trim().ifEmpty { t }
+
+    private const val LP_QUOTA_MS = 30_000L
+    private const val LP_WAIT_MS = 5_000L
+    private const val LP_ERROR_MS = 60_000L
 }

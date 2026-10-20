@@ -105,9 +105,19 @@ fun LyricsPanel(np: NowPlaying, connection: PlayerConnection, width: Dp, height:
         val id = np.id ?: run { value = Loaded(null, Lyrics.Missing); return@produceState }
         cache.get(id)?.let { value = Loaded(id, it); return@produceState }
         value = Loaded(id, null)
-        val r = LyricsSource.fetch(LyricsQuery(id, np.title, np.artist, np.album, np.durationMs))
-        if (r != null) cache.put(id, r)
-        value = Loaded(id, r ?: Lyrics.Missing)
+        val q = LyricsQuery(id, np.title, np.artist, np.album, np.durationMs)
+        var r = LyricsSource.fetch(q)
+        value = Loaded(id, r.lyrics ?: Lyrics.Missing)
+        // Si alguna fuente no contestó (sin red, cupo agotado) se vuelve a preguntar un par de veces, y solo se
+        // cambia si llega algo mejor: así no se queda sin sincronizar por un fallo pasajero.
+        for (wait in RETRY_MS) {
+            if (r.final) break
+            delay(wait)
+            val again = LyricsSource.fetch(q)
+            if (rank(again.lyrics) > rank(value.lyrics)) value = Loaded(id, again.lyrics)
+            r = again
+        }
+        if (r.final) value.lyrics?.let { cache.put(id, it) }
     }
     val current = if (loaded.id == np.id) loaded else Loaded(np.id, null)
     val c = Oto.colors
@@ -521,7 +531,16 @@ private val EaseOutExpo = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 private val Overshoot = CubicBezierEasing(0.34f, 1.56f, 0.64f, 1f)
 
 // La letra exacta parece ir atrasada al leerla: va un poco por delante (en el tema de Spotify, 250 ms).
-private const val LEAD_MS = 150L
+// Como en el tema de Spotify del PC (LYR_LEAD): la letra exacta, al leerla, parece ir atrasada.
+private const val LEAD_MS = 250L
+private val RETRY_MS = listOf(20_000L, 90_000L)
+
+/** Sin letra < sin sincronizar < por líneas < palabra a palabra. */
+private fun rank(l: Lyrics?) = when (l) {
+    is Lyrics.Synced -> if (l.wordByWord) 3 else 2
+    is Lyrics.Plain -> 1
+    else -> 0
+}
 // La línea activa queda a esta altura del panel.
 private const val ANCHOR = 0.3f
 private const val SCROLL_MS = 620

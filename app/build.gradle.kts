@@ -90,6 +90,8 @@ dependencies {
     implementation(libs.datastore)
     implementation(libs.timber)
     testImplementation(libs.junit)
+    // El org.json de android.jar en las pruebas de JVM es un esqueleto vacío.
+    testImplementation("com.vaadin.external.google:android-json:0.0.20131108.vaadin1")
 
     coreLibraryDesugaring(libs.desugaring)
 }
