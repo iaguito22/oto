@@ -33,12 +33,14 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import io.github.iaguito22.oto.MainActivity
 import io.github.iaguito22.oto.OtoApp
+import io.github.iaguito22.oto.importer.songKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -68,6 +70,8 @@ class PlaybackService : MediaSessionService() {
 
     private var radio: Radio? = null
     private var radioJob: Job? = null
+    // Lo último que sonó (también en sesiones anteriores, desde el historial): la radio no lo vuelve a poner.
+    // Por id y por título + artista, porque la misma canción suele estar como canción y como vídeo.
     private val recent = ArrayDeque<String>()
 
     private val prefs by lazy { (application as OtoApp).prefs }
@@ -99,6 +103,11 @@ class PlaybackService : MediaSessionService() {
             )
             .setCallback(callback)
             .build()
+
+        scope.launch {
+            val heard = withContext(Dispatchers.IO) { prefs.history.first() }
+            heard.asReversed().forEach { remember(it.id, sameSong(it.title, it.artist)) }
+        }
 
         // El corazón de la notificación sigue a Prefs: lo cambie quien lo cambie, aquí se ve.
         scope.launch { prefs.likedIds.collect { liked = it; showLike() } }
@@ -284,8 +293,15 @@ class PlaybackService : MediaSessionService() {
                 }
                 val page = withContext(Dispatchers.IO) { r.more() }
                     .getOrElse { Timber.w(it, "radio"); return@launch }
-                val queued = (0 until player.mediaItemCount).mapTo(HashSet()) { player.getMediaItemAt(it).mediaId }
-                val fresh = page.filter { it.id !in queued && it.id !in recent }.distinctBy { it.id }
+                val queued = HashSet<String>()
+                for (i in 0 until player.mediaItemCount) {
+                    val m = player.getMediaItemAt(i)
+                    queued += m.mediaId
+                    queued += sameSong(m.mediaMetadata.title?.toString().orEmpty(), m.mediaMetadata.artist?.toString().orEmpty())
+                }
+                val fresh = page
+                    .filter { s -> s.id !in queued && s.id !in recent && sameSong(s.title, s.artists.joinToString { it.name }).let { it !in queued && it !in recent } }
+                    .distinctBy { sameSong(it.title, it.artists.joinToString { a -> a.name }) }
                 if (fresh.isNotEmpty()) {
                     player.addMediaItems(fresh.map { it.toMediaItem() })
                     Timber.d("radio: +%d", fresh.size)
@@ -295,13 +311,21 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    private fun remember(vararg keys: String) {
+        for (k in keys) {
+            recent.remove(k)
+            recent.addLast(k)
+        }
+        while (recent.size > RECENT) recent.removeFirst()
+    }
+
+    private fun sameSong(title: String, artist: String) = "~" + songKey(title, artist)
+
     private val listener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val id = mediaItem?.mediaId ?: return
             retries.keys.retainAll(setOf(id))
-            recent.remove(id)
-            recent.addLast(id)
-            while (recent.size > RECENT) recent.removeFirst()
+            remember(id, sameSong(mediaItem.mediaMetadata.title?.toString().orEmpty(), mediaItem.mediaMetadata.artist?.toString().orEmpty()))
             applyLoudness()
             topUpRadio()
             showLike()
@@ -366,7 +390,7 @@ class PlaybackService : MediaSessionService() {
         const val MAX_RETRIES = 3
         const val RADIO_AHEAD = 2
         const val RADIO_PAGES = 3
-        const val RECENT = 200
+        const val RECENT = 400
         const val QUALITY_KEY = "oto_quality"
         val LIKE = SessionCommand("io.github.iaguito22.oto.LIKE", Bundle.EMPTY)
     }

@@ -1,24 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- La gota de Oto: un círculo oscuro con el núcleo de luz desplazado hacia arriba a la izquierda. -->
+<!-- La gota de Oto como la dibuja el tema de Nothing: anillo y núcleo de luz desplazado, en blanco sobre gris. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path android:pathData="M54,28a26,26 0,1 1,0 52a26,26 0,1 1,0 -52z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:centerX="48"
-                android:centerY="48"
-                android:gradientRadius="34"
-                android:type="radial">
-                <item android:color="#FFF2FDFF" android:offset="0" />
-                <item android:color="#FF9EDDE4" android:offset="0.26" />
-                <item android:color="#FF3A6E76" android:offset="0.52" />
-                <item android:color="#FF18292D" android:offset="0.85" />
-                <item android:color="#FF111B1E" android:offset="1" />
-            </gradient>
-        </aapt:attr>
-    </path>
+    <path
+        android:fillColor="#FFF1F1F1"
+        android:fillType="evenOdd"
+        android:pathData="M54,28a26,26 0,1 1,0 52a26,26 0,1 1,0 -52zM54,33a21,21 0,1 0,0 42a21,21 0,1 0,0 -42z" />
+    <path
+        android:fillColor="#FFF1F1F1"
+        android:pathData="M50,38a10,10 0,1 1,0 20a10,10 0,1 1,0 -20z" />
 </vector>

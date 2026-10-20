@@ -107,8 +107,10 @@ import io.github.iaguito22.oto.ui.theme.Oto
 import io.github.iaguito22.oto.ui.theme.OtoType
 import io.github.iaguito22.oto.ui.theme.Radius
 import io.github.iaguito22.oto.ui.theme.Space
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private enum class View { Tabs, Search, Page, Settings, Import }
 
@@ -139,6 +141,11 @@ fun MenuSheet(
     val history by prefs.history.collectAsStateWithLifecycle(initialValue = null)
     val playlists by prefs.playlists.collectAsStateWithLifecycle(initialValue = null)
     val liked by prefs.likedList.collectAsStateWithLifecycle(initialValue = null)
+    LaunchedEffect(history, liked, playlists) {
+        vm.taste = withContext(Dispatchers.Default) {
+            Taste.of(history.orEmpty().asSequence() + liked?.songs.orEmpty() + playlists.orEmpty().asSequence().flatMap { it.songs })
+        }
+    }
     val pager = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
     val focus = LocalFocusManager.current
@@ -220,7 +227,7 @@ fun MenuSheet(
                         if (page == 0) YourMusic(history, liked, playlists, currentId, play, onHold = { hold(it, null) }, onOpen = vm::openLocal, onNew = { naming = Naming() })
                         else Explore(s, currentId, play, onHold = { hold(it, null) }, onOpen = vm::open, onRetry = vm::loadHome)
                     }
-                    View.Search -> Results(s, currentId, play, onHold = { hold(it, null) })
+                    View.Search -> Results(s, currentId, play, onHold = { hold(it, null) }, onOpen = { focus.clearFocus(); vm.open(it) })
                     View.Page -> when (val p = s.pages.getOrNull(nav.depth - 1)) {
                         is Page.Remote -> if (p.item is ArtistItem) ArtistView(
                             p, currentId, onBack = vm::closeDetail,
@@ -455,19 +462,30 @@ private fun Card(item: YTItem, current: Boolean, onClick: () -> Unit, onLongClic
 }
 
 @Composable
-private fun Results(s: MenuState, currentId: String?, play: (SongItem) -> Unit, onHold: (SongItem) -> Unit) {
+private fun Results(s: MenuState, currentId: String?, play: (SongItem) -> Unit, onHold: (SongItem) -> Unit, onOpen: (YTItem) -> Unit) {
     when {
         s.searchError != null && s.results.isEmpty() -> Empty(R.drawable.ic_search, "La búsqueda falló", s.searchError)
         s.results.isEmpty() && s.searching -> Skeleton(modifier = Modifier.padding(Space.md))
         s.results.isEmpty() && s.query.trim().length < 2 -> Empty(R.drawable.ic_search, "Sigue escribiendo", "Con dos letras ya busca.")
         s.results.isEmpty() -> Empty(R.drawable.ic_search, "Sin resultados", "Prueba con otro nombre o con el artista.")
         else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = Space.sm, vertical = Space.xs)) {
-            items(s.results, key = { it.id }) { song ->
-                SongRow(song.title, song.subtitle(), song.thumbnail, song.id == currentId, onClick = { play(song) }, onLongClick = { onHold(song) },
-                    modifier = Modifier.animateItem())
+            // Canciones, artistas, álbumes y listas mezclados, como en Spotify: lo que no es una canción se abre.
+            items(s.results, key = { it.id }) { item ->
+                when (item) {
+                    is SongItem -> SongRow(item.title, item.subtitle(), item.thumbnail, item.id == currentId, onClick = { play(item) }, onLongClick = { onHold(item) },
+                        modifier = Modifier.animateItem())
+                    else -> SongRow(item.title, kind(item), item.thumbnail, false, onClick = { onOpen(item) }, modifier = Modifier.animateItem(), round = item is ArtistItem)
+                }
             }
         }
     }
+}
+
+private fun kind(item: YTItem) = when (item) {
+    is ArtistItem -> "Artista"
+    is AlbumItem -> listOfNotNull("Álbum", item.artists?.joinToString { it.name }?.ifEmpty { null }, item.year?.toString()).joinToString(" · ")
+    is PlaylistItem -> listOfNotNull("Lista", item.author?.name).joinToString(" · ")
+    else -> ""
 }
 
 /** La cabecera de una página: atrás, la carátula, el nombre, una línea de datos y los botones. */

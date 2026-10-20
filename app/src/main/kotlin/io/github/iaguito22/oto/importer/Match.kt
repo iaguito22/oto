@@ -9,6 +9,21 @@ import kotlin.math.abs
 /** Una canción tal y como la da Spotify: lo justo para encontrarla en YouTube Music. */
 data class SourceTrack(val title: String, val artists: List<String>, val album: String?, val durationMs: Long?)
 
+/**
+ * La misma canción aunque llegue con otro id: «Canción (Official Video)» de «Artista» y «Canción» de «Artista, Otro».
+ * La radio y la búsqueda la usan para no repetir.
+ */
+fun songKey(title: String, artist: String): String {
+    val a = Matcher.norm(artist.substringBefore(',').substringBefore(" & "))
+    var t = title.replace(VIDEO_TAGS, "")
+    // Los vídeos suelen llamarse «Artista - Canción».
+    val dash = t.indexOf(" - ")
+    if (dash > 0 && Matcher.norm(t.substring(0, dash)).let { it.isNotEmpty() && (a.contains(it) || it.contains(a)) }) t = t.substring(dash + 3)
+    return Matcher.norm(t) + "|" + a
+}
+
+private val VIDEO_TAGS = Regex("""\s*[(\[][^)\]]*\b(official|oficial|video|vídeo|audio|lyrics?|letra|visuali[sz]er|mv)\b[^)\]]*[)\]]""", RegexOption.IGNORE_CASE)
+
 /** Lo que salió al buscarla: la mejor y su nota (0–1), o null si nada pasó el corte. */
 data class Match(val song: SongItem, val score: Float)
 

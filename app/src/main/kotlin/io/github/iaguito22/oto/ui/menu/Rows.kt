@@ -62,6 +62,7 @@ fun SongRow(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    round: Boolean = false,
 ) {
     val c = Oto.colors
     Row(
@@ -77,7 +78,7 @@ fun SongRow(
             .padding(horizontal = Space.sm, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Art(artwork, 44.dp, Radius.sm)
+        Art(artwork, 44.dp, if (round) 44.dp else Radius.sm)
         Spacer(Modifier.width(Space.md))
         Column(Modifier.weight(1f)) {
             Text(title, style = OtoType.rowTitle, color = if (current) c.accent else c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)

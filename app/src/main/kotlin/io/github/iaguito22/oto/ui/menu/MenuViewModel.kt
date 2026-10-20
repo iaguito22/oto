@@ -42,7 +42,7 @@ sealed interface Page {
 data class MenuState(
     val query: String = "",
     val searching: Boolean = false,
-    val results: List<SongItem> = emptyList(),
+    val results: List<YTItem> = emptyList(),
     val searchError: String? = null,
     val shelves: List<Shelf>? = null,
     val homeError: String? = null,
@@ -53,6 +53,9 @@ data class MenuState(
 class MenuViewModel : ViewModel() {
     private val _state = MutableStateFlow(MenuState())
     val state: StateFlow<MenuState> = _state.asStateFlow()
+
+    /** Lo tuyo, para ordenar lo que sale al buscar. Lo pone el Menú desde Prefs. */
+    @Volatile var taste = Taste()
 
     init {
         loadHome()
@@ -129,10 +132,10 @@ class MenuViewModel : ViewModel() {
 
     private suspend fun search(q: String) {
         _state.update { it.copy(searching = true, searchError = null) }
-        val result = withContext(Dispatchers.IO) { YouTube.search(q, YouTube.SearchFilter.FILTER_SONG) }
+        val result = withContext(Dispatchers.IO) { Search.run(q, taste) }
         if (_state.value.query.trim() != q) return
         result
-            .onSuccess { r -> _state.update { it.copy(searching = false, results = r.items.filterIsInstance<SongItem>().distinctBy { it.id }) } }
+            .onSuccess { r -> _state.update { it.copy(searching = false, results = r) } }
             .onFailure { e -> _state.update { it.copy(searching = false, searchError = e.message ?: e::class.simpleName) } }
     }
 

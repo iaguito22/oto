@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="oto_base">#0B0B0B</color>
+    <!-- El gris de los iconos temáticos de Nothing. -->
+    <color name="oto_icon">#252525</color>
 </resources>
