@@ -49,6 +49,7 @@ private val DATA_SAVER = booleanPreferencesKey("data_saver")
 private val LOOP = booleanPreferencesKey("loop")
 private val CROSSFADE = intPreferencesKey("crossfade")
 private val ROMANIZE = booleanPreferencesKey("romanize")
+private val DROP_STYLE = stringPreferencesKey("drop_style")
 private val DOWNLOAD_LISTS = stringSetPreferencesKey("download_lists")
 private val DOWNLOAD_SONGS = stringPreferencesKey("download_songs")
 
@@ -78,6 +79,9 @@ data class LocalPlaylist(val id: String, val name: String, val songs: List<Heard
  * duda, antes fluida que alta. Máxima: siempre la mejor, aunque tarde más en empezar.
  */
 enum class QualityMode { Auto, Max }
+
+/** Cómo se ve la gota: un aro fino del color de acento, como la huella de los Nothing, o la gota líquida. */
+enum class DropStyle { Ring, Liquid }
 
 /** Lo que la app recuerda entre sesiones. */
 class Prefs(private val context: Context) {
@@ -117,7 +121,6 @@ class Prefs(private val context: Context) {
         context.store.edit { it[SHUFFLE] = on }
     }
 
-    /** Una lista que acaba vuelve a empezar; si no, siguen canciones parecidas (como la reproducción automática). */
     /** Segundos de fundido entre canciones (0: sin fundido). Ver [io.github.iaguito22.oto.playback.Crossfade]. */
     val crossfade: Flow<Int> = context.store.data.map { it[CROSSFADE] ?: DEFAULT_CROSSFADE }.distinctUntilChanged()
 
@@ -125,6 +128,7 @@ class Prefs(private val context: Context) {
         context.store.edit { it[CROSSFADE] = seconds }
     }
 
+    /** Una lista que acaba vuelve a empezar; si no, siguen canciones parecidas (como la reproducción automática). */
     val loop: Flow<Boolean> = context.store.data.map { it[LOOP] ?: false }.distinctUntilChanged()
 
     suspend fun setLoop(on: Boolean) {
@@ -136,6 +140,15 @@ class Prefs(private val context: Context) {
 
     suspend fun setRomanize(on: Boolean) {
         context.store.edit { it[ROMANIZE] = on }
+    }
+
+    /** Ver [DropStyle]. Lo que viene puesto es el aro: con él la pantalla queda más limpia. */
+    val dropStyle: Flow<DropStyle> = context.store.data
+        .map { p -> DropStyle.entries.firstOrNull { it.name == p[DROP_STYLE] } ?: DropStyle.Ring }
+        .distinctUntilChanged()
+
+    suspend fun setDropStyle(style: DropStyle) {
+        context.store.edit { it[DROP_STYLE] = style.name }
     }
 
     // ---- Descargas (ver Downloads): lo que pediste tener sin conexión ----

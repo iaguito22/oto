@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -40,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.iaguito22.oto.R
 import io.github.iaguito22.oto.playback.PlayerConnection
@@ -103,7 +105,11 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
                 ShuffleButton()
             }
         }
-        OutputChip(Modifier.padding(start = Space.lg, bottom = Space.sm))
+        Row(Modifier.padding(start = Space.lg, end = Space.lg, bottom = Space.sm), verticalAlignment = Alignment.CenterVertically) {
+            OutputChip()
+            Spacer(Modifier.weight(1f))
+            if (queue.isNotEmpty()) Text("Desliza para quitar", style = OtoType.label.copy(fontSize = 11.sp), color = Oto.colors.textFaint, maxLines = 1)
+        }
         if (queue.isEmpty()) {
             Empty(R.drawable.ic_queue_music, "No hay nada detrás", "Pon una canción y la radio irá llenando esto sola.")
         } else {
@@ -164,7 +170,7 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
                 }
                 item(key = "hint") {
                     Text(
-                        "Mantén una canción para moverla; deslízala a un lado para quitarla.",
+                        "Mantén una canción para moverla.",
                         style = OtoType.rowSub, color = Oto.colors.textFaint,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.lg),
                     )

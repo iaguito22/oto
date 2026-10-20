@@ -114,6 +114,7 @@ import coil3.compose.AsyncImage
 import coil3.imageLoader
 import coil3.request.ImageRequest
 import coil3.toBitmap
+import io.github.iaguito22.oto.DropStyle
 import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.ui.menu.Floating
@@ -232,6 +233,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
     }
 
     PrefetchArtwork(connection)
+    val dropStyle by app.prefs.dropStyle.collectAsStateWithLifecycle(initialValue = null)
 
     val onGesture: (Gesture) -> Unit = { g ->
         if (tutorial.active) {
@@ -270,7 +272,8 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
         Drop(
             state = drop,
             playing = np.playing,
-            accent = c.accent,
+            style = dropStyle ?: DropStyle.Ring,
+            accent = { c.accent },
             visible = { if (sheet.isOpen) 1f - (sheet.morph.value / 0.06f).coerceIn(0f, 1f) else 1f },
             onCue = { g, hold ->
                 cue = when (g) {

@@ -19,6 +19,7 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.cache.ContentMetadata
 import androidx.media3.datasource.cache.ContentMetadataMutations
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -52,6 +53,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -80,9 +82,13 @@ class PlaybackService : MediaSessionService() {
     // La calidad de cada canción que suena o va a sonar: se decide al empezar a cargarla y ya no cambia (ver [Tier]).
     private val tiers = ConcurrentHashMap<String, Tier>()
     @Volatile private var mode = QualityMode.Auto
+    private var saver = false
     // La que suena, para [WholeSongLoadControl] (que pregunta desde el hilo de reproducción).
     @Volatile private var playingIndex = 0
     private var stallJob: Job? = null
+    private var prefetchJob: Job? = null
+    @Volatile private var writer: CacheWriter? = null
+    private var prefetched = emptyList<String>()
     private val loudness = ConcurrentHashMap<String, Double>()
     private val tracking = ConcurrentHashMap<String, String>()
     private var historyJob: Job? = null
@@ -152,6 +158,7 @@ class PlaybackService : MediaSessionService() {
         }
 
         scope.launch { prefs.quality.collect { mode = it } }
+        scope.launch { prefs.dataSaver.collect { saver = it } }
         scope.launch { prefs.crossfade.collect { fadeMs = it * 1000L } }
 
         // El corazón de la notificación sigue a Prefs: lo cambie quien lo cambie, aquí se ve.
@@ -173,6 +180,7 @@ class PlaybackService : MediaSessionService() {
     override fun onDestroy() {
         connectivity.unregisterNetworkCallback(networkCallback)
         scope.cancel()
+        writer?.cancel()
         crossfade.release()
         session.release()
         player.release()
@@ -266,6 +274,42 @@ class PlaybackService : MediaSessionService() {
             expectedGeneration = generation,
         )
         return keyed.withResolvedStream(resolved)
+    }
+
+    /**
+     * El principio de las [AHEAD] siguientes (y su URL), ya en la caché: así pasar una o dos seguidas no se queda
+     * cargando. ExoPlayer solo baja la siguiente, y no hasta acabar con la que suena. Con ahorro de datos y datos
+     * móviles, solo la siguiente.
+     */
+    private fun prefetch() {
+        val at = player.currentMediaItemIndex
+        val ahead = if (saver && connectivity.isActiveNetworkMetered) 1 else AHEAD
+        val ids = (at + 1..min(at + ahead, player.mediaItemCount - 1)).map { player.getMediaItemAt(it).mediaId }
+        if (ids == prefetched && prefetchJob?.isActive == true) return
+        prefetched = ids
+        prefetchJob?.cancel()
+        writer?.cancel()
+        if (ids.isEmpty()) return
+        prefetchJob = scope.launch(Dispatchers.IO) {
+            // Primero, que arranque la que suena.
+            delay(PREFETCH_DELAY_MS)
+            for (id in ids) {
+                if (!isActive) return@launch
+                if (app.downloads.has(id)) continue
+                runCatching {
+                    val spec = resolve(DataSpec.Builder().setUri(id).setKey(id).setLength(HEAD_BYTES).build())
+                    // Sin URL nueva: ya estaba entera en la caché.
+                    if (spec.uri.toString() == id) return@runCatching
+                    CacheWriter(headSource.createDataSource(), spec, null, null).also { writer = it }.cache()
+                }.onFailure { Timber.w(it, "precarga %s", id) }
+            }
+            writer = null
+        }
+    }
+
+    // Lo mismo que suena, sin resolver (eso ya lo hace [prefetch]) ni lo descargado: solo para escribir en la caché.
+    private val headSource by lazy {
+        CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory { ChunkedDataSource(OkHttpDataSource.Factory(AUDIO_HTTP).createDataSource()) }
     }
 
     private fun isWhole(cacheKey: String): Boolean {
@@ -560,6 +604,7 @@ class PlaybackService : MediaSessionService() {
             topUpRadio()
             autoplay()
             topUpDj()
+            prefetch()
             countInHistory(id)
             showLike()
             scope.launch(Dispatchers.IO) { prefs.addHeard(mediaItem.toHeard()) }
@@ -574,6 +619,7 @@ class PlaybackService : MediaSessionService() {
         // Quitar o mover canciones de la cola cambia el índice de la que suena sin pasar a otra.
         override fun onTimelineChanged(timeline: Timeline, reason: Int) {
             playingIndex = player.currentMediaItemIndex
+            prefetch()
         }
 
         override fun onPlaybackStateChanged(state: Int) {
@@ -657,6 +703,10 @@ class PlaybackService : MediaSessionService() {
         const val HEARD_MS = 30_000L
         const val STALL_MS = 6_000L
         const val STARTED_MS = 1_000L
+        const val AHEAD = 3
+        const val PREFETCH_DELAY_MS = 4_000L
+        // Un trozo ([ChunkedDataSource]): casi un minuto en alta, de sobra para que empiece al momento.
+        const val HEAD_BYTES = ChunkedDataSource.CHUNK_BYTES
         const val DJ_KIND = "oto_dj"
         val LIKE = SessionCommand("io.github.iaguito22.oto.LIKE", Bundle.EMPTY)
         val DJ = SessionCommand(DJ_COMMAND, Bundle.EMPTY)

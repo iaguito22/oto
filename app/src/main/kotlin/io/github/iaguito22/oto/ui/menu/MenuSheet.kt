@@ -104,6 +104,7 @@ import io.github.iaguito22.oto.Heard
 import androidx.media3.exoplayer.offline.Download
 import io.github.iaguito22.oto.LIKED_ID
 import io.github.iaguito22.oto.CROSSFADE_CHOICES
+import io.github.iaguito22.oto.DropStyle
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.QualityMode
 import io.github.iaguito22.oto.Storage
@@ -892,6 +893,117 @@ private fun SortRow(newest: Boolean, onFlip: () -> Unit) {
     }
 }
 
+/** Aleatorio y bucle: los mismos que los botones de las listas; valen ya para lo que suene. */
+@Composable
+private fun PlaybackSettings(app: OtoApp) {
+    val shuffle by app.player.shuffle.collectAsStateWithLifecycle()
+    val loop by app.player.loop.collectAsStateWithLifecycle()
+    ToggleRow(R.drawable.ic_shuffle, "Aleatorio", "Lo que pongas suena mezclado. También con el botón junto a «Reproducir».", shuffle) {
+        app.player.setShuffle(!shuffle)
+    }
+    ToggleRow(
+        R.drawable.ic_repeat, "Repetir la lista",
+        if (loop) "Al acabar, la lista vuelve a empezar." else "Al acabar la lista, siguen canciones parecidas.", loop,
+    ) { app.player.setLoop(!loop) }
+}
+
+/** Cómo se ve la pantalla de lo que suena: la gota, el tiempo y la letra. */
+@Composable
+private fun ScreenSettings(prefs: Prefs) {
+    val scope = rememberCoroutineScope()
+    val style by prefs.dropStyle.collectAsStateWithLifecycle(initialValue = null)
+    val remaining by prefs.showRemaining.collectAsStateWithLifecycle(initialValue = null)
+    val romanize by prefs.romanize.collectAsStateWithLifecycle(initialValue = null)
+    val s = style ?: return
+    ChoiceRow(
+        R.drawable.ic_ring, "Gota",
+        if (s == DropStyle.Ring) "Un aro fino del color de la canción. Lo más limpio." else "La gota líquida, que se estira al llevarla y late con la música.",
+        listOf("Aro", "Líquida"), DropStyle.entries.indexOf(s), 86.dp,
+    ) { scope.launch { prefs.setDropStyle(DropStyle.entries[it]) } }
+    val r = remaining ?: return
+    ToggleRow(R.drawable.ic_timer, "Tiempo que falta", if (r) "A la derecha de la barra, lo que falta (-1:23)." else "A la derecha de la barra, lo que dura (3:45).", r) {
+        scope.launch { prefs.setShowRemaining(!r) }
+    }
+    val rom = romanize ?: return
+    ToggleRow(R.drawable.ic_translate, "Romanización", "La letra en japonés, coreano o chino lleva debajo cómo se lee. También manteniendo la letra.", rom) {
+        scope.launch { prefs.setRomanize(!rom) }
+    }
+}
+
+/** Un ajuste de sí o no: toda la fila se toca. */
+@Composable
+private fun ToggleRow(icon: Int, title: String, body: String, on: Boolean, onToggle: () -> Unit) {
+    val c = Oto.colors
+    val haptics = LocalHapticFeedback.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.lg))
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text)) {
+                haptics.performHapticFeedback(if (on) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn)
+                onToggle()
+            }
+            .padding(horizontal = Space.md, vertical = Space.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SettingIcon(icon)
+        Spacer(Modifier.width(Space.md))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = OtoType.rowTitle, color = c.text)
+            AnimatedContent(body, transitionSpec = { fadeIn(tween(Motion.EFFECTS, delayMillis = 40)) togetherWith fadeOut(tween(Motion.EFFECTS_FAST)) }, label = "toggleBody") {
+                Text(it, style = OtoType.rowSub, color = c.textMuted)
+            }
+        }
+        Spacer(Modifier.width(Space.md))
+        Check(on)
+    }
+}
+
+/** Un ajuste con varias opciones: debajo de la explicación, un selector cuyo indicador se desliza a lo elegido. */
+@Composable
+private fun ChoiceRow(icon: Int, title: String, body: String, options: List<String>, selected: Int, width: Dp, onSelect: (Int) -> Unit) {
+    val c = Oto.colors
+    val haptics = LocalHapticFeedback.current
+    val at by animateFloatAsState(selected.toFloat(), spring(dampingRatio = 0.8f, stiffness = 500f), label = "choice")
+    Row(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.md)) {
+        SettingIcon(icon)
+        Spacer(Modifier.width(Space.md))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = OtoType.rowTitle, color = c.text)
+            AnimatedContent(body, transitionSpec = { fadeIn(tween(Motion.EFFECTS, delayMillis = 40)) togetherWith fadeOut(tween(Motion.EFFECTS_FAST)) }, label = "choiceBody") {
+                Text(it, style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.padding(top = 2.dp, bottom = Space.sm))
+            }
+            Row(
+                Modifier
+                    .height(36.dp)
+                    .clip(CircleShape)
+                    .background(c.field)
+                    .drawBehind {
+                        val w = size.width / options.size
+                        drawRoundRect(c.accent.copy(alpha = 0.22f), Offset(w * at + 3.dp.toPx(), 3.dp.toPx()), Size(w - 6.dp.toPx(), size.height - 6.dp.toPx()), CornerRadius(size.height))
+                    },
+            ) {
+                options.forEachIndexed { i, label ->
+                    Box(
+                        Modifier
+                            .width(width)
+                            .height(36.dp)
+                            .clip(CircleShape)
+                            .clickable(remember { MutableInteractionSource() }, null) {
+                                if (i != selected) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                onSelect(i)
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        val fg by animateColorAsState(if (i == selected) c.text else c.textMuted, tween(Motion.EFFECTS), label = "choiceFg")
+                        Text(label, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = fg)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () -> Unit, onAccount: () -> Unit) {
     val c = Oto.colors
@@ -916,13 +1028,16 @@ private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () ->
             SettingRow(R.drawable.ic_playlist_add, "Importar de Spotify", importSummary(state), onImport)
             AudioSettings(app.prefs)
             CrossfadeRow(app.prefs)
+            PlaybackSettings(app)
+            ScreenSettings(app.prefs)
             SpaceRow(app)
             SettingRow(R.drawable.ic_swipe_up, "Ver los gestos otra vez", "El tutorial del principio", onTutorial)
+            // Al final de todo, no fijo debajo de los ajustes.
+            Text(
+                "Oto ${BuildConfig.VERSION_NAME} · GPL-3.0\nCon InnerTubeX y partes de Metrolist.\nLetras de lyricsplus, NetEase, LRCLIB y YouTube Music.\ngithub.com/iaguito22/oto",
+                style = OtoType.rowSub, color = c.textFaint, modifier = Modifier.padding(start = Space.md, end = Space.md, top = Space.lg, bottom = Space.lg),
+            )
         }
-        Text(
-            "Oto ${BuildConfig.VERSION_NAME} · GPL-3.0\nCon InnerTubeX y partes de Metrolist.\nLetras de lyricsplus, NetEase, LRCLIB y YouTube Music.\ngithub.com/iaguito22/oto",
-            style = OtoType.rowSub, color = c.textFaint, modifier = Modifier.padding(Space.md),
-        )
     }
 }
 

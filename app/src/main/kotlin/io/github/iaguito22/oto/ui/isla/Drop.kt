@@ -19,6 +19,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -29,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import io.github.iaguito22.oto.DropStyle
 import io.github.iaguito22.oto.playback.AudioLevels
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -127,7 +129,8 @@ private fun directionOf(dx: Float, dy: Float, threshold: Float): Gesture? = when
 fun Drop(
     state: DropState,
     playing: Boolean,
-    accent: Color,
+    style: DropStyle,
+    accent: () -> Color,
     visible: () -> Float,
     onCue: (Gesture?, hold: Boolean) -> Unit,
     onGesture: (Gesture) -> Unit,
@@ -175,6 +178,9 @@ fun Drop(
             val threshold = 52.dp.toPx()
             val kxIn = 92.dp.toPx(); val kxOut = 108.dp.toPx()
             val kyIn = 58.dp.toPx(); val kyOut = 68.dp.toPx()
+            val ring = 38.dp.toPx()
+            val ringBeat = 2.4.dp.toPx()
+            val ringStroke = 3.dp.toPx()
         } }
     }
 
@@ -186,6 +192,18 @@ fun Drop(
             val cx = size.width / 2
             val cy = size.height / 2
             val s = state.press
+            if (style == DropStyle.Ring) {
+                // La huella: solo un aro. Va algo menos que el dedo (se nota que se lleva, sin despegarse de su sitio),
+                // late con el bombo y al pulsarlo crece y se afina un poco.
+                drawCircle(
+                    accent(),
+                    radius = (px.ring + px.ringBeat * state.pulse) * s,
+                    center = Offset(cx + state.px * 0.62f, cy + state.py * 0.62f),
+                    alpha = state.alpha * v,
+                    style = Stroke(px.ringStroke * (2f - s)),
+                )
+                return@drawBehind
+            }
             val wx = sin(state.phase * 1.6f) * px.wobbleX * state.wobble
             val wy = cos(state.phase * 1.3f) * px.wobbleY * state.wobble
             shader.setFloatUniform("b0", cx + state.px * 0.16f, cy + state.py * 0.16f, (px.body + px.bodyBeat * state.pulse) * s)
@@ -195,8 +213,9 @@ fun Drop(
             shader.setFloatUniform("soft", px.soft)
             shader.setFloatUniform("shadowY", px.shadow)
             shader.setFloatUniform("alpha", state.alpha * v)
-            shader.setColorUniform("body", lerp(BodyBase, accent, 0.26f).toArgb())
-            shader.setColorUniform("bright", lerp(Color.White, accent, 0.82f).toArgb())
+            val a = accent()
+            shader.setColorUniform("body", lerp(BodyBase, a, 0.26f).toArgb())
+            shader.setColorUniform("bright", lerp(Color.White, a, 0.82f).toArgb())
             drawRect(brush, Offset(0f, -px.bleed), Size(size.width, size.height + 2 * px.bleed))
         }
         .pointerInput(state) {

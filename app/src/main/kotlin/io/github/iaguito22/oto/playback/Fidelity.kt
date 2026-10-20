@@ -50,10 +50,10 @@ fun chooseTier(c: Conditions, cachedHigh: Boolean): Tier = when {
     else -> Tier.Low
 }
 
-// La alta ronda los 150 kbps: con algo más del triple, una canción entera (que se baja de golpe, ver ChunkedDataSource)
-// llega en poco más de un minuto, muy por delante de lo que suena. Medido con un proxy lento: a ~330 kbps reales, una
-// de 2:40 en alta tardó ~60 s.
-const val AUTO_HIGH_BPS = 500_000L
+// La alta ronda los 150 kbps y se baja entera a trozos, a la velocidad de la red: con el doble ya llega muy por delante
+// de lo que suena. Antes pedía 500 kbps y en datos móviles bajaba a menudo sin hacer falta; si aun así una no arranca,
+// [PlaybackService] la pasa a baja antes de que empiece (y la precarga deja el principio ya bajado).
+const val AUTO_HIGH_BPS = 300_000L
 
 /**
  * Cuánto carga por delante: la que suena entera y la siguiente entera, en cuanto se puede (una canción son 2-6 MB),

@@ -6,6 +6,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,7 +33,7 @@ private val cache = LruCache<String, Color>(64)
 
 /** El acento de la carátula que suena, como en el tema de Spotify: cambia despacio de una canción a otra. */
 @Composable
-fun rememberAccent(artwork: String?): Color {
+fun rememberAccent(artwork: String?): State<Color> {
     val context = LocalContext.current
     var target by remember { mutableStateOf(artwork?.let(cache::get) ?: DefaultAccent) }
     LaunchedEffect(artwork) {
@@ -43,8 +44,7 @@ fun rememberAccent(artwork: String?): Color {
         target = cache.get(artwork) ?: withContext(Dispatchers.Default) { accentOf(context, artwork) }
             ?.also { cache.put(artwork, it) } ?: return@LaunchedEffect
     }
-    val color by animateColorAsState(target, tween(ACCENT_MS, easing = Motion.Standard), label = "accent")
-    return color
+    return animateColorAsState(target, tween(ACCENT_MS, easing = Motion.Standard), label = "accent")
 }
 
 private suspend fun accentOf(context: Context, artwork: String): Color? {
