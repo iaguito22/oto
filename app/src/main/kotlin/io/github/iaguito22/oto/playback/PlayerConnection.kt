@@ -218,6 +218,15 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     /** Mueve una de la cola a otro sitio ([from] y [to]: posiciones en la lista del reproductor, como [QueueEntry.index]). */
     fun move(from: Int, to: Int) = withController { if (from != to) it.moveMediaItem(from, to) }
 
+    /** Mueve [from] justo detrás de [after] (o de la que suena, si es null), o justo delante de [before]. */
+    fun place(from: Int, after: Int? = null, before: Int? = null) = withController {
+        val to = when {
+            before != null -> if (from < before) before - 1 else before
+            else -> (after ?: it.currentMediaItemIndex).let { a -> if (from < a) a else a + 1 }
+        }
+        if (from != to) it.moveMediaItem(from, to)
+    }
+
     /** Quita una de la cola, también de la lista que se rebaraja al tocar el aleatorio (si no, volvería). */
     fun remove(index: Int) = withController {
         if (index == it.currentMediaItemIndex) return@withController
@@ -231,8 +240,10 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
 
     fun toggle() = withController { if (it.isPlaying) it.pause() else it.play() }
     fun next() = withController { it.seekToNextMediaItem() }
-    /** Siempre a la anterior (la gota la enseña antes de soltar); sin anterior, al principio de esta. */
-    fun previous() = withController { if (it.hasPreviousMediaItem()) it.seekToPreviousMediaItem() else it.seekTo(0) }
+    /** A la anterior si esta acaba de empezar; si no (o no hay anterior), al principio de esta. Ver [restarts]. */
+    fun previous() = withController { if (restarts()) it.seekTo(0) else it.seekToPreviousMediaItem() }
+    /** Si «anterior» ahora volvería al principio de esta: pasados [RESTART_MS], o sin anterior. Barata, se lee en cada fotograma. */
+    fun restarts(): Boolean = controller?.let { it.currentPosition > RESTART_MS || !it.hasPreviousMediaItem() } ?: true
     fun seekTo(ms: Long) = withController { it.seekTo(ms) }
     fun skipTo(index: Int) = withController { it.seekToDefaultPosition(index) }
 
@@ -294,3 +305,6 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         )
     }
 }
+
+/** Pasado esto, «anterior» vuelve al principio de la que suena en vez de cambiar de canción. */
+private const val RESTART_MS = 3_000L

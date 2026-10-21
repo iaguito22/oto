@@ -281,7 +281,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
                 cue = when (g) {
                     // Con la siguiente o la anterior se dice cuál es, no solo «Siguiente».
                     Gesture.Next -> CueLabel(R.drawable.ic_skip_next, next.firstOrNull()?.title?.ifEmpty { null } ?: "Siguiente")
-                    Gesture.Previous -> CueLabel(R.drawable.ic_skip_previous, previous?.title?.ifEmpty { null } ?: "Desde el principio")
+                    Gesture.Previous -> CueLabel(R.drawable.ic_skip_previous, previous?.takeUnless { connection.restarts() }?.title?.ifEmpty { null } ?: "Desde el principio")
                     Gesture.Lyrics -> if (lyrics) CueLabel(R.drawable.ic_lyrics, "Carátula") else g.label(np.playing)
                     else -> g?.label(np.playing, hold)
                 }
@@ -434,7 +434,8 @@ private fun Stage(
                 ) {
                     // Al llevar la gota a un lado se asoma por ese lado la canción que vendría.
                     Peek(next.firstOrNull()?.artwork, side, drop, peekGate, toRight = true)
-                    Peek(previous?.artwork, side, drop, peekGate, toRight = false)
+                    // Pasados unos segundos «anterior» vuelve al principio de esta: entonces no se asoma nada.
+                    Peek(previous?.artwork, side, drop, peekGate, toRight = false, hidden = connection::restarts)
                     // La nueva sale de donde se asomaba (a su tamaño) y crece hasta el centro; la que se va se encoge
                     // hacia el otro lado. Con muelles: si se pasa otra vez a mitad, sigue desde donde va.
                     val from = with(density) { (screenW / 2 + side * PEEK_SCALE / 2 + 8.dp - PEEK_REVEAL).roundToPx() }
@@ -610,7 +611,7 @@ private class PeekGate {
 
 /** La carátula de al lado, escondida fuera de la pantalla hasta que la gota se lleva hacia su lado. */
 @Composable
-private fun Peek(artwork: String?, side: Dp, drop: DropState, gate: PeekGate, toRight: Boolean) {
+private fun Peek(artwork: String?, side: Dp, drop: DropState, gate: PeekGate, toRight: Boolean, hidden: () -> Boolean = { false }) {
     if (artwork == null) return
     val screen = LocalConfiguration.current.screenWidthDp.dp
     val peekSide = side * PEEK_SCALE
@@ -624,9 +625,9 @@ private fun Peek(artwork: String?, side: Dp, drop: DropState, gate: PeekGate, to
                 drop.frame
                 val sign = if (toRight) 1f else -1f
                 val f = (drop.lean * sign).coerceIn(0f, 1f)
-                val hidden = screen.toPx() / 2 + peekSide.toPx() / 2 + 8.dp.toPx()
-                translationX = sign * (hidden - PEEK_REVEAL.toPx() * f)
-                alpha = if (gate.muted(drop.lean)) 0f else (f * 2.5f).coerceIn(0f, 1f)
+                val away = screen.toPx() / 2 + peekSide.toPx() / 2 + 8.dp.toPx()
+                translationX = sign * (away - PEEK_REVEAL.toPx() * f)
+                alpha = if (gate.muted(drop.lean) || hidden()) 0f else (f * 2.5f).coerceIn(0f, 1f)
                 rotationZ = sign * 4f * (1f - f)
                 shape = RoundedCornerShape(24.dp)
                 clip = true

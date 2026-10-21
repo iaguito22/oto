@@ -115,16 +115,26 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
         } else {
             // Dónde empieza lo que no es de la lista: las parecidas del final o, en bucle, la vuelta al principio.
             val firstAuto = shown.indexOfFirst { it.auto }
-            // De la cola del reproductor y no de [shown]: mientras se arrastra, sus índices ya no van en orden. Las
-            // dos partes (hasta el final y la vuelta al principio) no se mezclan, así que la vuelta sigue en el mismo sitio.
+            // Dónde empieza, en bucle, la vuelta al principio (de la cola del reproductor: mientras se arrastra, sus
+            // índices ya no van en orden). Al arrastrar, el aviso hace de frontera: cruzarlo pasa la canción a la
+            // otra vuelta y el aviso se corre un sitio, en vez de que la cruce otra.
             val wrap = (1 until queue.size).firstOrNull { queue[it].index < queue[it - 1].index } ?: -1
+            var localWrap by remember { mutableStateOf<Int?>(null) }
+            LaunchedEffect(queue) { if (dragged == null) localWrap = null }
+            val border = localWrap ?: wrap
             val keys = remember(shown) { keysOf(shown) }
             val reorder = rememberReorderableLazyListState(listState) { from, to ->
                 val list = local ?: queue
-                val part = { i: Int -> wrap in 1..i }
-                if (to.key !is String || from.index !in list.indices || to.index !in list.indices || part(from.index) != part(to.index)) return@rememberReorderableLazyListState
+                if (to.key !is String || from.index !in list.indices || to.index !in list.indices) return@rememberReorderableLazyListState
+                val w = localWrap ?: wrap
+                val at = when {
+                    w < 1 -> to.index
+                    from.index < w && to.index >= w -> { localWrap = w - 1; w - 1 } // baja a la vuelta siguiente
+                    from.index >= w && to.index < w -> { localWrap = w + 1; w } // sube a esta vuelta
+                    else -> to.index
+                }
                 haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                local = list.toMutableList().apply { add(to.index, removeAt(from.index)) }
+                if (at != from.index) local = list.toMutableList().apply { add(at, removeAt(from.index)) }
             }
             LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
                 itemsIndexed(shown, key = { i, _ -> keys[i] }) { i, e ->
@@ -141,7 +151,7 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
                             },
                         ) {
                             if (i == firstAuto) Divider("Al acabar la lista, parecidas")
-                            if (i == wrap) Divider("Y vuelve a empezar")
+                            if (i == border) Divider("Y vuelve a empezar")
                             Removable(onRemove = { haptics.performHapticFeedback(HapticFeedbackType.Confirm); connection.remove(e.index) }) {
                                 SongRow(
                                     e.title, e.artist, e.artwork, current = false, onClick = { connection.skipTo(e.index); onClose() },
@@ -156,11 +166,21 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
                                             onDragStopped = {
                                                 // La canción pasa, en el reproductor, al sitio de la que ocupaba ese hueco al empezar.
                                                 val now = local
+                                                val w = (localWrap ?: wrap).let { if (it < 0) Int.MAX_VALUE else it }
                                                 dragged = null
                                                 val from = keysOf(queue).indexOf(key)
                                                 val to = now?.let { keysOf(it).indexOf(key) } ?: -1
-                                                if (from >= 0 && to >= 0 && from != to) connection.move(queue[from].index, queue[to].index)
-                                                else local = null
+                                                if (now != null && from >= 0 && to >= 0 && (from != to || localWrap != null && localWrap != wrap)) {
+                                                    // Se coloca junto a sus vecinas de la misma vuelta: detrás de la de
+                                                    // arriba (o de la que suena) en esta; delante de la de abajo en la siguiente.
+                                                    val real = queue[from].index
+                                                    when {
+                                                        to < w -> connection.place(real, after = now.getOrNull(to - 1)?.index)
+                                                        to + 1 < now.size -> connection.place(real, before = now[to + 1].index)
+                                                        to > w -> connection.place(real, after = now[to - 1].index)
+                                                        else -> connection.place(real, before = 0)
+                                                    }
+                                                } else { local = null; localWrap = null }
                                             },
                                         ),
                                 )
