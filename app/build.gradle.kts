@@ -18,8 +18,8 @@ android {
         // 33: RuntimeShader (AGSL) para la gota y RenderEffect para el desenfoque, sin caminos alternativos.
         minSdk = 33
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.1.2"
+        versionCode = 7
+        versionName = "1.1.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // La clave del PoToken va en local.properties (o en la variable de entorno), nunca en el repo.
