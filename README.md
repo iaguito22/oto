@@ -8,20 +8,6 @@ Reproductor de música para Android sobre YouTube Music, sin pestañas ni botone
   <img src="docs/latido.gif" width="260" alt="La carátula y el aro laten con los graves">
 </p>
 
-## Cómo se usa
-
-| Gesto con la gota | Qué hace |
-| --- | --- |
-| Tocar | Pausa o sigue |
-| A la derecha | Siguiente |
-| A la izquierda | La anterior |
-| Arriba | Tu música, Explorar y el buscador |
-| Abajo | La letra |
-| Mantener | La cola |
-| Doble toque en la carátula | Me gusta |
-
-La gota es un aro fino del color de la canción, o la gota líquida de antes (en Ajustes). Las dos laten con los graves, y la carátula también, un poco.
-
 <p align="center">
   <img src="docs/sonando.jpg" width="200" alt="Lo que suena">
   <img src="docs/colores.jpg" width="200" alt="El color de la carátula tiñe toda la pantalla">
