@@ -807,7 +807,7 @@ private fun Progress(np: NowPlaying, connection: PlayerConnection, modifier: Mod
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val prefs = (LocalContext.current.applicationContext as OtoApp).prefs
-    val remaining by prefs.showRemaining.collectAsStateWithLifecycle(initialValue = true)
+    val remaining by prefs.showRemaining.collectAsStateWithLifecycle(initialValue = false)
     val pos = remember { mutableLongStateOf(0L) }
     var drag by remember { mutableStateOf<Float?>(null) }
     val dur = np.durationMs

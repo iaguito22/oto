@@ -62,7 +62,7 @@ fun pinKey(list: LocalPlaylist) = list.folder?.let { "d:$it" } ?: list.id
 const val LIKED_ID = "liked"
 
 /** Lo que viene puesto: un fundido corto, que se note sin comerse los finales. */
-const val DEFAULT_CROSSFADE = 6
+const val DEFAULT_CROSSFADE = 3
 /** Lo que se puede elegir en Ajustes. */
 val CROSSFADE_CHOICES = listOf(0, 3, 6, 10)
 
@@ -94,7 +94,7 @@ class Prefs(private val context: Context) {
     }
 
     /** A la derecha de la barra: lo que falta (-1:23) o lo que dura (3:45). */
-    val showRemaining: Flow<Boolean> = context.store.data.map { it[REMAINING] ?: true }
+    val showRemaining: Flow<Boolean> = context.store.data.map { it[REMAINING] ?: false }
 
     suspend fun setShowRemaining(on: Boolean) {
         context.store.edit { it[REMAINING] = on }
