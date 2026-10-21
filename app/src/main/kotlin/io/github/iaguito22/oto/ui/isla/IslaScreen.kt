@@ -254,7 +254,8 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
             Gesture.Previous -> { haptics.performHapticFeedback(HapticFeedbackType.Confirm); connection.previous() }
             Gesture.Menu -> { menu.closeAll(); sheet.open(SheetKind.Menu) }
             Gesture.Queue -> sheet.open(SheetKind.Queue)
-            Gesture.Lyrics -> { haptics.performHapticFeedback(HapticFeedbackType.Confirm); lyrics = !lyrics }
+            // Sin canción no hay letra que abrir: así no se queda abierta a escondidas para la siguiente.
+            Gesture.Lyrics -> if (np.id != null) { haptics.performHapticFeedback(HapticFeedbackType.Confirm); lyrics = !lyrics }
         }
     }
 
@@ -412,7 +413,8 @@ private fun Stage(
             val side = minOf(maxWidth, 340.dp, (maxHeight - LYRICS_EXTRA).coerceAtLeast(COVER_MIN))
             // La letra ocupa el sitio de la carátula: cambiar a ella es como cambiar de carátula, no de pantalla.
             AnimatedContent(
-                targetState = lyrics,
+                // Sin nada sonando, la carátula vacía (音) aunque la letra se quedara abierta.
+                targetState = lyrics && np.id != null,
                 transitionSpec = {
                     val down = if (targetState) 1 else -1
                     (fadeIn(tween(Motion.EFFECTS, delayMillis = 50)) + scaleIn(spring(dampingRatio = 0.8f, stiffness = 300f), 0.94f) +
