@@ -3,7 +3,7 @@
 Reproductor de música para Android sobre YouTube Music, sin pestañas ni botones: una gota que se maneja con gestos.
 
 <p align="center">
-  <img src="docs/gota.gif" width="260" alt="La gota: se estira al llevarla, a los lados cambia de canción, arriba abre tu música">
+  <img src="docs/letra.gif" width="260" alt="La letra, palabra a palabra, con la gota debajo">
   &nbsp;&nbsp;
   <img src="docs/latido.gif" width="260" alt="La carátula y el aro laten con los graves">
 </p>
@@ -24,10 +24,12 @@ La gota es un aro fino del color de la canción, o la gota líquida de antes (en
 
 <p align="center">
   <img src="docs/sonando.jpg" width="200" alt="Lo que suena">
-  <img src="docs/letra.jpg" width="200" alt="La letra">
-  <img src="docs/library.jpg" width="200" alt="Tu música">
+  <img src="docs/colores.jpg" width="200" alt="El color de la carátula tiñe toda la pantalla">
+  <img src="docs/superpower.jpg" width="200" alt="Una canción desde la radio">
 </p>
 <p align="center">
+  <img src="docs/letra.jpg" width="200" alt="La letra">
+  <img src="docs/library.jpg" width="200" alt="Tu música">
   <img src="docs/explorar.jpg" width="200" alt="Explorar">
   <img src="docs/settings.jpg" width="200" alt="Ajustes">
 </p>
