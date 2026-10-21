@@ -16,7 +16,6 @@ Reproductor de música para Android sobre YouTube Music, sin pestañas ni botone
 <p align="center">
   <img src="docs/letra.jpg" width="200" alt="La letra">
   <img src="docs/library.jpg" width="200" alt="Tu música">
-  <img src="docs/explorar.jpg" width="200" alt="Explorar">
   <img src="docs/settings.jpg" width="200" alt="Ajustes">
 </p>
 
