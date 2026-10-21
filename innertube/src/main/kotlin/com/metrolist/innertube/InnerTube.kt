@@ -30,6 +30,11 @@ import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.utils.io.jvm.javaio.toByteReadChannel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.selects.onTimeout
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.ExperimentalSerializationApi
@@ -209,7 +214,7 @@ class InnerTube(
         params: String? = null,
         continuation: String? = null,
         setLogin: Boolean = false,
-    ) = innerTubeX.search(client, query, params, continuation, setLogin = setLogin)
+    ) = hedged { innerTubeX.search(client, query, params, continuation, setLogin = setLogin) }
 
     suspend fun player(
         client: YouTubeClient,
@@ -232,7 +237,38 @@ class InnerTube(
         params: String? = null,
         continuation: String? = null,
         setLogin: Boolean = false,
-    ) = innerTubeX.browse(client, browseId, params, continuation, setLogin)
+    ) = hedged { innerTubeX.browse(client, browseId, params, continuation, setLogin) }
+
+    /**
+     * Oto: YouTube contesta a veces una lectura (browse, search, next…: 1 de cada ~11, medido; también con curl y
+     * conexiones nuevas) con un 403 que tarda 5-10 s en llegar, cuando lo normal son 0,2-0,3 s y repetirla sale bien.
+     * Mientras no haya una respuesta buena, cada [HEDGE_MS] (o en cuanto falla una) sale otra igual, hasta
+     * [HEDGE_TRIES]; vale la primera que salga bien y las demás se cancelan. Si fallan todas, el error de la última.
+     */
+    private suspend fun <T> hedged(block: suspend () -> T): T = coroutineScope {
+        val pending = mutableListOf(async { runCatching { block() } })
+        var tries = 1
+        var last: Result<T>? = null
+        while (pending.isNotEmpty()) {
+            val done = select<Pair<Deferred<Result<T>>, Result<T>>?> {
+                pending.forEach { d -> d.onAwait { d to it } }
+                if (tries < HEDGE_TRIES) onTimeout(HEDGE_MS) { null }
+            }
+            if (done != null) {
+                pending -= done.first
+                if (done.second.isSuccess) {
+                    pending.forEach { it.cancel() }
+                    return@coroutineScope done.second.getOrThrow()
+                }
+                last = done.second
+            }
+            if (tries < HEDGE_TRIES) {
+                pending += async { runCatching { block() } }
+                tries++
+            }
+        }
+        last!!.getOrThrow()
+    }
 
     suspend fun next(
         client: YouTubeClient,
@@ -242,7 +278,7 @@ class InnerTube(
         index: Int?,
         params: String?,
         continuation: String? = null,
-    ) = innerTubeX.next(client, videoId, playlistId, playlistSetVideoId, index, params, continuation)
+    ) = hedged { innerTubeX.next(client, videoId, playlistId, playlistSetVideoId, index, params, continuation) }
 
     suspend fun feedback(
         client: YouTubeClient,
@@ -252,13 +288,13 @@ class InnerTube(
     suspend fun getSearchSuggestions(
         client: YouTubeClient,
         input: String,
-    ) = innerTubeX.getSearchSuggestions(client, input, setLogin = false)
+    ) = hedged { innerTubeX.getSearchSuggestions(client, input, setLogin = false) }
 
     suspend fun getQueue(
         client: YouTubeClient,
         videoIds: List<String>?,
         playlistId: String?,
-    ) = innerTubeX.getQueue(client, videoIds, playlistId)
+    ) = hedged { innerTubeX.getQueue(client, videoIds, playlistId) }
 
     suspend fun getTranscript(
         client: YouTubeClient,
@@ -530,3 +566,7 @@ class InnerTube(
 
 private const val ORIGIN = "https://music.youtube.com"
 private val CONTEXT_JSON = Json { encodeDefaults = true; explicitNulls = false }
+
+// Oto: lo que se espera a una lectura antes de pedirla otra vez a la vez, y cuántas como mucho (ver InnerTube.hedged).
+private const val HEDGE_MS = 1500L
+private const val HEDGE_TRIES = 3
