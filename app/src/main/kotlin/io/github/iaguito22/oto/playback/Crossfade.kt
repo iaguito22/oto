@@ -15,6 +15,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -85,7 +86,7 @@ class Crossfade(
         if (dur == C.TIME_UNSET || dur < fade * 3 || me == skipped) return IDLE_MS
         val at = dur - fade
         // [tail] arranca antes del fundido: lo que tarda en asentarse.
-        val from = at - SETTLE_MS
+        val from = at - SETTLE_MS - ALIGN_BUDGET_MS
         val left = from - pos
         if (preparedFor != null && preparedFor != me) stopTail()
         if (left > PREPARE_MS) return (left - PREPARE_MS).coerceIn(50, IDLE_MS)
@@ -124,14 +125,18 @@ class Crossfade(
         t.play()
         // Sonando callado hasta que su posición es la de verdad. Pausar o pasar de canción mientras, lo cancela.
         val asked = System.nanoTime()
+        fun cancelled() = !player.playWhenReady || player.currentMediaItemIndex != index || t.playerError != null
         while (System.nanoTime() - asked < SETTLE_MS * 1_000_000L) {
-            if (!player.playWhenReady || player.currentMediaItemIndex != index || t.playerError != null) { stopTail(); return }
+            if (cancelled()) { stopTail(); return }
             delay(FRAME_MS)
         }
         val drift = player.currentPosition - t.currentPosition
         // Lo que tardó en sonar, para la próxima vez (sin pasarse: un tirón puntual no lo descoloca).
         lead = (lead + drift * 7 / 10).coerceIn(0, 1000)
-        Timber.d("fundido: relevo con %d ms de desfase, adelanto %d ms", drift, lead)
+        // Y para esta: nunca arranca clavada (en un Nothing Phone (2), hasta 90 ms por delante), y pasar el sonido con ese desfase se
+        // oía como un corte. Callada, se la acelera o se la frena un poco hasta que va a la par.
+        val aligned = align(t, index) ?: return
+        Timber.d("fundido: desfase %d ms → %d ms, adelanto %d ms", drift, aligned, lead)
         // El paso de uno a otro: la misma música, así que lineal (a mitad suman lo mismo que una).
         val swap = System.nanoTime()
         while (true) {
@@ -161,6 +166,33 @@ class Crossfade(
         stopTail()
     }
 
+    /**
+     * Ajusta la velocidad de [t] (callada) hasta que va a la par de [player]. Devuelve el desfase que queda, o null si
+     * se canceló. La posición ya tiene en cuenta la velocidad, así que se puede ir mirando mientras.
+     */
+    private suspend fun align(t: ExoPlayer, index: Int): Long? {
+        val until = System.nanoTime() + ALIGN_MS * 1_000_000L
+        var good = 0
+        var drift = player.currentPosition - t.currentPosition
+        while (System.nanoTime() < until) {
+            if (!player.playWhenReady || player.currentMediaItemIndex != index || t.playerError != null) {
+                t.setPlaybackSpeed(1f); stopTail(); return null
+            }
+            drift = player.currentPosition - t.currentPosition
+            if (abs(drift) <= ALIGNED_MS) {
+                if (t.playbackParameters.speed != 1f) t.setPlaybackSpeed(1f)
+                if (++good >= 4) break
+            } else {
+                good = 0
+                // Proporcional: 100 ms de desfase → un 10 %, que se nota poco y lo corrige en menos de un segundo.
+                t.setPlaybackSpeed(1f + (drift / 1000f).coerceIn(-MAX_NUDGE, MAX_NUDGE))
+            }
+            delay(FRAME_MS)
+        }
+        t.setPlaybackSpeed(1f)
+        return drift
+    }
+
     private fun stopTail() {
         preparedFor = null
         val t = tail ?: return
@@ -185,6 +217,12 @@ class Crossfade(
         const val NEXT_READY_MS = 3_000L
         // Cuánto suena [tail] callado antes del relevo, y lo que dura el relevo.
         const val SETTLE_MS = 600L
+        // Lo que suele tardar en ponerse a la par: así el fundido sigue empezando más o menos donde tocaba.
+        const val ALIGN_BUDGET_MS = 600L
         const val SWAP_MS = 80L
+        // Cuánto se le da para ponerse a la par, cuánto desfase se acepta y cuánto se la puede acelerar o frenar.
+        const val ALIGN_MS = 2_000L
+        const val ALIGNED_MS = 6L
+        const val MAX_NUDGE = 0.12f
     }
 }

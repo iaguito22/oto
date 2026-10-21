@@ -19,6 +19,10 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -68,8 +72,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.R
 import kotlinx.coroutines.launch
-import androidx.compose.ui.layout.onPlaced
-import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextLayoutResult
@@ -258,74 +260,67 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
     }
     val active by remember(rows) { derivedStateOf { val t = clock.ms; rows.indexOfLast { it.start <= t } } }
 
-    val scroll = rememberScrollState()
-    val tops = remember(rows) { FloatArray(rows.size) }
-    val dragged by scroll.interactionSource.collectIsDraggedAsState()
+    // Perezosa: solo se componen las líneas que se ven. Componerlas todas (cada palabra, un texto) al abrir la letra
+    // o al cambiar de canción con ella abierta costaba dos fotogramas de 70-80 ms. La primera visible es la que suena:
+    // con el relleno de arriba, eso la deja ya en el ancla.
+    val list = remember(rows) { LazyListState(active.coerceAtLeast(0)) }
+    val dragged by list.interactionSource.collectIsDraggedAsState()
     var userAt by remember { mutableLongStateOf(0L) }
     LaunchedEffect(dragged) { if (dragged) userAt = System.currentTimeMillis() }
-    var placed by remember(rows) { mutableStateOf(false) }
+    // Cuánto falta para que la fila [i] llegue al ancla (null si no está a la vista).
+    fun toAnchor(i: Int): Float? = list.layoutInfo.visibleItemsInfo.firstOrNull { it.index == i }?.offset?.toFloat()
 
-    // Seguir a la línea activa: easeOutQuart de 620 ms (como en Spotify). El destino se recalcula en cada fotograma
+    // Seguir a la línea activa: easeOutQuart de 620 ms (como en Spotify). Lo que falta se mide en cada fotograma
     // porque una pausa que se abre o se cierra mueve las líneas mientras tanto. Tras arrastrar a mano, 2,5 s de calma.
-    LaunchedEffect(active, dragged, userAt, placed) {
-        if (dragged || !placed) return@LaunchedEffect
+    LaunchedEffect(active, dragged, userAt) {
+        if (dragged) return@LaunchedEffect
         val wait = userAt + USER_HOLD_MS - System.currentTimeMillis()
         if (wait > 0) delay(wait)
         val i = active.coerceAtLeast(0)
-        // El relleno de arriba mide lo mismo que el ancla: con la línea en tops[i], scroll = tops[i] la deja en el ancla.
-        fun target() = tops.getOrElse(i) { 0f }.coerceIn(0f, scroll.maxValue.toFloat())
-        val from = scroll.value.toFloat()
-        if (abs(target() - from) < 1f) return@LaunchedEffect
+        // Lejos (se arrastró mucho, o un salto): directamente a su sitio.
+        if (toAnchor(i) == null) { list.scrollToItem(i); return@LaunchedEffect }
+        if (abs(toAnchor(i)!!) < 1f) return@LaunchedEffect
+        var moved = 0f
         runCatching {
-            val p = Animatable(0f)
-            p.animateTo(1f, tween(SCROLL_MS, easing = EaseOutQuart)) { scroll.dispatchRawDelta(lerp(from, target(), value) - scroll.value) }
+            Animatable(0f).animateTo(1f, tween(SCROLL_MS, easing = EaseOutQuart)) {
+                val left = toAnchor(i) ?: return@animateTo
+                // Del camino entero (lo hecho más lo que falta), donde debería estar ya.
+                val step = left - (1 - value) * (moved + left)
+                moved += list.dispatchRawDelta(step)
+            }
         }
     }
     // Quitar o poner la romanización cambia el alto de todas mientras se despliega o se pliega: la que suena se queda
     // quieta en el ancla todo ese rato, y lo demás se mueve a su alrededor.
     LaunchedEffect(romanize) {
-        if (!placed || dragged || System.currentTimeMillis() - userAt < USER_HOLD_MS) return@LaunchedEffect
+        if (dragged || System.currentTimeMillis() - userAt < USER_HOLD_MS) return@LaunchedEffect
         val end = System.nanoTime() + (ROM_MS + 80) * 1_000_000L
         while (System.nanoTime() < end) withFrameNanos {
-            val i = active.coerceAtLeast(0)
-            scroll.dispatchRawDelta(tops.getOrElse(i) { 0f }.coerceIn(0f, scroll.maxValue.toFloat()) - scroll.value)
+            toAnchor(active.coerceAtLeast(0))?.let { list.dispatchRawDelta(it) }
         }
     }
-    // Al abrirse, ya en su sitio.
-    LaunchedEffect(placed) {
-        if (!placed) return@LaunchedEffect
-        val i = active.coerceAtLeast(0)
-        scroll.scrollTo(tops.getOrElse(i) { 0f }.coerceIn(0f, scroll.maxValue.toFloat()).toInt())
-    }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(scroll)
-            .padding(start = EDGE, end = EDGE, top = height * ANCHOR, bottom = height * (1 - ANCHOR)),
+    // Al abrirse, las líneas suben en cascada desde la activa; las que aparecen después al desplazarse, ya en su sitio.
+    val firstActive = remember(rows) { active }
+    val openedAt = remember(rows) { System.nanoTime() }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        state = list,
+        contentPadding = PaddingValues(start = EDGE, end = EDGE, top = height * ANCHOR, bottom = height * (1 - ANCHOR)),
     ) {
-        val firstActive = remember(rows) { active }
-        rows.forEachIndexed { i, row ->
+        itemsIndexed(rows) { i, row ->
             val dist = if (active < 0) i + 1 else i - active
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .onPlaced {
-                        tops[i] = it.positionInParent().y
-                        if (i == rows.lastIndex) placed = true
-                    },
-            ) {
-                when (row) {
-                    is Row.Gap -> GapDots(row, dist == 0, clock)
-                    is Row.Sung -> SungLine(row.line, dist, i - max(firstActive, 0), fetched?.get(row.line.text), romanize, clock, toggleRom) {
-                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                        connection.seekTo((row.line.start - LEAD_MS).coerceAtLeast(0))
-                        userAt = 0
-                    }
+            val cascade = remember { System.nanoTime() - openedAt < CASCADE_WINDOW_NS }
+            when (row) {
+                is Row.Gap -> GapDots(row, dist == 0, clock)
+                is Row.Sung -> SungLine(row.line, dist, if (cascade) i - max(firstActive, 0) else null, fetched?.get(row.line.text), romanize, clock, toggleRom) {
+                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    connection.seekTo((row.line.start - LEAD_MS).coerceAtLeast(0))
+                    userAt = 0
                 }
             }
         }
-        Source(l.source, synced = l.wordByWord)
+        item { Source(l.source, synced = l.wordByWord) }
     }
 }
 
@@ -345,7 +340,7 @@ private fun Source(source: String, synced: Boolean) {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SungLine(line: Line, dist: Int, order: Int, rom: String?, showRom: Boolean, clock: LyricsClock, onHold: (() -> Unit)?, onTap: () -> Unit) {
+private fun SungLine(line: Line, dist: Int, order: Int?, rom: String?, showRom: Boolean, clock: LyricsClock, onHold: (() -> Unit)?, onTap: () -> Unit) {
     val c = Oto.colors
     val dur = ((line.end - line.start) * 0.3).toInt().coerceIn(420, 1000)
     val alphaTarget = when {
@@ -358,9 +353,10 @@ private fun SungLine(line: Line, dist: Int, order: Int, rom: String?, showRom: B
     }
     val alpha by animateFloatAsState(alphaTarget, tween(if (dist == 0) dur / 2 else if (dist < 0) (dur * 1.4f).toInt() else dur, easing = EaseOutQuart), label = "lineAlpha")
     val scale by animateFloatAsState(if (dist == 0) 1.03f else 1f, tween(if (dist == 0) dur else (dur * 1.2f).toInt(), easing = EaseOutQuart), label = "lineScale")
-    // Al abrir la letra las líneas suben en cascada desde la activa.
-    val enter = remember { Animatable(0f) }
+    // Al abrir la letra las líneas suben en cascada desde la activa ([order]: su turno; null, ya en su sitio).
+    val enter = remember { Animatable(if (order == null) 1f else 0f) }
     LaunchedEffect(Unit) {
+        if (order == null) return@LaunchedEffect
         delay(30L + 70L * order.coerceIn(0, 6))
         enter.animateTo(1f, tween(820, easing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)))
     }
@@ -639,6 +635,8 @@ private val EDGE = 20.dp
 private const val ANCHOR = 0.3f
 private const val SCROLL_MS = 620
 private const val USER_HOLD_MS = 2500L
+// Las líneas que se componen en este rato tras abrirse la letra entran en cascada.
+private const val CASCADE_WINDOW_NS = 400_000_000L
 private const val ROM_MS = 420
 private const val GAP_MS = 6000L
 private const val GAP_INTRO_MS = 3500L

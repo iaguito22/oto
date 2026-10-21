@@ -30,7 +30,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -72,10 +71,10 @@ private fun Header(title: String, sub: String?) {
 }
 
 @Composable
-private fun Divider(text: String) {
+private fun Divider(text: String, modifier: Modifier = Modifier) {
     Text(
         text.uppercase(), style = OtoType.label, color = Oto.colors.textMuted,
-        modifier = Modifier.padding(start = Space.md, top = Space.lg, bottom = Space.xs),
+        modifier = modifier.padding(start = Space.md, top = Space.lg, bottom = Space.xs),
     )
 }
 
@@ -123,67 +122,76 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
             LaunchedEffect(queue) { if (dragged == null) localWrap = null }
             val border = localWrap ?: wrap
             val keys = remember(shown) { keysOf(shown) }
-            val reorder = rememberReorderableLazyListState(listState) { from, to ->
+            val reorder = rememberReorderableLazyListState(listState) { fromItem, toItem ->
                 val list = local ?: queue
-                if (to.key !is String || from.index !in list.indices || to.index !in list.indices) return@rememberReorderableLazyListState
+                // Por la clave y no por el índice del LazyColumn, que cuenta también los avisos.
+                val listKeys = keysOf(list)
+                val from = listKeys.indexOf(fromItem.key)
+                val to = listKeys.indexOf(toItem.key)
+                if (from < 0 || to < 0) return@rememberReorderableLazyListState
                 val w = localWrap ?: wrap
                 val at = when {
-                    w < 1 -> to.index
-                    from.index < w && to.index >= w -> { localWrap = w - 1; w - 1 } // baja a la vuelta siguiente
-                    from.index >= w && to.index < w -> { localWrap = w + 1; w } // sube a esta vuelta
-                    else -> to.index
+                    w < 1 -> to
+                    from < w && to >= w -> { localWrap = w - 1; w - 1 } // baja a la vuelta siguiente
+                    from >= w && to < w -> { localWrap = w + 1; w } // sube a esta vuelta
+                    else -> to
                 }
                 haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                if (at != from.index) local = list.toMutableList().apply { add(at, removeAt(from.index)) }
+                if (at != from) local = list.toMutableList().apply { add(at, removeAt(from)) }
             }
             LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
-                itemsIndexed(shown, key = { i, _ -> keys[i] }) { i, e ->
+                shown.forEachIndexed { i, e ->
+                    // Los avisos van en su propia fila, fuera de las canciones: pegados a una, al subir otra a su
+                    // sitio el aviso saltaba de una a otra, cambiaban de alto a mitad del arrastre y se intercambiaban
+                    // sin parar hasta llegar arriba del todo.
+                    if (i == firstAuto) item(key = AUTO_DIVIDER) { Divider("Al acabar la lista, parecidas", Modifier.animateItem()) }
+                    if (i == border) item(key = WRAP_DIVIDER) { Divider("Y vuelve a empezar", Modifier.animateItem()) }
                     val key = keys[i]
-                    ReorderableItem(reorder, key, animateItemModifier = Modifier.animateItem(placementSpec = spring(stiffness = Spring.StiffnessMediumLow))) { dragging ->
-                        Column(
-                            Modifier.graphicsLayer {
-                                if (dragging) {
-                                    scaleX = 1.03f; scaleY = 1.03f
-                                    shadowElevation = 12.dp.toPx()
-                                    shape = RoundedCornerShape(Radius.lg)
-                                    clip = true
+                    item(key = key) {
+                        ReorderableItem(reorder, key, animateItemModifier = Modifier.animateItem(placementSpec = spring(stiffness = Spring.StiffnessMediumLow))) { dragging ->
+                            Column(
+                                Modifier.graphicsLayer {
+                                    if (dragging) {
+                                        scaleX = 1.03f; scaleY = 1.03f
+                                        shadowElevation = 12.dp.toPx()
+                                        shape = RoundedCornerShape(Radius.lg)
+                                        clip = true
+                                    }
+                                },
+                            ) {
+                                Removable(onRemove = { haptics.performHapticFeedback(HapticFeedbackType.Confirm); connection.remove(e.index) }) {
+                                    SongRow(
+                                        e.title, e.artist, e.artwork, current = false, onClick = { connection.skipTo(e.index); onClose() },
+                                        modifier = Modifier
+                                            .background(if (dragging) Oto.colors.field else Color.Transparent, RoundedCornerShape(Radius.lg))
+                                            .longPressDraggableHandle(
+                                                onDragStarted = {
+                                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    dragged = key
+                                                    local = local ?: queue
+                                                },
+                                                onDragStopped = {
+                                                    // La canción pasa, en el reproductor, al sitio de la que ocupaba ese hueco al empezar.
+                                                    val now = local
+                                                    val w = (localWrap ?: wrap).let { if (it < 0) Int.MAX_VALUE else it }
+                                                    dragged = null
+                                                    val from = keysOf(queue).indexOf(key)
+                                                    val to = now?.let { keysOf(it).indexOf(key) } ?: -1
+                                                    if (now != null && from >= 0 && to >= 0 && (from != to || localWrap != null && localWrap != wrap)) {
+                                                        // Se coloca junto a sus vecinas de la misma vuelta: detrás de la de
+                                                        // arriba (o de la que suena) en esta; delante de la de abajo en la siguiente.
+                                                        val real = queue[from].index
+                                                        when {
+                                                            to < w -> connection.place(real, after = now.getOrNull(to - 1)?.index)
+                                                            to + 1 < now.size -> connection.place(real, before = now[to + 1].index)
+                                                            to > w -> connection.place(real, after = now[to - 1].index)
+                                                            else -> connection.place(real, before = 0)
+                                                        }
+                                                    } else { local = null; localWrap = null }
+                                                },
+                                            ),
+                                    )
                                 }
-                            },
-                        ) {
-                            if (i == firstAuto) Divider("Al acabar la lista, parecidas")
-                            if (i == border) Divider("Y vuelve a empezar")
-                            Removable(onRemove = { haptics.performHapticFeedback(HapticFeedbackType.Confirm); connection.remove(e.index) }) {
-                                SongRow(
-                                    e.title, e.artist, e.artwork, current = false, onClick = { connection.skipTo(e.index); onClose() },
-                                    modifier = Modifier
-                                        .background(if (dragging) Oto.colors.field else Color.Transparent, RoundedCornerShape(Radius.lg))
-                                        .longPressDraggableHandle(
-                                            onDragStarted = {
-                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                dragged = key
-                                                local = local ?: queue
-                                            },
-                                            onDragStopped = {
-                                                // La canción pasa, en el reproductor, al sitio de la que ocupaba ese hueco al empezar.
-                                                val now = local
-                                                val w = (localWrap ?: wrap).let { if (it < 0) Int.MAX_VALUE else it }
-                                                dragged = null
-                                                val from = keysOf(queue).indexOf(key)
-                                                val to = now?.let { keysOf(it).indexOf(key) } ?: -1
-                                                if (now != null && from >= 0 && to >= 0 && (from != to || localWrap != null && localWrap != wrap)) {
-                                                    // Se coloca junto a sus vecinas de la misma vuelta: detrás de la de
-                                                    // arriba (o de la que suena) en esta; delante de la de abajo en la siguiente.
-                                                    val real = queue[from].index
-                                                    when {
-                                                        to < w -> connection.place(real, after = now.getOrNull(to - 1)?.index)
-                                                        to + 1 < now.size -> connection.place(real, before = now[to + 1].index)
-                                                        to > w -> connection.place(real, after = now[to - 1].index)
-                                                        else -> connection.place(real, before = 0)
-                                                    }
-                                                } else { local = null; localWrap = null }
-                                            },
-                                        ),
-                                )
                             }
                         }
                     }
@@ -199,6 +207,10 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
         }
     }
 }
+
+// Las claves de los avisos de la cola: no son de canciones, así que no se mueven ni se intercambian.
+private const val AUTO_DIVIDER = 1
+private const val WRAP_DIVIDER = 2
 
 /** Claves que no cambian al mover una canción (su id, y cuántas veces salió antes si está repetida). */
 private fun keysOf(list: List<QueueEntry>): List<String> {
