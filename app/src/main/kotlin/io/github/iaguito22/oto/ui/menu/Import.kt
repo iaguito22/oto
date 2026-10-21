@@ -43,6 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -195,8 +196,8 @@ private fun Sources(reading: Boolean, error: String?, onLink: (String) -> Unit, 
         }
         Block(
             "Todas tus listas, desde el PC",
-            "1. En el Spotify del PC con Spicetify, añade la extensión oto-export.js (github.com/iaguito22/oto, en tools/spicetify).\n" +
-                "2. Menú de tu perfil → «Exportar a Oto». Se guarda oto-spotify.json en Descargas.\n" +
+            "1. En el PC, abre github.com/iaguito22/oto/tree/main/tools/spicetify y pega la línea de tu sistema (en Windows, en PowerShell). Lo instala todo solo, también Spicetify si no lo tienes.\n" +
+                "2. En Spotify, tu foto de perfil → «Exportar a Oto». Se guarda oto-spotify.json en Descargas.\n" +
                 "3. Pásalo al móvil y ábrelo aquí. Trae todo: las privadas, las que sigues y «Canciones que te gustan».",
         ) {
             Pill(if (reading) "Leyendo…" else "Abrir archivo", onFile, icon = R.drawable.ic_library_music)
@@ -279,8 +280,18 @@ private fun Pick(
 ) {
     val c = Oto.colors
     val chosen = lists.filter { it.id in picked }
-    // Lo que se va a buscar de verdad: cada canción una vez, aunque esté en varias listas.
-    val unique = remember(chosen) { chosen.flatMap { l -> l.tracks.map { Matcher.norm(it.title) + "|" + Matcher.norm(it.artists.firstOrNull().orEmpty()) } }.toSet().size }
+    // Lo que se va a buscar de verdad: cada canción una vez, aunque esté en varias listas. Las claves de cada lista se
+    // sacan una sola vez y todo fuera del hilo de la pantalla: normalizar miles de canciones en cada toque daba tirones
+    // de 70-150 ms con muchas listas. Mientras se cuenta, se queda la cifra anterior.
+    val keys by produceState<Map<String, Set<String>>?>(null, lists) {
+        value = withContext(Dispatchers.Default) {
+            lists.associate { l -> l.id to l.tracks.mapTo(HashSet()) { Matcher.norm(it.title) + "|" + Matcher.norm(it.artists.firstOrNull().orEmpty()) } }
+        }
+    }
+    val unique by produceState<Int?>(null, keys, picked) {
+        val k = keys ?: return@produceState
+        value = withContext(Dispatchers.Default) { picked.flatMapTo(HashSet()) { k[it].orEmpty() }.size }
+    }
     Column(Modifier.fillMaxSize()) {
         LazyColumn(
             // La lista se funde al llegar al botón en vez de cortarse contra él.
@@ -327,9 +338,9 @@ private fun Pick(
         Row(Modifier.fillMaxWidth().padding(start = Space.md, end = Space.xs, top = Space.sm, bottom = Space.xl), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 if (chosen.isEmpty()) Text("Marca alguna", style = OtoType.rowSub, color = c.textMuted)
-                else {
-                    Text("${num(unique)} canciones distintas", style = OtoType.rowSub, color = c.text, maxLines = 1)
-                    Text(minutes(unique), style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
+                else unique?.let { n ->
+                    Text("${num(n)} canciones distintas", style = OtoType.rowSub, color = c.text, maxLines = 1)
+                    Text(minutes(n), style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
                 }
             }
             Box(Modifier.graphicsLayer { alpha = if (chosen.isEmpty()) 0.4f else 1f }) {

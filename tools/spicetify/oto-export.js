@@ -1,7 +1,7 @@
 // Oto · Exportar a Oto
 // Extensión de Spicetify: guarda en un archivo todas tus listas de Spotify (también las privadas, las que sigues y
 // «Canciones que te gustan») para importarlas en Oto desde Ajustes → Importar de Spotify.
-// Instalar: copiar a ~/.config/spicetify/Extensions/, `spicetify config extensions oto-export.js` y `spicetify apply`.
+// Instalar: tools/spicetify/README.md (install.ps1 en Windows, install.sh en Linux y macOS).
 (async function otoExport() {
     if (!Spicetify?.Platform?.RootlistAPI || !Spicetify?.Menu) {
         setTimeout(otoExport, 300);
