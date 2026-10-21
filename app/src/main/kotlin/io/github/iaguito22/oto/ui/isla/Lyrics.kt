@@ -306,13 +306,14 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
     LazyColumn(
         Modifier.fillMaxSize(),
         state = list,
-        contentPadding = PaddingValues(start = EDGE, end = EDGE, top = height * ANCHOR, bottom = height * (1 - ANCHOR)),
+        // Sin margen a los lados: lo pone cada fila dentro de su capa (ver SungLine).
+        contentPadding = PaddingValues(top = height * ANCHOR, bottom = height * (1 - ANCHOR)),
     ) {
         itemsIndexed(rows) { i, row ->
             val dist = if (active < 0) i + 1 else i - active
             val cascade = remember { System.nanoTime() - openedAt < CASCADE_WINDOW_NS }
             when (row) {
-                is Row.Gap -> GapDots(row, dist == 0, clock)
+                is Row.Gap -> Box(Modifier.padding(horizontal = EDGE)) { GapDots(row, dist == 0, clock) }
                 is Row.Sung -> SungLine(row.line, dist, if (cascade) i - max(firstActive, 0) else null, fetched?.get(row.line.text), romanize, clock, toggleRom) {
                     haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                     connection.seekTo((row.line.start - LEAD_MS).coerceAtLeast(0))
@@ -320,7 +321,7 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
                 }
             }
         }
-        item { Source(l.source, synced = l.wordByWord) }
+        item { Box(Modifier.padding(horizontal = EDGE)) { Source(l.source, synced = l.wordByWord) } }
     }
 }
 
@@ -374,10 +375,14 @@ private fun SungLine(line: Line, dist: Int, order: Int?, rom: String?, showRom: 
                 translationY = (1 - e) * 46.dp.toPx()
                 val s = scale * lerp(0.965f, 1f, e)
                 scaleX = s; scaleY = s
-                transformOrigin = TransformOrigin(if (line.duet) 1f else 0f, 0.5f)
+                // La capa va de borde a borde, con el margen dentro: mientras su opacidad no es 1 se pinta aparte y
+                // recortada a sus límites, y la primera letra, que crece desde su centro, perdía su lado de fuera
+                // (la H de «Heartbreaker»). Crece desde donde empieza el texto, no desde el borde de la capa.
+                val edge = if (size.width > 0f) EDGE.toPx() / size.width else 0f
+                transformOrigin = TransformOrigin(if (line.duet) 1f - edge else edge, 0.5f)
             }
             .combinedClickable(remember { MutableInteractionSource() }, null, onLongClick = onHold, onClick = onTap)
-            .padding(vertical = 9.dp),
+            .padding(horizontal = EDGE, vertical = 9.dp),
         horizontalAlignment = align,
     ) {
         if (!bgOnly) Words(line.words, LYRIC, lit, clock, arrangement, c.text, letters = line.real)
