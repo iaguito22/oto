@@ -67,11 +67,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -129,7 +129,10 @@ import io.github.iaguito22.oto.ui.theme.OtoType
 import io.github.iaguito22.oto.ui.theme.Radius
 import io.github.iaguito22.oto.ui.theme.Space
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sh.calvin.reorderable.ReorderableItem
@@ -154,6 +157,7 @@ const val FOLDER_PREFIX = "folder:"
  * ajustes en la esquina. Buscar, un álbum, un artista, una lista o los ajustes se abren dentro de la misma hoja
  * y atrás vuelve. Mantener una canción abre lo que se puede hacer con ella.
  */
+@OptIn(FlowPreview::class)
 @Composable
 fun MenuSheet(
     connection: PlayerConnection,
@@ -173,19 +177,24 @@ fun MenuSheet(
     val pinned by prefs.pinned.collectAsStateWithLifecycle(initialValue = emptySet())
     val source by connection.source.collectAsStateWithLifecycle()
     val np by connection.state.collectAsStateWithLifecycle()
-    LaunchedEffect(history, liked, playlists) {
-        vm.taste = withContext(Dispatchers.Default) {
-            Taste.of(history.orEmpty().asSequence() + liked?.songs.orEmpty() + playlists.orEmpty().asSequence().flatMap { it.songs })
-        }
-    }
     val pager = rememberPagerState { 2 }
-    // Las listas hechas con lo tuyo, para Explorar: se rehacen al cambiar lo guardado o lo oído.
-    val smart by produceState(emptyList<LocalPlaylist>(), history, liked, playlists) {
-        val h = history ?: return@produceState
-        val l = playlists ?: return@produceState
-        value = withContext(Dispatchers.Default) {
-            runCatching { Smart.lists(l, liked?.songs.orEmpty(), h, app.plays.all(), System.currentTimeMillis()) }.getOrDefault(emptyList())
-        }
+    // El gusto (para la búsqueda) y las listas hechas con lo tuyo (para Explorar) se rehacen al cambiar lo guardado o
+    // lo oído, y cada canción que empieza cambia el historial. Con muchas listas rehacerlas cuesta segundos y el
+    // cálculo no se corta a medias: pasando canciones rápido se amontonaban hasta dejar el móvil sin memoria. Así se
+    // espera a que el historial pare quieto un momento, y collectLatest no empieza uno sin que acabe el anterior.
+    var smart by remember { mutableStateOf(emptyList<LocalPlaylist>()) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { Triple(history, liked, playlists) }
+            .debounce(RECOMPUTE_MS)
+            .collectLatest { (h, lk, l) ->
+                vm.taste = withContext(Dispatchers.Default) {
+                    Taste.of(h.orEmpty().asSequence() + lk?.songs.orEmpty() + l.orEmpty().asSequence().flatMap { it.songs })
+                }
+                if (h == null || l == null) return@collectLatest
+                smart = withContext(Dispatchers.Default) {
+                    runCatching { Smart.lists(l, lk?.songs.orEmpty(), h, app.plays.all(), System.currentTimeMillis()) }.getOrDefault(emptyList())
+                }
+            }
     }
     // Recolocando Tus listas: cada lista o carpeta se arrastra a su sitio, hasta «Listo».
     var arranging by remember { mutableStateOf(false) }
@@ -1800,3 +1809,4 @@ private fun ColumnScope.NameField(n: Naming, onDone: (String) -> Unit) {
 }
 
 private const val TOP_SONGS = 5
+private const val RECOMPUTE_MS = 1_500L

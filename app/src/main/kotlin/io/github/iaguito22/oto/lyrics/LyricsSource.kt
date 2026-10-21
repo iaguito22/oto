@@ -122,7 +122,7 @@ object LyricsSource {
             val text = items.map { it.optString("text").trim() }.filter { it.isNotEmpty() }
             return if (text.isEmpty()) null else Lyrics.Plain(text, source)
         }
-        if (!Regex("word|syllable", RegexOption.IGNORE_CASE).containsMatchIn(d.optString("type"))) {
+        if (!WORD_TYPE.containsMatchIn(d.optString("type"))) {
             // Por líneas: las palabras se reparten hasta que empieza la siguiente.
             val lines = items.mapIndexedNotNull { i, l ->
                 val text = l.optString("text").trim()
@@ -270,6 +270,9 @@ object LyricsSource {
 
     private val CJK = Regex("[\\u3040-\\u30ff\\u3400-\\u9fff\\uf900-\\ufaff\\uac00-\\ud7af]")
     private val KANA_HAN = Regex("[\\u3040-\\u30ff\\u3400-\\u9fff]")
+    private val KANA_HAN_SPLIT = Regex("[\\u3040-\\u30ff\\u3400-\\u9fff]|[^\\u3040-\\u30ff\\u3400-\\u9fff]+")
+    private val TOKENS = Regex("""(\s+)|([^\s]+)""")
+    private val WORD_TYPE = Regex("word|syllable", RegexOption.IGNORE_CASE)
 
     /**
      * Sin tiempos por palabra (del tema de Spotify): las palabras van a ritmo de canto (~60 ms por letra) y la
@@ -278,9 +281,9 @@ object LyricsSource {
      */
     internal fun estimate(text: String, start: Long, next: Long): Line {
         val cjk = !text.contains(' ') && CJK.containsMatchIn(text)
-        val toks: List<String> = if (cjk) text.map { it.toString() } else Regex("""(\s+)|([^\s]+)""").findAll(text).flatMap { m ->
+        val toks: List<String> = if (cjk) text.map { it.toString() } else TOKENS.findAll(text).flatMap { m ->
             val w = m.value
-            if (w.isNotBlank() && KANA_HAN.containsMatchIn(w)) Regex("[\\u3040-\\u30ff\\u3400-\\u9fff]|[^\\u3040-\\u30ff\\u3400-\\u9fff]+").findAll(w).map { it.value }
+            if (w.isNotBlank() && KANA_HAN.containsMatchIn(w)) KANA_HAN_SPLIT.findAll(w).map { it.value }
             else sequenceOf(w)
         }.toList()
         val inBv = BooleanArray(toks.size)

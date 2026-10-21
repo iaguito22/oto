@@ -86,7 +86,7 @@ object Matcher {
     /** Título sin coletillas («- Remastered 2011», «(feat. …)») y el primer artista. */
     fun query(t: SourceTrack): String {
         val title = t.title
-            .replace(Regex("""\s+-\s+.*\b(remaster|remastered|version|versión|edit|mono|stereo|bonus)\b.*$""", RegexOption.IGNORE_CASE), "")
+            .replace(VERSION_TAIL, "")
             .replace(FEAT_PAREN, "")
             .trim()
         return listOfNotNull(title.ifEmpty { t.title }, t.artists.firstOrNull()).joinToString(" ")
@@ -95,12 +95,12 @@ object Matcher {
     /** Sin los invitados: «(feat. …)», «(con …)», «ft. …». YouTube Music los pone en el título y Spotify en los artistas. */
     private fun bare(s: String) = s
         .replace(FEAT_PAREN, " ")
-        .replace(Regex("""\s(feat\.?|ft\.?|featuring)\s.*?(?=\s-\s|[(\[]|$)""", RegexOption.IGNORE_CASE), " ")
+        .replace(FEAT_TAIL, " ")
 
     fun norm(s: String): String = Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD)
-        .replace(Regex("\\p{Mn}+"), "")
+        .replace(MARKS, "")
         .replace("&", " and ")
-        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+        .replace(NON_WORD, " ")
         .trim()
 
     private fun words(s: String): Set<String> = norm(s).split(' ').filter { it.isNotEmpty() && !(it.length == 4 && it.all(Char::isDigit)) }.toSet()
@@ -119,6 +119,12 @@ object Matcher {
         return 2f * hit / (a.size + g(y).size)
     }
 
+    // Compiladas una vez: norm() corre por cada canción de tus listas, y en Android cada Regex nueva reserva memoria
+    // nativa (ICU) que no se suelta hasta que pasa el recolector. Compilándolas en cada llamada, el móvil se quedaba sin ella.
+    private val VERSION_TAIL = Regex("""\s+-\s+.*\b(remaster|remastered|version|versión|edit|mono|stereo|bonus)\b.*$""", RegexOption.IGNORE_CASE)
+    private val FEAT_TAIL = Regex("""\s(feat\.?|ft\.?|featuring)\s.*?(?=\s-\s|[(\[]|$)""", RegexOption.IGNORE_CASE)
+    private val MARKS = Regex("\\p{Mn}+")
+    private val NON_WORD = Regex("[^\\p{L}\\p{N}]+")
     private val FEAT_PAREN = Regex("""\s*[(\[](feat\.?|ft\.?|featuring|with|con)\s[^)\]]*[)\]]""", RegexOption.IGNORE_CASE)
     private const val CANDIDATES = 6
     private const val GOOD = 0.8f
