@@ -1533,9 +1533,14 @@ object YouTube {
             )
         }
 
+    /** Oto: sin sesión, para pedir la portada de cualquiera (las listas de éxitos, no lo tuyo). */
+    private val guest by lazy { InnerTube() }
+
+    /** Oto: [guest] pide la portada como si no hubiera cuenta: la de todos, no la hecha con tu biblioteca. */
     suspend fun home(
         continuation: String? = null,
         params: String? = null,
+        guest: Boolean = false,
     ): Result<HomePage> =
         runCatching {
             Timber.d("home() called with continuation=$continuation, params=$params")
@@ -1543,7 +1548,8 @@ object YouTube {
                 return@runCatching homeContinuation(continuation).getOrThrow()
             }
 
-            val response = innerTube.browse(WEB_REMIX, browseId = "FEmusic_home", params = params).body<BrowseResponse>()
+            val tube = if (guest) this.guest.also { it.locale = locale; it.proxy = proxy; it.proxyAuth = proxyAuth } else innerTube
+            val response = tube.browse(WEB_REMIX, browseId = "FEmusic_home", params = params).body<BrowseResponse>()
             Timber.d("home() response received")
             val continuation =
                 response.contents

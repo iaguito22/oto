@@ -106,10 +106,13 @@ class MenuViewModel : ViewModel() {
         _state.update { it.copy(homeError = null, shelves = null) }
         home?.cancel()
         home = viewModelScope.launch {
-            withContext(Dispatchers.IO) { YouTube.home(params = chip?.endpoint?.params) }
+            // La portada, la de todos (éxitos, tendencias, lo nuevo): lo tuyo ya está en «Hecho con lo tuyo». Los ánimos, con tu cuenta.
+            withContext(Dispatchers.IO) { YouTube.home(params = chip?.endpoint?.params, guest = chip == null) }
                 .onSuccess { page ->
+                    // Lo que ya salió en una estantería no se repite en la siguiente.
+                    val seen = HashSet<String>()
                     val shelves = page.sections.mapNotNull { s ->
-                        val items = s.items.filter { it is SongItem || it is AlbumItem || it is PlaylistItem || it is ArtistItem }
+                        val items = s.items.filter { (it is SongItem || it is AlbumItem || it is PlaylistItem || it is ArtistItem) && seen.add(it.id) }
                         if (items.isEmpty()) null else Shelf(s.title, items)
                     }
                     // Los pódcast, no: Oto no los pone.
