@@ -32,7 +32,7 @@ import java.util.Locale
 
 class OtoApp : Application(), SingletonImageLoader.Factory {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    val player by lazy { PlayerConnection(this, prefs, scope) }
+    val player by lazy { PlayerConnection(this, prefs, plays, scope) }
     val prefs by lazy { Prefs(this) }
     val importer by lazy { Importer(prefs, scope) }
     val account by lazy { Account(this, prefs, scope) }

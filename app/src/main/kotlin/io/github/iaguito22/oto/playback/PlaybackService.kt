@@ -51,6 +51,7 @@ import io.github.iaguito22.oto.importer.songKey
 import io.github.iaguito22.oto.lyrics.Lyrics
 import io.github.iaguito22.oto.lyrics.LyricsQuery
 import io.github.iaguito22.oto.lyrics.LyricsSource
+import io.github.iaguito22.oto.traced
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -103,8 +104,8 @@ class PlaybackService : MediaLibraryService() {
     private var radioJob: Job? = null
     // Lo que suena es una lista (un álbum, una tuya…) y no la radio de una canción ni el DJ.
     private var list = false
-    // La radio de ahora es la que sigue a una lista acabada: lo que añade va marcado (ver [markAuto]).
-    private var autoplaying = false
+    // Lo que sigue a una lista acabada (ver [Autoplay]): lo que añade va marcado (ver [markAuto]).
+    private var auto: Autoplay? = null
     // Lo último que sonó (también en sesiones anteriores, desde el historial): la radio no lo vuelve a poner.
     // Por id y por título + artista, porque la misma canción suele estar como canción y como vídeo.
     private val recent = ArrayDeque<String>()
@@ -466,24 +467,25 @@ class PlaybackService : MediaLibraryService() {
     private fun stopRadio() {
         radioJob?.cancel()
         radio = null
-        autoplaying = false
+        auto = null
     }
 
     /**
-     * Una lista sin bucle, al acercarse a su final, sigue con canciones parecidas: la radio de la última, como la
+     * Una lista sin bucle, al acercarse a su final, sigue con canciones parecidas a ella (ver [Autoplay]), como la
      * reproducción automática de Spotify. Con bucle, vuelve a empezar (eso lo hace ExoPlayer).
      */
     private fun autoplay() {
-        if (!list || radio != null || dj != null || player.repeatMode != Player.REPEAT_MODE_OFF || player.mediaItemCount == 0) return
+        if (!list || radio != null || auto != null || dj != null || player.repeatMode != Player.REPEAT_MODE_OFF || player.mediaItemCount == 0) return
         if (player.mediaItemCount - player.currentMediaItemIndex - 1 > RADIO_AHEAD) return
-        radio = Radio(player.getMediaItemAt(player.mediaItemCount - 1).mediaId)
-        autoplaying = true
+        val items = (0 until player.mediaItemCount).map { player.getMediaItemAt(it) }.filter { !it.isAuto }
+            .map { Shuffle.Item(it.mediaId, it.mediaMetadata.artist?.toString().orEmpty(), null) }
+        auto = Autoplay(Autoplay.seeds(items, player.getMediaItemAt(player.mediaItemCount - 1).mediaId, liked))
         topUpRadio()
     }
 
     /** Se puso el bucle con las parecidas ya en la cola: fuera las que aún no han sonado. */
     private fun dropAutoplay() {
-        if (!autoplaying) return
+        if (auto == null) return
         stopRadio()
         for (i in player.mediaItemCount - 1 downTo player.currentMediaItemIndex + 1) {
             if (player.getMediaItemAt(i).isAuto) player.removeMediaItem(i)
@@ -492,9 +494,30 @@ class PlaybackService : MediaLibraryService() {
 
     /** Cuando quedan [RADIO_AHEAD] canciones o menos por delante, añade la siguiente página de la radio. */
     private fun topUpRadio() {
-        if (radio == null || radioJob?.isActive == true) return
+        if ((radio == null && auto == null) || radioJob?.isActive == true) return
         if (player.mediaItemCount - player.currentMediaItemIndex - 1 > RADIO_AHEAD) return
         radioJob = scope.launch {
+            auto?.let { a ->
+                // Ni lo que hay en la cola ni lo que sonó hace poco, por id ni por canción ([songKey], sin la «~»).
+                val exclude = HashSet<String>()
+                for (i in 0 until player.mediaItemCount) {
+                    val m = player.getMediaItemAt(i)
+                    exclude += m.mediaId
+                    exclude += songKey(m.mediaMetadata.title?.toString().orEmpty(), m.mediaMetadata.artist?.toString().orEmpty())
+                }
+                recent.mapTo(exclude) { it.removePrefix("~") }
+                val last = player.getMediaItemAt(player.mediaItemCount - 1).mediaId
+                repeat(RADIO_PAGES) {
+                    val fresh = withContext(Dispatchers.Default) { a.next(exclude, last) }
+                    if (auto !== a) return@launch
+                    if (fresh.isNotEmpty()) {
+                        player.addMediaItems(fresh.map { it.toMediaItem().markAuto() })
+                        Timber.d("reproducción automática: +%d", fresh.size)
+                        return@launch
+                    }
+                }
+                return@launch
+            }
             repeat(RADIO_PAGES) {
                 var r = radio ?: return@launch
                 if (r.exhausted && player.mediaItemCount > 0) {
@@ -512,7 +535,7 @@ class PlaybackService : MediaLibraryService() {
                     .filter { s -> s.id !in queued && s.id !in recent && sameSong(s.title, s.artists.joinToString { it.name }).let { it !in queued && it !in recent } }
                     .distinctBy { sameSong(it.title, it.artists.joinToString { a -> a.name }) }
                 if (fresh.isNotEmpty()) {
-                    player.addMediaItems(fresh.map { if (autoplaying) it.toMediaItem().markAuto() else it.toMediaItem() })
+                    player.addMediaItems(fresh.map { it.toMediaItem() })
                     Timber.d("radio: +%d", fresh.size)
                     return@launch
                 }
@@ -545,7 +568,11 @@ class PlaybackService : MediaLibraryService() {
         djJob?.cancel()
         djJob = scope.launch {
             val d = withContext(Dispatchers.Default) {
-                val profile = Profile(prefs.playlists.first(), prefs.liked.first(), prefs.history.first(), app.plays.all(), System.currentTimeMillis())
+                val lists = prefs.playlists.first()
+                val liked = prefs.liked.first()
+                val history = prefs.history.first()
+                val plays = app.plays.all()
+                val profile = traced("oto.dj.profile") { Profile(lists, liked, history, plays, System.currentTimeMillis()) }
                 Dj(profile, app.djCatalog, Memory(File(filesDir, "dj.json")), scope, log = { Timber.tag("dj").d(it) })
             }
             val first = d.start() ?: return@launch then(null)
@@ -595,6 +622,7 @@ class PlaybackService : MediaLibraryService() {
         val play = Play(h.id, h.title, h.artist, h.artistId, System.currentTimeMillis(), ms, dur, kind)
         scope.launch(Dispatchers.IO) { app.plays.add(play) }
         if (kind != null) dj?.heard(item.mediaId, ms, dur)
+        if (item.isAuto) auto?.heard(item.mediaId, h.artist, ms, dur)
     }
 
     private fun remember(vararg keys: String) {

@@ -17,13 +17,17 @@ import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.Prefs
+import io.github.iaguito22.oto.dj.Plays
 import io.github.iaguito22.oto.dj.Smart
 import io.github.iaguito22.oto.toSong
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Lo que la interfaz necesita saber de lo que suena. La posición no va aquí: se lee por fotograma con [position]. */
 data class NowPlaying(
@@ -55,7 +59,7 @@ data class QueueEntry(val index: Int, val id: String, val title: String, val art
  * La interfaz habla con [PlaybackService] a través de un MediaController, igual que la notificación o los auriculares.
  * Se conecta mientras la actividad está visible ([connect]/[disconnect]); lo que se pida antes de conectar espera.
  */
-class PlayerConnection(private val context: Context, private val prefs: Prefs, private val scope: CoroutineScope) {
+class PlayerConnection(private val context: Context, private val prefs: Prefs, private val plays: Plays, private val scope: CoroutineScope) {
     private var future: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
     private val pending = ArrayList<(MediaController) -> Unit>()
@@ -80,9 +84,10 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     /** Las listas en bucle (ver [Prefs.loop]). */
     val loop: StateFlow<Boolean> = _loop.asStateFlow()
 
-    // Lo que el aleatorio tiene en cuenta, siempre a mano.
+    // Lo que el aleatorio tiene en cuenta, siempre a mano: lo que te gusta y cuándo sonó de verdad cada una.
     @Volatile private var liked = emptySet<String>()
-    @Volatile private var heard = emptySet<String>()
+    @Volatile private var heardAt = emptyMap<String, Long>()
+    private var shuffling: Job? = null
 
     /**
      * La lista que suena, en su orden, para barajarla o volver a él. [ages]: lo reciente que entró cada una (ver
@@ -95,7 +100,12 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         scope.launch { prefs.shuffle.collect { _shuffle.value = it } }
         scope.launch { prefs.loop.collect { _loop.value = it } }
         scope.launch { prefs.likedIds.collect { liked = it } }
-        scope.launch { prefs.history.collect { h -> heard = h.mapTo(HashSet()) { it.id } } }
+        // El historial cambia con cada canción: es cuando el diario de escuchas tiene algo nuevo.
+        scope.launch {
+            prefs.history.collect {
+                heardAt = withContext(Dispatchers.IO) { plays.all() }.filter { it.heard }.associate { it.id to it.at }
+            }
+        }
     }
 
     fun connect() {
@@ -123,6 +133,8 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
 
     /** Suena esta canción y, detrás, su radio. */
     fun play(song: SongItem) = withController {
+        // Una lista que aún se estaba barajando ya no tiene que ponerse.
+        shuffling?.cancel()
         _source.value = Source("Radio", song.title)
         original = null
         it.repeatMode = Player.REPEAT_MODE_OFF
@@ -151,32 +163,57 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         playList(list.songs.map { h -> h.toSong().toMediaItem() }, List(n) { age(it) }, start)
     }
 
-    /** Con el aleatorio puesto, la tocada ([start]) suena la primera y el resto barajado; «Reproducir», todo barajado. */
-    private fun playList(items: List<MediaItem>, itemAges: List<Float?>, start: Int?) = withController {
+    /**
+     * Con el aleatorio puesto, la tocada ([start]) suena la primera y el resto barajado; «Reproducir», todo barajado.
+     * Barajar una lista de miles lleva unos milisegundos: se hace fuera del hilo de la interfaz.
+     */
+    private fun playList(items: List<MediaItem>, itemAges: List<Float?>, start: Int?) {
         original = items
         ages = itemAges
-        val order = if (_shuffle.value) Shuffle.order(shuffleItems(items.indices.toList()), start, liked, heard) else null
-        // Antes que la cola: el servicio mira el bucle al recibirla para decidir si seguirá con parecidas.
-        it.repeatMode = if (_loop.value) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
-        it.setMediaItems(order?.map(items::get) ?: items, if (order != null) 0 else start ?: 0, 0)
-        it.prepare()
-        it.play()
+        shuffling?.cancel()
+        if (!_shuffle.value) return withController { setList(it, items, start ?: 0) }
+        val shuffleItems = shuffleItems(items.indices.toList())
+        shuffling = scope.launch {
+            val order = Shuffle.order(shuffleItems, start, liked, heardAt)
+            withContext(Dispatchers.Main) { withController { setList(it, order.map(items::get), 0) } }
+        }
     }
 
-    /** Pone o quita el aleatorio; si suena una lista, se rehace lo que queda detrás de la actual. */
+    private fun setList(c: MediaController, items: List<MediaItem>, start: Int) {
+        // Antes que la cola: el servicio mira el bucle al recibirla para decidir si seguirá con parecidas.
+        c.repeatMode = if (_loop.value) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
+        c.setMediaItems(items, start, 0)
+        c.prepare()
+        c.play()
+    }
+
+    /**
+     * Pone o quita el aleatorio; si suena una lista, se rehace lo que queda detrás de la actual. Al ponerlo, lo que ya
+     * sonó de la lista en esta vuelta se queda para el final, y la siguiente no es del mismo artista que la actual.
+     */
     fun setShuffle(on: Boolean) {
         _shuffle.value = on
         scope.launch { prefs.setShuffle(on) }
         val items = original ?: return
+        shuffling?.cancel()
         withController { c ->
-            val cur = c.currentMediaItemIndex
-            val at = items.indexOfFirst { it.mediaId == c.currentMediaItem?.mediaId }
+            val current = c.currentMediaItem ?: return@withController
+            val at = items.indexOfFirst { it.mediaId == current.mediaId }
             if (at < 0) return@withController
-            val rest = if (on) {
-                val others = items.indices.filter { it != at }
-                Shuffle.order(shuffleItems(others), null, liked, heard).map { items[others[it]] }
-            } else items.drop(at + 1)
-            c.replaceMediaItems(cur + 1, c.mediaItemCount, rest)
+            if (!on) return@withController c.replaceMediaItems(c.currentMediaItemIndex + 1, c.mediaItemCount, items.drop(at + 1))
+            val played = (0 until c.currentMediaItemIndex).mapTo(HashSet()) { c.getMediaItemAt(it).mediaId }
+            val others = items.indices.filter { it != at }
+            val shuffleItems = shuffleItems(others)
+            shuffling = scope.launch {
+                val order = Shuffle.order(shuffleItems, null, liked, heardAt, played = played, after = current.mediaMetadata.artist?.toString())
+                withContext(Dispatchers.Main) {
+                    withController { c2 ->
+                        // Si entretanto cambió de canción, lo barajado ya no vale.
+                        if (c2.currentMediaItem?.mediaId != current.mediaId) return@withController
+                        c2.replaceMediaItems(c2.currentMediaItemIndex + 1, c2.mediaItemCount, order.map { items[others[it]] })
+                    }
+                }
+            }
         }
     }
 
@@ -197,6 +234,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
      * ti (no hay listas, Me gusta ni historial).
      */
     fun playDj(onFail: () -> Unit) = withController { c ->
+        shuffling?.cancel()
         val before = _source.value
         _source.value = Source("DJ", "Mezcla para ti")
         original = null

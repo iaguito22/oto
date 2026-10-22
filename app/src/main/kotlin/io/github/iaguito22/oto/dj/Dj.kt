@@ -19,8 +19,10 @@ import kotlin.random.Random
  *  - tuyas que llevabas tiempo sin oír,
  *  - canciones de tus artistas que no tienes,
  *  - artistas nuevos a los que apuntan varios de los tuyos a la vez.
- * Nunca pone tres desconocidas seguidas. Para cambiar de tanda busca un puente: un artista nuevo cercano a lo que
- * suena y, a la vez, a otra parte de lo tuyo que no tiene nada que ver; de ahí salta a esa otra parte.
+ * Nunca pone tres desconocidas seguidas. Dentro de la tanda cada una se elige también por lo que se parece a la que
+ * suena (como encadena un DJ), no solo al centro: dos artistas cercanos al centro pueden no tener nada que ver entre
+ * sí. Para cambiar de tanda busca un puente: un artista nuevo cercano a lo que suena y, a la vez, a otra parte de lo
+ * tuyo que no tiene nada que ver; de ahí salta a esa otra parte.
  *
  * Mientras suena solo mira cuánto te quedas con cada una: si pasas algo nuevo deja ese camino, si te quedas tira del
  * hilo. De una sesión a otra no repite canciones en un mes ni arranca desde los mismos artistas, y lo que pone él
@@ -177,7 +179,7 @@ class Dj(
     private fun familiar(): Candidate? {
         val artists = region.keys.mapNotNull(profile.artists::get).filter { it.songs.isNotEmpty() && allowed(it.key) }.toMutableList()
         while (artists.isNotEmpty()) {
-            val a = weighted(artists) { region.getValue(it.key) * it.affinity.pow(0.5) / (1 + 0.5 * it.djWeek) } ?: return null
+            val a = weighted(artists) { region.getValue(it.key) * it.affinity.pow(0.5) / (1 + 0.5 * it.djWeek) * smooth(it.key, setOf(it.key)) } ?: return null
             val t = weighted(a.songs.values.filter(::ok)) { t ->
                 (profile.weight[t.key] ?: 1.0).pow(0.7) * forgotten(t) * if (t.key in inRadio) 1.5 else 1.0
             }
@@ -190,7 +192,7 @@ class Dj(
     private fun eligible(kind: Kind) = pool.values.filter { it.kind == kind && ok(it.track) && near(it) > 0 }
 
     private fun score(c: Candidate): Double {
-        var w = c.weight * near(c)
+        var w = c.weight * near(c) * smooth(c.track.who, c.vias)
         profile.artists[c.track.who]?.let { a ->
             if (c.kind == Kind.DEEP) w *= a.affinity.pow(0.3)
             // Lo que ya te puso el DJ: según cuánto te quedaste entonces, y menos si fue esta semana.
@@ -198,6 +200,29 @@ class Dj(
         }
         return w
     }
+
+    /**
+     * Lo que se parece [who] (o, si no es tuyo, lo que llevó a él: [vias]) a la que suena: por tus listas o porque
+     * YouTube los junta. De 0 a 1; sin anterior, 1.
+     */
+    private fun flow(who: String, vias: Set<String>): Double {
+        val prev = picks.lastOrNull() ?: return 1.0
+        if (prev.track.who == who) return 1.0
+        var best = 0.0
+        for ((x, wx) in sides(prev.track.who, prev.vias)) for ((y, wy) in sides(who, vias)) {
+            val s = if (x === y) 1.0 else maxOf(profile.sim(x, y), if (links[x.key]?.contains(y.key) == true) LINKED else 0.0)
+            best = maxOf(best, s * wx * wy)
+        }
+        return best
+    }
+
+    /** Un artista tuyo es él mismo; uno nuevo, los tuyos que llevaron a él (un poco menos). */
+    private fun sides(who: String, vias: Set<String>): List<Pair<Profile.Artist, Double>> =
+        profile.artists[who]?.takeIf { it.lists.isNotEmpty() }?.let { listOf(it to 1.0) }
+            ?: vias.mapNotNull(profile.artists::get).map { it to 0.8 }
+
+    /** Cuánto pesa encadenar bien: de [FLOW_FLOOR] (nada que ver con la que suena) a algo más de 1 (lo mismo). */
+    private fun smooth(who: String, vias: Set<String>) = FLOW_FLOOR + flow(who, vias)
 
     /** Lo cerca que está de la tanda lo que llevó a ella; si la citan varios tuyos, más. */
     private fun near(c: Candidate): Double {
@@ -379,6 +404,8 @@ class Dj(
     }
 
     private fun add(c: Candidate) {
+        // Relleno que no es una canción: cortes de sesiones de DJ, intros, karaoke, versiones para niños…
+        if (JUNK_TITLE.containsMatchIn(c.track.title) || JUNK_ARTIST.containsMatchIn(c.track.artist)) return
         if (c.track.key in keys || c.track.key in profile.weight || c.track.base + "|" + c.track.who in profile.bases) return
         val had = pool[c.track.key]
         if (had == null || had.weight < c.weight) pool[c.track.key] = c
@@ -430,6 +457,8 @@ class Dj(
     }
 
     private companion object {
+        val JUNK_TITLE = Regex("""\([^)]*\bmixed\b[^)]*\)|\bmix cut\b|\b(abgt|asot|gdjb)\s?\d+|\b(intro|interlude|outro|skit|karaoke)\b""", RegexOption.IGNORE_CASE)
+        val JUNK_ARTIST = Regex("""kidz bop|karaoke|tribute|rockabye baby|\b8[- ]bit\b""", RegexOption.IGNORE_CASE)
         /** Las primeras, tuyas: se entra con algo que te gusta. */
         const val WARM_UP = 2
         const val WAIT_MS = 5_000L
@@ -440,6 +469,10 @@ class Dj(
         /** Cuántos cambios de tanda sin puente van a cualquier otra parte de lo tuyo. */
         const val JUMP = 0.15
         const val SKIPPED = 0.15
+        /** Lo que no tiene nada que ver con la anterior aún puede salir, pero mucho menos. */
+        const val FLOW_FLOOR = 0.05
+        /** Dos tuyos que YouTube junta aunque tus listas no: se parecen al menos esto. */
+        const val LINKED = 0.3
         const val HOOKED = 0.75
         const val RECENTLY = 21 * DAY
         const val PRIOR = 3.0
