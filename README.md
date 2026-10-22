@@ -18,11 +18,16 @@ Reproductor de música para Android sobre YouTube Music, sin pestañas ni botone
   <img src="docs/library.jpg" width="200" alt="Tu música">
   <img src="docs/settings.jpg" width="200" alt="Ajustes">
 </p>
+<p align="center">
+  <img src="docs/listas.jpg" width="200" alt="Todas tus listas">
+  <img src="docs/explorar.jpg" width="200" alt="Explorar, con los ánimos arriba">
+  <img src="docs/buscar.jpg" width="200" alt="Buscar, con el resultado principal en grande">
+</p>
 
 ## Qué tiene
 
 - **Letra sincronizada palabra a palabra** cuando la fuente lo trae, con los coros aparte y la pronunciación debajo del japonés, chino, coreano o cirílico. Se busca en cuanto empieza la canción y se guarda en el móvil: abrirla es al momento.
-- **Tus listas y carpetas**, con Me gusta y el DJ. Se fijan arriba y se recolocan arrastrando («Mover», manteniendo cualquiera).
+- **Tus listas y carpetas**, con Me gusta y el DJ. Se fijan arriba y se recolocan arrastrando («Mover», manteniendo cualquiera); las que has oído hace poco salen debajo, y todas en «Todas tus listas», con orden y filtros.
 - **Importar de Spotify** tus listas y tus me gusta, con la extensión de Spicetify de [`tools/spicetify`](tools/spicetify) (se instala pegando una línea).
 - **Cuenta de YouTube Music** (opcional): recomendaciones tuyas y una copia de tus listas en tu cuenta, que vuelven solas al reinstalar.
 - **DJ**: una mezcla continua de lo tuyo, lo que te falta de tus artistas y artistas nuevos, que aprende de cuánto te quedas con cada canción.
