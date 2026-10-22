@@ -3,6 +3,7 @@ package io.github.iaguito22.oto.ui.menu
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -16,6 +17,9 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,7 +47,10 @@ import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -58,6 +65,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
@@ -102,19 +110,13 @@ fun ColumnScope.SaveTo(what: Saving, onDone: () -> Unit) {
     val songs = what.songs
     val ids = remember(songs) { songs.mapTo(HashSet()) { it.id } }
 
-    Row(Modifier.padding(Space.sm), verticalAlignment = Alignment.CenterVertically) {
-        Art(what.art, 48.dp, Radius.sm)
-        Spacer(Modifier.width(Space.md))
-        Column(Modifier.weight(1f)) {
-            Text(what.title, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(what.sub, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        // Una canción (lo que suena, al mantener la carátula): también se puede mandar a alguien.
-        songs.singleOrNull()?.let { h ->
+    // Una canción (lo que suena, al mantener la carátula): también se puede mandar a alguien.
+    FloatHeader({ Art(what.art, 48.dp, Radius.sm) }, what.title, what.sub, trailing = songs.singleOrNull()?.let { h ->
+        {
             val context = LocalContext.current
             RoundIcon(R.drawable.ic_share) { shareSong(context, h.id, h.title, h.artist) }
         }
-    }
+    })
     Text(
         "GUARDAR EN", style = OtoType.label, color = c.textMuted,
         modifier = Modifier.padding(start = Space.md, top = Space.sm, bottom = Space.xs),
@@ -272,10 +274,10 @@ fun LikedArt(size: Dp, modifier: Modifier = Modifier) {
 
 /** La portada de una lista: las cuatro primeras carátulas en cuadrícula (o la primera, si hay menos). */
 @Composable
-fun Mosaic(songs: List<Heard>, size: Dp) {
+fun Mosaic(songs: List<Heard>, size: Dp, corner: Dp = if (size < 64.dp) Radius.sm else Radius.md) {
     val c = Oto.colors
     val arts = songs.mapNotNull { it.artwork }.distinct()
-    Box(Modifier.size(size).clip(RoundedCornerShape(if (size < 64.dp) Radius.sm else Radius.md)).background(c.field), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(size).clip(RoundedCornerShape(corner)).background(c.field), contentAlignment = Alignment.Center) {
         when {
             arts.size >= 4 -> Column {
                 Row { Art(arts[0], size / 2, 0.dp); Art(arts[1], size / 2, 0.dp) }
@@ -289,17 +291,55 @@ fun Mosaic(songs: List<Heard>, size: Dp) {
 
 fun count(n: Int) = if (n == 1) "1 canción" else "$n canciones"
 
+/** La cabecera de todas las tarjetas flotantes: portada de 48, nombre y una línea; a la derecha, si hace falta, un botón. */
+@Composable
+fun FloatHeader(art: @Composable () -> Unit, title: String, sub: String?, trailing: (@Composable () -> Unit)? = null) {
+    val c = Oto.colors
+    Row(Modifier.padding(Space.sm), verticalAlignment = Alignment.CenterVertically) {
+        art()
+        Spacer(Modifier.width(Space.md))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (!sub.isNullOrEmpty()) Text(sub, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        trailing?.invoke()
+    }
+}
+
+/** Una portada que es un icono en acento: para lo que no tiene carátula (una lista nueva, una carpeta…). */
+@Composable
+fun IconArt(icon: Int, size: Dp) {
+    val c = Oto.colors
+    Box(Modifier.size(size).clip(RoundedCornerShape(if (size < 64.dp) Radius.sm else Radius.md)).background(c.accent.copy(alpha = 0.22f)), contentAlignment = Alignment.Center) {
+        Icon(painterResource(icon), null, Modifier.size(size * 0.46f), tint = c.accent)
+    }
+}
+
 /**
- * Una tarjeta que sube desde abajo sobre un velo; tocar el velo la cierra. Guarda lo último que enseñó para
- * poder irse con ello puesto. [cardModifier]: fuera de una hoja, los insets (barra de gestos y teclado).
+ * Una tarjeta que sube desde abajo sobre un velo; tocar el velo o bajarla con el dedo la cierra. Guarda lo último que
+ * enseñó para poder irse con ello puesto. [cardModifier]: fuera de una hoja, los insets (barra de gestos y teclado).
  */
 @Composable
 fun <T : Any> Floating(value: T?, onDismiss: () -> Unit, cardModifier: Modifier = Modifier, content: @Composable ColumnScope.(T) -> Unit) {
     var last by remember { mutableStateOf(value) }
     if (value != null) last = value
+    val shown = value != null
+    // Bajándola: sigue al dedo y, pasado un tercio de su alto o con un tirón, se va; si no, vuelve con un muelle.
+    var drag by remember { mutableFloatStateOf(0f) }
+    var height by remember { mutableIntStateOf(1) }
+    val dismiss by rememberUpdatedState(onDismiss)
+    val dragState = rememberDraggableState { d -> drag = (drag + d).coerceAtLeast(0f) }
+    // Se queda donde la soltaste mientras se va; vuelve a cero cuando ya no se ve.
+    LaunchedEffect(shown) { if (shown) drag = 0f else { delay(Motion.SPATIAL_FAST.toLong()); drag = 0f } }
     Box(Modifier.fillMaxSize()) {
-        AnimatedVisibility(value != null, enter = fadeIn(tween(Motion.EFFECTS)), exit = fadeOut(tween(Motion.EFFECTS))) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)).clickable(remember { MutableInteractionSource() }, null, onClick = onDismiss))
+        AnimatedVisibility(shown, enter = fadeIn(tween(Motion.EFFECTS)), exit = fadeOut(tween(Motion.EFFECTS))) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = 1f - (drag / height).coerceIn(0f, 1f) * 0.7f }
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable(remember { MutableInteractionSource() }, null, onClick = onDismiss),
+            )
         }
         AnimatedVisibility(
             value != null,
@@ -312,13 +352,25 @@ fun <T : Any> Floating(value: T?, onDismiss: () -> Unit, cardModifier: Modifier 
             Column(
                 Modifier
                     .padding(Space.md)
+                    .onSizeChanged { height = it.height.coerceAtLeast(1) }
+                    .draggable(dragState, Orientation.Vertical, enabled = shown, onDragStopped = { v ->
+                        if (drag > height / 3f || v > FLING) dismiss()
+                        else animate(drag, 0f, animationSpec = spring(dampingRatio = 0.8f, stiffness = 500f)) { x, _ -> drag = x }
+                    })
+                    .graphicsLayer { translationY = drag }
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(Radius.xl))
                     .background(Color(0xFF1C1C1C))
                     .background(Oto.colors.accent.copy(alpha = 0.06f))
                     .clickable(remember { MutableInteractionSource() }, null) {}
                     .padding(Space.sm),
-            ) { last?.let { content(it) } }
+            ) {
+                Box(Modifier.align(Alignment.CenterHorizontally).size(36.dp, 4.dp).clip(CircleShape).background(Oto.colors.textFaint))
+                last?.let { content(it) }
+            }
         }
     }
 }
+
+/** Un tirón hacia abajo, en px/s, que cierra la tarjeta aunque no se haya bajado mucho. */
+private const val FLING = 1_400f

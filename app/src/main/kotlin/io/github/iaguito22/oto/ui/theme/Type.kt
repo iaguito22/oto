@@ -23,6 +23,8 @@ object OtoType {
     val label = TextStyle(fontFamily = Rubik, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, letterSpacing = 0.07.em)
     val rowTitle = TextStyle(fontFamily = Rubik, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, lineHeight = 19.sp)
     val rowSub = TextStyle(fontFamily = Rubik, fontWeight = FontWeight.Normal, fontSize = 13.sp, lineHeight = 17.sp)
+    /** Los títulos de sección (Tus listas, los carruseles): más finos que [title], para pesar menos que las carátulas. */
+    val section = TextStyle(fontFamily = Rubik, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 23.sp, letterSpacing = (-0.3).sp)
     val title = TextStyle(fontFamily = Rubik, fontWeight = FontWeight.Bold, fontSize = 22.sp, lineHeight = 27.sp, letterSpacing = (-0.4).sp)
     val display = TextStyle(fontFamily = Rubik, fontWeight = FontWeight.SemiBold, fontSize = 34.sp, lineHeight = 38.sp, letterSpacing = (-1).sp)
     val lyric = TextStyle(fontFamily = Rubik, fontWeight = FontWeight.Bold, fontSize = 27.sp, lineHeight = 33.sp, letterSpacing = (-0.4).sp)
