@@ -91,7 +91,7 @@ fun Suggestions(list: LocalPlaylist, currentId: String?, play: (SongItem) -> Uni
     Column(Modifier.fillMaxWidth().padding(top = Space.lg)) {
         Row(Modifier.padding(end = Space.sm), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).padding(start = Space.sm)) {
-                Text("Recomendadas", style = OtoType.title.copy(fontSize = OtoType.title.fontSize * 0.86f), color = c.text)
+                Text("Recomendadas", style = OtoType.section, color = c.text)
                 Text("Parecidas a lo que tiene esta lista", style = OtoType.rowSub, color = c.textMuted)
             }
             Pill("Otras", { haptics.performHapticFeedback(HapticFeedbackType.SegmentTick); round++ }, filled = false, icon = R.drawable.ic_refresh)

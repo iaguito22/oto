@@ -8,9 +8,11 @@ import com.metrolist.innertube.models.ArtistItem
 import com.metrolist.innertube.models.PlaylistItem
 import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
+import com.metrolist.innertube.pages.HomePage
 import io.github.iaguito22.oto.LocalPlaylist
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,6 +47,9 @@ sealed interface Page {
     /** Lo descargado. */
     data object Downloads : Page
 
+    /** Todas tus listas y carpetas. [arranging]: entra ya recolocándolas («Mover» en una que no está arriba). */
+    data class Lists(val arranging: Boolean = false) : Page
+
     /** Una lista hecha con lo tuyo ([io.github.iaguito22.oto.dj.Smart]), tal y como estaba al abrirla. */
     data class Smart(val list: LocalPlaylist) : Page
 }
@@ -57,6 +62,9 @@ data class MenuState(
     val searchError: String? = null,
     val shelves: List<Shelf>? = null,
     val homeError: String? = null,
+    /** Los ánimos de la portada de YouTube Music (Relax, Entrenar…) y el elegido, por su título. */
+    val chips: List<HomePage.Chip> = emptyList(),
+    val chip: String? = null,
     val pages: List<Page> = emptyList(),
 )
 
@@ -90,20 +98,36 @@ class MenuViewModel : ViewModel() {
     private var lastQuery = ""
     private var lastFilter = Filter.All
 
+    private var home: Job? = null
+
+    /** La portada; con un ánimo elegido, la de ese ánimo (sus chips no cambian: siguen siendo los de la portada). */
     fun loadHome() {
-        _state.update { it.copy(homeError = null) }
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) { YouTube.home() }
+        val chip = _state.value.chips.firstOrNull { it.title == _state.value.chip }
+        _state.update { it.copy(homeError = null, shelves = null) }
+        home?.cancel()
+        home = viewModelScope.launch {
+            withContext(Dispatchers.IO) { YouTube.home(params = chip?.endpoint?.params) }
                 .onSuccess { page ->
                     val shelves = page.sections.mapNotNull { s ->
                         val items = s.items.filter { it is SongItem || it is AlbumItem || it is PlaylistItem || it is ArtistItem }
                         if (items.isEmpty()) null else Shelf(s.title, items)
                     }
-                    _state.update { it.copy(shelves = shelves) }
+                    // Los pódcast, no: Oto no los pone.
+                    val chips = page.chips.orEmpty().filter { !it.title.equals("Podcasts", ignoreCase = true) && !it.title.equals("Pódcasts", ignoreCase = true) }
+                    _state.update { s -> s.copy(shelves = shelves, chips = if (chip == null) chips else s.chips) }
                 }
                 .onFailure { e -> _state.update { it.copy(homeError = e.message ?: e::class.simpleName) } }
         }
     }
+
+    /** Tocar un ánimo lo elige; tocar el elegido vuelve a la portada de siempre. */
+    fun onChip(title: String) {
+        _state.update { it.copy(chip = if (it.chip == title) null else title) }
+        loadHome()
+    }
+
+    /** Las canciones de un álbum, una lista o (las más oídas de) un artista, para ponerlas sin abrirlo. */
+    suspend fun songsOf(item: YTItem): List<SongItem>? = withContext(Dispatchers.IO) { load(item) }.songs?.takeIf { it.isNotEmpty() }
 
     fun open(item: YTItem) {
         _state.update { it.copy(pages = it.pages + Page.Remote(item)) }
@@ -122,6 +146,11 @@ class MenuViewModel : ViewModel() {
 
     /** Las descargas, encima de lo que haya (o, si ya están arriba, nada). */
     fun openDownloads() = _state.update { if (it.pages.lastOrNull() == Page.Downloads) it else it.copy(pages = it.pages + Page.Downloads) }
+
+    fun openLists(arranging: Boolean = false) = _state.update { s ->
+        val top = s.pages.lastOrNull()
+        if (top is Page.Lists) s.copy(pages = s.pages.dropLast(1) + Page.Lists(arranging)) else s.copy(pages = s.pages + Page.Lists(arranging))
+    }
 
     fun openSmart(list: LocalPlaylist) = _state.update { it.copy(pages = it.pages + Page.Smart(list)) }
 

@@ -2,6 +2,22 @@ package io.github.iaguito22.oto.ui.menu
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.foundation.gestures.snapping.SnapPosition
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.unit.sp
+import sh.calvin.reorderable.rememberReorderableLazyGridState
+import java.text.Collator
+import java.util.Locale
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
@@ -138,7 +154,7 @@ import kotlinx.coroutines.withContext
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
-private enum class View { Tabs, Search, Page, Settings, Import, Account }
+private enum class View { Tabs, Recent, Search, Page, Settings, Import, Account }
 
 /** Qué se ve: la vista y, en las páginas, cuántas hay apiladas (cada una entra como un paso más hondo). */
 private data class Nav(val view: View, val depth: Int)
@@ -148,6 +164,12 @@ private data class Held(val song: SongItem, val list: String? = null)
 
 /** Pedir un nombre: para una lista nueva, para renombrar [rename] o para renombrar la carpeta [folder]. */
 private data class Naming(val rename: LocalPlaylist? = null, val folder: String? = null, val newFolder: Boolean = false)
+
+/**
+ * Un aviso de abajo. Con [undo] dura más y lleva «Deshacer»; [commit] hace de verdad lo avisado cuando el aviso se va
+ * sin deshacerlo (o lo tapa otro, o se cierra el Menú).
+ */
+private class Notice(val text: String, val undo: (() -> Unit)? = null, val commit: (() -> Unit)? = null)
 
 /** El id con el que una carpeta suena como una lista (y se vuelve a abrir desde lo que suena). */
 const val FOLDER_PREFIX = "folder:"
@@ -171,20 +193,66 @@ fun MenuSheet(
     val s by vm.state.collectAsStateWithLifecycle()
     val app = LocalContext.current.applicationContext as OtoApp
     val prefs = app.prefs
+    val memory = remember { MenuMemory.of(app) }
     val history by prefs.history.collectAsStateWithLifecycle(initialValue = null)
-    val playlists by prefs.playlists.collectAsStateWithLifecycle(initialValue = null)
-    val liked by prefs.likedList.collectAsStateWithLifecycle(initialValue = null)
+    val savedLists by prefs.playlists.collectAsStateWithLifecycle(initialValue = null)
+    val savedLiked by prefs.likedList.collectAsStateWithLifecycle(initialValue = null)
     val pinned by prefs.pinned.collectAsStateWithLifecycle(initialValue = emptySet())
+    val recents by memory.recents.collectAsStateWithLifecycle(initialValue = null)
+    val played by memory.played.collectAsStateWithLifecycle(initialValue = emptyMap())
     val source by connection.source.collectAsStateWithLifecycle()
     val np by connection.state.collectAsStateWithLifecycle()
     val pager = rememberPagerState { 2 }
+    val scope = rememberCoroutineScope()
+
+    // ---- Avisos y lo que se puede deshacer ----
+    // Quitar algo no lo borra al momento: desaparece de la vista ([gone]) y se borra de verdad cuando el aviso se va
+    // sin «Deshacer». Así deshacer lo deja exactamente como estaba (en su sitio, y una descarga sin volver a bajarla).
+    var notice by remember { mutableStateOf<Notice?>(null) }
+    var gone by remember { mutableStateOf(emptySet<String>()) }
+    val settle = { n: Notice? -> n?.commit?.invoke(); Unit }
+    val post = { n: Notice -> settle(notice); notice = n }
+    val say = { text: String -> post(Notice(text)) }
+    val removeLater = { key: String, text: String, act: suspend () -> Unit ->
+        gone = gone + key
+        post(
+            Notice(
+                text,
+                undo = { gone = gone - key },
+                commit = {
+                    app.scope.launch {
+                        act()
+                        // Que llegue antes lo guardado: si no, asoma un instante lo quitado.
+                        delay(400)
+                        withContext(Dispatchers.Main) { gone = gone - key }
+                    }
+                },
+            ),
+        )
+    }
+    LaunchedEffect(notice) {
+        val n = notice ?: return@LaunchedEffect
+        delay(if (n.undo != null) UNDO_MS else NOTICE_MS)
+        if (notice === n) { notice = null; settle(n) }
+    }
+    val pending by rememberUpdatedState(notice)
+    DisposableEffect(Unit) { onDispose { settle(pending) } }
+
+    // Lo quitado y aún sin borrar ya no se ve en ningún sitio.
+    val playlists = remember(savedLists, gone) {
+        savedLists?.filter { "l:${it.id}" !in gone }?.map { l -> if (gone.none { it.startsWith("s:${l.id}:") }) l else l.copy(songs = l.songs.filter { "s:${l.id}:${it.id}" !in gone }) }
+    }
+    val liked = remember(savedLiked, gone) {
+        savedLiked?.let { l -> if (gone.none { it.startsWith("s:$LIKED_ID:") }) l else l.copy(songs = l.songs.filter { "s:$LIKED_ID:${it.id}" !in gone }) }
+    }
+
     // El gusto (para la búsqueda) y las listas hechas con lo tuyo (para Explorar) se rehacen al cambiar lo guardado o
     // lo oído, y cada canción que empieza cambia el historial. Con muchas listas rehacerlas cuesta segundos y el
     // cálculo no se corta a medias: pasando canciones rápido se amontonaban hasta dejar el móvil sin memoria. Así se
     // espera a que el historial pare quieto un momento, y collectLatest no empieza uno sin que acabe el anterior.
     var smart by remember { mutableStateOf(emptyList<LocalPlaylist>()) }
     LaunchedEffect(Unit) {
-        snapshotFlow { Triple(history, liked, playlists) }
+        snapshotFlow { Triple(history, savedLiked, savedLists) }
             .debounce(RECOMPUTE_MS)
             .collectLatest { (h, lk, l) ->
                 vm.taste = withContext(Dispatchers.Default) {
@@ -196,16 +264,25 @@ fun MenuSheet(
                 }
             }
     }
-    // Recolocando Tus listas: cada lista o carpeta se arrastra a su sitio, hasta «Listo».
+    // Cuándo sonó cada lista o carpeta: Tu música enseña primero las que has oído hace menos.
+    LaunchedEffect(Unit) {
+        connection.source.collect { src ->
+            val id = src?.local ?: return@collect
+            if (id == DOWNLOADS_ID || id == LIKED_ID) return@collect
+            memory.markPlayed(if (id.startsWith(FOLDER_PREFIX)) "d:" + id.removePrefix(FOLDER_PREFIX) else id, System.currentTimeMillis())
+        }
+    }
+    // Recolocando la fila de arriba de Tus listas: cada una se arrastra a su sitio, hasta «Listo».
     var arranging by remember { mutableStateOf(false) }
     var djMenu by remember { mutableStateOf(false) }
     val spots by prefs.spots.collectAsStateWithLifecycle(initialValue = null)
-    val scope = rememberCoroutineScope()
     val focus = LocalFocusManager.current
     val haptics = LocalHapticFeedback.current
+    val searchFocus = remember { FocusRequester() }
+    var searchFocused by remember { mutableStateOf(false) }
+    val musicList = rememberLazyListState()
+    val exploreList = rememberLazyListState()
     var settings by remember { mutableStateOf(false) }
-    var notice by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(notice) { if (notice != null) { delay(1800); notice = null } }
     var held by remember { mutableStateOf<Held?>(null) }
     var naming by remember { mutableStateOf<Naming?>(null) }
     var listMenu by remember { mutableStateOf<LocalPlaylist?>(null) }
@@ -217,8 +294,10 @@ fun MenuSheet(
     var saving by remember { mutableStateOf<Saving?>(null) }
     var importing by remember { mutableStateOf(false) }
     var accounting by remember { mutableStateOf(false) }
-    val downloadLists by prefs.downloadLists.collectAsStateWithLifecycle(initialValue = null)
-    val downloadSongs by prefs.downloadSongs.collectAsStateWithLifecycle(initialValue = emptyList())
+    val savedDownloadLists by prefs.downloadLists.collectAsStateWithLifecycle(initialValue = null)
+    val savedDownloadSongs by prefs.downloadSongs.collectAsStateWithLifecycle(initialValue = emptyList())
+    val downloadLists = remember(savedDownloadLists, gone) { savedDownloadLists?.filterTo(HashSet()) { "dl:$it" !in gone } }
+    val downloadSongs = remember(savedDownloadSongs, gone) { savedDownloadSongs.filter { "ds:${it.id}" !in gone } }
     val downloadStates by app.downloads.states.collectAsStateWithLifecycle()
     val saver by prefs.dataSaver.collectAsStateWithLifecycle(initialValue = false)
     val context = LocalContext.current
@@ -226,15 +305,20 @@ fun MenuSheet(
 
     val view = when {
         accounting -> View.Account
+        // Tocar el buscador vacío enseña lo buscado hace poco, encima de lo que hubiera abierto.
+        searchFocused && s.query.isBlank() -> View.Recent
         importing -> View.Import
         settings -> View.Settings
         s.pages.isNotEmpty() -> View.Page
         s.query.isNotBlank() -> View.Search
         else -> View.Tabs
     }
+    val top = s.pages.lastOrNull()
+    val downloadsOpen = view == View.Page && top == Page.Downloads
     BackHandler(open && view != View.Tabs) {
         when (view) {
             View.Account -> accounting = false
+            View.Recent -> focus.clearFocus()
             View.Import -> importing = false
             View.Settings -> settings = false
             View.Page -> vm.closeDetail()
@@ -248,15 +332,18 @@ fun MenuSheet(
     }
     BackHandler(open && arranging && view == View.Tabs) { arranging = false }
 
-    // Al cerrarse, vuelve a como se abre siempre: «Tu música», sin páginas, ajustes ni nada flotando.
+    // Al cerrarse, vuelve a como se abre siempre: «Tu música» arriba del todo, sin páginas, ajustes ni nada flotando.
     LaunchedEffect(open) {
         if (open) return@LaunchedEffect
         held = null; naming = null; listMenu = null; saving = null; moving = null; folderMenu = null; creating = false; filling = null
         arranging = false; djMenu = false
-        notice = null; settings = false; importing = false; accounting = false
+        settle(notice); notice = null
+        settings = false; importing = false; accounting = false
         focus.clearFocus()
         vm.closeAll()
         pager.scrollToPage(0)
+        musicList.scrollToItem(0)
+        exploreList.scrollToItem(0)
     }
 
     val play: (SongItem) -> Unit = { focus.clearFocus(); connection.play(it); onClose() }
@@ -265,6 +352,24 @@ fun MenuSheet(
         focus.clearFocus()
         held = Held(song, list)
     }
+    // Buscar desde cero (escribiendo o desde lo reciente) con algo abierto lleva a los resultados: si no, se buscaba
+    // detrás, sin verse.
+    val search = { q: String ->
+        if (q.isNotBlank() && s.query.isBlank()) { settings = false; importing = false; vm.closeAll() }
+        vm.onQuery(q)
+    }
+    val rememberSearch = { item: YTItem? ->
+        val q = s.query
+        scope.launch {
+            if (q.trim().length >= 2) memory.remember(Recent.query(q))
+            item?.let(Recent::of)?.let { memory.remember(it) }
+        }
+    }
+    // «Mover»: lo que está en la fila de arriba se recoloca ahí; lo demás, en «Todas tus listas».
+    val arrange = { key: String ->
+        if (view == View.Tabs && (key == "dj" || key == LIKED_ID || key in pinned)) arranging = true else vm.openLists(arranging = true)
+    }
+    val canArrange = view == View.Tabs || top is Page.Lists
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -272,12 +377,17 @@ fun MenuSheet(
                 Box(Modifier.size(36.dp, 4.dp).clip(CircleShape).background(Oto.colors.textFaint))
             }
             Row(Modifier.fillMaxWidth().padding(start = Space.lg, end = Space.sm, top = Space.md, bottom = Space.sm), verticalAlignment = Alignment.CenterVertically) {
-                Tabs(pager, onSelect = { i ->
+                // Fuera de las pestañas (ajustes, descargas) su indicador se apaga: ahí no estás en ninguna.
+                Tabs(pager, dim = downloadsOpen || view == View.Settings || view == View.Import || view == View.Account, onSelect = { i ->
+                    // La pestaña en la que ya estás sube arriba del todo.
+                    if (view == View.Tabs && pager.currentPage == i) {
+                        scope.launch { (if (i == 0) musicList else exploreList).animateScrollToItem(0) }
+                        return@Tabs
+                    }
                     settings = false; importing = false; accounting = false; vm.closeAll(); vm.onQuery(""); focus.clearFocus()
                     scope.launch { pager.animateScrollToPage(i, animationSpec = Motion.spatial()) }
                 })
                 Spacer(Modifier.weight(1f))
-                val downloadsOpen = view == View.Page && s.pages.lastOrNull() == Page.Downloads
                 RoundIcon(R.drawable.ic_download_for_offline, selected = downloadsOpen) {
                     settings = false; importing = false; accounting = false; focus.clearFocus()
                     if (downloadsOpen) vm.closeDetail() else vm.openDownloads()
@@ -310,22 +420,50 @@ fun MenuSheet(
             ) { nav ->
                 when (nav.view) {
                     View.Tabs -> HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1, userScrollEnabled = !arranging) { page ->
-                        if (page == 0) YourMusic(history, liked, playlists, pinned, folders, currentId, play, onHold = { hold(it, null) }, onOpen = vm::openLocal, onFolder = vm::openFolder, onNew = { creating = true },
+                        if (page == 0) YourMusic(history, liked, playlists, pinned, folders, played, currentId, play, onHold = { hold(it, null) }, onOpen = vm::openLocal, onFolder = vm::openFolder, onNew = { creating = true },
                             dj = source?.kind == "DJ" && np.playing,
                             onDj = {
-                                if (playlists.orEmpty().all { it.songs.isEmpty() } && liked?.songs.isNullOrEmpty()) notice = "El DJ aprende de tus listas: guarda algo primero"
-                                else { connection.playDj(onFail = { notice = "El DJ no ha podido empezar" }); onClose() }
+                                if (playlists.orEmpty().all { it.songs.isEmpty() } && liked?.songs.isNullOrEmpty()) say("El DJ aprende de tus listas: guarda algo primero")
+                                else { connection.playDj(onFail = { say("El DJ no ha podido empezar") }); onClose() }
                             },
                             onListMenu = { listMenu = it },
                             onFolderMenu = { folderMenu = it },
                             arranging = arranging, onDoneArranging = { arranging = false },
                             onReorder = { ids, s -> scope.launch { prefs.orderLists(ids); if (s.isNotEmpty()) prefs.setSpots(s) } },
-                            spots = spots, onDjMenu = { djMenu = true })
-                        else Explore(s, smart, currentId, play, onHold = { hold(it, null) }, onOpen = vm::open, onSmart = vm::openSmart, onRetry = vm::loadHome)
+                            spots = spots, onDjMenu = { djMenu = true }, onAll = { vm.openLists() }, state = musicList)
+                        else Explore(
+                            s, smart, currentId, play, onHold = { hold(it, null) }, onOpen = vm::open, onSmart = vm::openSmart, onRetry = vm::loadHome,
+                            onChip = vm::onChip, state = exploreList,
+                        )
                     }
+                    View.Recent -> Recents(
+                        recents,
+                        onPick = { r ->
+                            scope.launch { memory.remember(r) }
+                            val item = r.item()
+                            if (item == null) search(r.title) else vm.open(item)
+                            focus.clearFocus()
+                        },
+                        onForget = { r -> scope.launch { memory.forget(r) } },
+                    )
                     View.Search -> Column {
                         Filters(s.filter, vm::onFilter)
-                        Results(s, currentId, play, onHold = { hold(it, null) }, onOpen = { focus.clearFocus(); vm.open(it) })
+                        Results(
+                            s, currentId,
+                            play = { rememberSearch(null); play(it) },
+                            onHold = { hold(it, null) },
+                            onOpen = { focus.clearFocus(); rememberSearch(it); vm.open(it) },
+                            // El resultado principal se pone sin abrirlo: lo suyo (un álbum, lo más oído de un artista) entero.
+                            onPlayItem = { item, done ->
+                                rememberSearch(item)
+                                scope.launch {
+                                    val songs = vm.songsOf(item)
+                                    done()
+                                    if (songs == null) say("No se ha podido poner «${item.title}»")
+                                    else { focus.clearFocus(); connection.playAll(songs, null, item); onClose() }
+                                }
+                            },
+                        )
                     }
                     View.Page -> when (val p = s.pages.getOrNull(nav.depth - 1)) {
                         is Page.Remote -> if (p.item is ArtistItem) ArtistView(
@@ -344,6 +482,7 @@ fun MenuSheet(
                             downloaded = p.id in downloadLists.orEmpty(), downloadStates = downloadStates,
                             play = play, onHoldOther = { hold(it, null) },
                             onAdd = { list, h -> scope.launch { if (list.id == LIKED_ID) prefs.setLiked(h, true) else prefs.addToPlaylist(list.id, h) } },
+                            onFind = { searchFocus.requestFocus() },
                         )
                         is Page.Smart -> SmartView(
                             p.list, currentId, onBack = vm::closeDetail,
@@ -352,8 +491,10 @@ fun MenuSheet(
                             onSave = { saving = Saving(p.list.songs, p.list.name, count(p.list.songs.size), p.list.songs.firstOrNull()?.artwork) },
                         )
                         Page.Downloads -> DownloadsView(
-                            currentId, onBack = vm::closeDetail, onOpen = vm::openLocal, play = play,
+                            currentId, gone = gone, onBack = vm::closeDetail, onOpen = vm::openLocal, play = play,
                             onPlayAll = { list -> connection.playLocal(list, null, false); onClose() }, onHold = { hold(it, null) },
+                            onRemoveList = { l -> removeLater("dl:${l.id}", "«${l.name}» ya no está descargada") { prefs.setDownloadList(l.id, false) } },
+                            onRemoveSong = { h -> removeLater("ds:${h.id}", "«${h.title}» ya no está descargada") { prefs.setDownloadSong(h, false) } },
                         )
                         is Page.Folder -> FolderView(
                             p.name, playlists.orEmpty().filter { it.folder == p.name }, onBack = vm::closeDetail, onOpen = vm::openLocal,
@@ -361,6 +502,15 @@ fun MenuSheet(
                             onMenu = { folderMenu = p.name },
                             onAdd = { filling = p.name },
                             onListMenu = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); listMenu = it },
+                        )
+                        is Page.Lists -> AllListsView(
+                            shelfOf(playlists.orEmpty(), folders), played, downloadLists.orEmpty(), arranging = p.arranging,
+                            onBack = vm::closeDetail,
+                            onOpen = { e -> if (e.folder != null) vm.openFolder(e.folder) else vm.openLocal(e.lists.first().id) },
+                            onMenu = { e -> if (e.folder != null) folderMenu = e.folder else listMenu = e.lists.first() },
+                            onNew = { creating = true },
+                            onDoneArranging = { vm.openLists(arranging = false) },
+                            onMove = { ids -> scope.launch { prefs.orderLists(ids) } },
                         )
                         null -> Unit
                     }
@@ -379,21 +529,18 @@ fun MenuSheet(
                     enter = fadeIn(tween(Motion.EFFECTS)) + scaleIn(spring(dampingRatio = 0.7f, stiffness = 600f), initialScale = 0.9f),
                     exit = fadeOut(tween(Motion.EFFECTS_FAST)) + scaleOut(tween(Motion.EFFECTS_FAST), targetScale = 0.95f),
                 ) {
-                    var last by remember { mutableStateOf("") }
+                    var last by remember { mutableStateOf<Notice?>(null) }
                     notice?.let { last = it }
-                    Text(
-                        last, style = OtoType.rowSub, color = Oto.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(bottom = Space.sm).widthIn(max = 320.dp).clip(CircleShape).background(Oto.colors.field).padding(horizontal = 14.dp, vertical = 8.dp),
-                    )
+                    last?.let { n -> NoticePill(n) { notice = null; n.undo?.invoke() } }
                 }
             }
             // Entrando con Google, el teclado es para la contraseña: el buscador sobra.
-            // Empezar a escribir con los ajustes, la importación o una página abierta lleva a los resultados (si no,
-            // se buscaba detrás, sin verse).
-            if (view != View.Account) SearchField(s.query, s.searching, onQuery = { q ->
-                if (q.isNotBlank() && s.query.isBlank()) { settings = false; importing = false; vm.closeAll() }
-                vm.onQuery(q)
-            }, onSearch = { focus.clearFocus() })
+            if (view != View.Account) SearchField(
+                s.query, s.searching, onQuery = search,
+                onSearch = { rememberSearch(null); focus.clearFocus() },
+                focus = searchFocus,
+                onFocus = { searchFocused = it },
+            )
         }
 
         // ---- Lo que flota encima: acciones de una canción, opciones de una lista y pedir un nombre ----
@@ -403,7 +550,7 @@ fun MenuSheet(
                 h,
                 onNext = {
                     connection.playNext(h.song)
-                    notice = "«${h.song.title}» va después de esta"
+                    say("«${h.song.title}» va después de esta")
                     held = null
                 },
                 onSave = { held = null; saving = Saving(h.song.toHeard()) },
@@ -415,46 +562,53 @@ fun MenuSheet(
                 },
                 onDownload = {
                     held = null
-                    val on = downloadSongs.none { it.id == h.song.id }
-                    scope.launch { prefs.setDownloadSong(h.song.toHeard(), on) }
-                    notice = if (on) "Descargando «${h.song.title}»" + (if (waitsForWifi()) " cuando haya wifi" else "") else "«${h.song.title}» ya no está descargada"
+                    val song = h.song.toHeard()
+                    if (downloadSongs.none { it.id == song.id }) {
+                        scope.launch { prefs.setDownloadSong(song, true) }
+                        say("Descargando «${song.title}»" + (if (waitsForWifi()) " cuando haya wifi" else ""))
+                    } else removeLater("ds:${song.id}", "«${song.title}» ya no está descargada") { prefs.setDownloadSong(song, false) }
                 },
                 onArtist = { id, name -> held = null; vm.openArtist(id, name) },
                 onRemove = h.list?.let { list ->
                     {
                         held = null
-                        scope.launch { if (list == LIKED_ID) prefs.setLiked(h.song.toHeard(), false) else prefs.removeFromPlaylist(list, h.song.id) }
+                        val where = if (list == LIKED_ID) "Me gusta" else savedLists?.firstOrNull { it.id == list }?.name ?: "la lista"
+                        removeLater("s:$list:${h.song.id}", "«${h.song.title}» quitada de «$where»") {
+                            if (list == LIKED_ID) prefs.setLiked(h.song.toHeard(), false) else prefs.removeFromPlaylist(list, h.song.id)
+                        }
                     }
                 },
                 // En la página de un artista no se ofrece ir a él.
-                here = ((s.pages.lastOrNull() as? Page.Remote)?.item as? ArtistItem)?.id,
+                here = ((top as? Page.Remote)?.item as? ArtistItem)?.id,
             )
         }
         Floating(djMenu.takeIf { it }, onDismiss = { djMenu = false }) {
-            Text("DJ", style = OtoType.rowTitle, color = Oto.colors.text, modifier = Modifier.padding(Space.md))
+            FloatHeader({ DjArt(48.dp, source?.kind == "DJ" && np.playing) }, "DJ", "Mezcla para ti, con lo que oyes")
             ActionRow(R.drawable.ic_swap_horiz, "Mover") { djMenu = false; arranging = true }
         }
         Floating(listMenu, onDismiss = { listMenu = null }) { list ->
+            val downloaded = list.id in downloadLists.orEmpty()
             ListActions(
                 list,
                 pinned = list.id in pinned,
-                downloaded = list.id in downloadLists.orEmpty(),
+                downloaded = downloaded,
+                downloadState = if (downloaded) list.songs.count { downloadStates[it.id] == Download.STATE_COMPLETED } else null,
                 onDownload = {
                     listMenu = null
-                    val on = list.id !in downloadLists.orEmpty()
-                    scope.launch { prefs.setDownloadList(list.id, on) }
-                    notice = if (on) "Descargando «${list.name}»" + (if (waitsForWifi()) " cuando haya wifi" else "") else "«${list.name}» ya no está descargada"
+                    if (!downloaded) {
+                        scope.launch { prefs.setDownloadList(list.id, true) }
+                        say("Descargando «${list.name}»" + (if (waitsForWifi()) " cuando haya wifi" else ""))
+                    } else removeLater("dl:${list.id}", "«${list.name}» ya no está descargada") { prefs.setDownloadList(list.id, false) }
                 },
                 onPin = { listMenu = null; scope.launch { prefs.togglePin(list.id) } },
                 onRename = { listMenu = null; naming = Naming(rename = list) },
                 onMove = { listMenu = null; moving = list },
-                // Desde Tus listas, donde está suelta: dentro de una carpeta o abierta no hay fila que recolocar.
-                onArrange = if (list.folder == null && view == View.Tabs) ({ listMenu = null; arranging = true }) else null,
+                // Suelta: dentro de una carpeta, o abierta, no hay sitio que recolocar.
+                onArrange = if (list.folder == null && canArrange) ({ listMenu = null; arrange(list.id) }) else null,
                 onDelete = {
                     listMenu = null
-                    vm.closeDetail()
-                    scope.launch { prefs.deletePlaylist(list.id) }
-                    notice = "«${list.name}» borrada"
+                    if ((top as? Page.Local)?.id == list.id) vm.closeDetail()
+                    removeLater("l:${list.id}", "«${list.name}» borrada") { prefs.deletePlaylist(list.id) }
                 },
             )
         }
@@ -462,11 +616,11 @@ fun MenuSheet(
             MoveTo(list, (playlists.orEmpty().mapNotNull { it.folder } + folders).distinct(), onPick = { folder ->
                 moving = null
                 scope.launch { prefs.moveToFolder(list.id, folder) }
-                notice = if (folder == null) "«${list.name}» fuera de la carpeta" else "«${list.name}» en «$folder»"
+                say(if (folder == null) "«${list.name}» fuera de la carpeta" else "«${list.name}» en «$folder»")
             })
         }
         Floating(creating.takeIf { it }, onDismiss = { creating = false }) {
-            Text("Nueva", style = OtoType.title, color = Oto.colors.text, modifier = Modifier.padding(Space.md))
+            FloatHeader({ IconArt(R.drawable.ic_add, 48.dp) }, "Nueva", "Una lista, o una carpeta para juntar listas")
             ActionRow(R.drawable.ic_queue_music, "Lista") { creating = false; naming = Naming() }
             ActionRow(R.drawable.ic_create_new_folder, "Carpeta") { creating = false; naming = Naming(newFolder = true) }
         }
@@ -474,18 +628,20 @@ fun MenuSheet(
             FillFolder(folder, playlists.orEmpty()) { list, inside -> scope.launch { prefs.moveToFolder(list.id, if (inside) folder else null) } }
         }
         Floating(folderMenu, onDismiss = { folderMenu = null }) { folder ->
+            val inside = playlists.orEmpty().filter { it.folder == folder }
             FolderActions(
                 folder,
+                inside,
                 pinned = "d:$folder" in pinned,
                 onPin = { folderMenu = null; scope.launch { prefs.togglePin("d:$folder") } },
                 onAdd = { folderMenu = null; filling = folder },
                 onRename = { folderMenu = null; naming = Naming(folder = folder) },
-                onArrange = if (view == View.Tabs && playlists.orEmpty().any { it.folder == folder }) ({ folderMenu = null; arranging = true }) else null,
+                onArrange = if (canArrange && inside.isNotEmpty()) ({ folderMenu = null; arrange("d:$folder") }) else null,
                 onUngroup = {
                     folderMenu = null
-                    vm.closeDetail()
+                    if ((top as? Page.Folder)?.name == folder) vm.closeDetail()
                     scope.launch { prefs.ungroup(folder) }
-                    notice = "Carpeta «$folder» deshecha"
+                    say("Carpeta «$folder» deshecha")
                 },
             )
         }
@@ -505,11 +661,40 @@ fun MenuSheet(
     }
 }
 
-/** Dos pestañas con un indicador que sigue al dedo mientras se desliza entre páginas. */
+/** El aviso: una frase y, si se puede, «Deshacer». */
 @Composable
-private fun Tabs(pager: PagerState, onSelect: (Int) -> Unit) {
+private fun NoticePill(n: Notice, onUndo: () -> Unit) {
+    val c = Oto.colors
+    Row(
+        Modifier
+            .padding(bottom = Space.sm)
+            .widthIn(max = 360.dp)
+            .height(36.dp)
+            .clip(CircleShape)
+            .background(c.field)
+            .padding(start = 14.dp, end = if (n.undo != null) Space.xs else 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(n.text, style = OtoType.rowSub, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        if (n.undo != null) {
+            Spacer(Modifier.width(Space.xs))
+            Text(
+                "Deshacer", style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize), color = c.accent,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onUndo)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
+/** Dos pestañas con un indicador que sigue al dedo mientras se desliza entre páginas. [dim]: fuera de ellas, apagado. */
+@Composable
+private fun Tabs(pager: PagerState, dim: Boolean, onSelect: (Int) -> Unit) {
     val c = Oto.colors
     val labels = listOf("Tu música", "Explorar")
+    val lit by animateFloatAsState(if (dim) 0.3f else 1f, tween(Motion.EFFECTS), label = "tabsLit")
     Row(
         Modifier
             .height(40.dp)
@@ -518,11 +703,11 @@ private fun Tabs(pager: PagerState, onSelect: (Int) -> Unit) {
             .drawBehind {
                 val f = (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, 1f)
                 val w = size.width / 2
-                drawRoundRect(c.accent.copy(alpha = 0.22f), Offset(lerp(0f, w, f) + 3.dp.toPx(), 3.dp.toPx()), Size(w - 6.dp.toPx(), size.height - 6.dp.toPx()), CornerRadius(size.height))
+                drawRoundRect(c.accent.copy(alpha = 0.22f * lit), Offset(lerp(0f, w, f) + 3.dp.toPx(), 3.dp.toPx()), Size(w - 6.dp.toPx(), size.height - 6.dp.toPx()), CornerRadius(size.height))
             },
     ) {
         labels.forEachIndexed { i, l ->
-            val selected = pager.currentPage == i
+            val selected = pager.currentPage == i && !dim
             Box(
                 Modifier
                     .width(104.dp)
@@ -531,7 +716,8 @@ private fun Tabs(pager: PagerState, onSelect: (Int) -> Unit) {
                     .clickable(remember { MutableInteractionSource() }, null) { onSelect(i) },
                 contentAlignment = Alignment.Center,
             ) {
-                Text(l, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.08f), color = if (selected) c.text else c.textMuted)
+                val fg by animateColorAsState(if (selected) c.text else c.textMuted, tween(Motion.EFFECTS), label = "tabFg")
+                Text(l, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.08f), color = fg)
             }
         }
     }
@@ -553,7 +739,7 @@ fun RoundIcon(icon: Int, selected: Boolean = false, onClick: () -> Unit) {
 }
 
 @Composable
-private fun SearchField(query: String, searching: Boolean, onQuery: (String) -> Unit, onSearch: () -> Unit) {
+private fun SearchField(query: String, searching: Boolean, onQuery: (String) -> Unit, onSearch: () -> Unit, focus: FocusRequester, onFocus: (Boolean) -> Unit) {
     val c = Oto.colors
     Row(
         Modifier
@@ -578,7 +764,7 @@ private fun SearchField(query: String, searching: Boolean, onQuery: (String) -> 
                 cursorBrush = SolidColor(c.accent),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { onSearch() }),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus).onFocusChanged { onFocus(it.isFocused) },
             )
         }
         AnimatedVisibility(query.isNotEmpty(), enter = fadeIn(tween(Motion.EFFECTS)) + scaleIn(initialScale = 0.6f), exit = fadeOut(tween(Motion.EFFECTS_FAST)) + scaleOut(targetScale = 0.6f)) {
@@ -590,7 +776,7 @@ private fun SearchField(query: String, searching: Boolean, onQuery: (String) -> 
 @Composable
 private fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(
-        text, style = OtoType.title.copy(fontSize = OtoType.title.fontSize * 0.86f), color = Oto.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        text, style = OtoType.section, color = Oto.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
         modifier = modifier.padding(start = Space.lg, end = Space.lg, top = Space.lg, bottom = Space.sm),
     )
 }
@@ -599,9 +785,34 @@ private fun SectionTitle(text: String, modifier: Modifier = Modifier) {
 private fun LazyListScope.shelves(list: List<Shelf>, currentId: String?, play: (SongItem) -> Unit, onHold: (SongItem) -> Unit, onOpen: (YTItem) -> Unit) {
     itemsIndexed(list, key = { i, it -> "$i:${it.title}" }) { _, shelf ->
         SectionTitle(shelf.title)
-        LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+        val songs = shelf.items.filterIsInstance<SongItem>()
+        // Solo canciones: en columnas de cuatro, como «Selecciones rápidas» de YouTube Music. Caben ocho a la vista y no
+        // se confunden con los álbumes y las listas, que siguen con su carátula grande.
+        if (songs.size == shelf.items.size && songs.size > SONGS_PER_COLUMN) SongColumns(songs, currentId, play, onHold)
+        else LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
             itemsIndexed(shelf.items, key = { i, it -> "$i:${it.id}" }) { _, item ->
                 Card(item, current = item.id == currentId, onClick = { if (item is SongItem) play(item) else onOpen(item) }, onLongClick = (item as? SongItem)?.let { { onHold(it) } })
+            }
+        }
+    }
+}
+
+/** Un carrusel de canciones en columnas de [SONGS_PER_COLUMN] filas; se para siempre con una columna al borde. */
+@Composable
+private fun SongColumns(songs: List<SongItem>, currentId: String?, play: (SongItem) -> Unit, onHold: (SongItem) -> Unit) {
+    val state = rememberLazyListState()
+    LazyRow(
+        state = state,
+        flingBehavior = rememberSnapFlingBehavior(state, SnapPosition.Start),
+        contentPadding = PaddingValues(horizontal = Space.sm),
+        horizontalArrangement = Arrangement.spacedBy(Space.xs),
+    ) {
+        itemsIndexed(songs.chunked(SONGS_PER_COLUMN), key = { i, _ -> i }) { _, column ->
+            // Lo justo para que asome la siguiente columna.
+            Column(Modifier.fillParentMaxWidth(0.86f)) {
+                column.forEach { song ->
+                    SongRow(song.title, song.artists.joinToString { it.name }, song.thumbnail, song.id == currentId, onClick = { play(song) }, onLongClick = { onHold(song) })
+                }
             }
         }
     }
@@ -617,11 +828,22 @@ private fun Explore(
     onOpen: (YTItem) -> Unit,
     onSmart: (LocalPlaylist) -> Unit,
     onRetry: () -> Unit,
+    onChip: (String) -> Unit,
+    state: LazyListState,
 ) {
     val list = s.shelves
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = Space.lg)) {
-        // Lo hecho con lo tuyo va primero y no espera a YouTube: sale aunque no haya red.
-        if (smart.isNotEmpty()) item(key = "smart") {
+    LazyColumn(Modifier.fillMaxSize(), state = state, contentPadding = PaddingValues(bottom = Space.lg)) {
+        // Los ánimos de YouTube Music (Relax, Entrenar…): elegir uno rehace lo de debajo con ese ánimo.
+        if (s.chips.isNotEmpty()) item(key = "chips") {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                modifier = Modifier.padding(top = Space.xs),
+            ) {
+                items(s.chips, key = { it.title }) { chip -> Chip(chip.title, chip.title == s.chip) { onChip(chip.title) } }
+            }
+        }
+        // Lo hecho con lo tuyo va primero y no espera a YouTube: sale aunque no haya red. Con un ánimo elegido, sobra.
+        if (smart.isNotEmpty() && s.chip == null) item(key = "smart") {
             SectionTitle("Hecho con lo tuyo")
             LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                 items(smart, key = { it.id }) { l -> PlaylistCard(l, onClick = { onSmart(l) }) }
@@ -631,7 +853,7 @@ private fun Explore(
             list == null && s.homeError != null -> item(key = "error") {
                 Empty(R.drawable.ic_library_music, "No se pudo cargar", s.homeError, Modifier.height(320.dp)) { Pill("Reintentar", onRetry, filled = false) }
             }
-            list == null -> item(key = "loading") { Skeleton(modifier = Modifier.padding(Space.md)) }
+            list == null -> item(key = "loading") { ShelfSkeleton(3) }
             else -> shelves(list, currentId, play, onHold, onOpen)
         }
     }
@@ -688,24 +910,36 @@ private fun Card(item: YTItem, current: Boolean, onClick: () -> Unit, onLongClic
 private fun Filters(selected: Filter, onSelect: (Filter) -> Unit) {
     val c = Oto.colors
     LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.xs), modifier = Modifier.padding(bottom = Space.xs)) {
-        items(Filter.entries, key = { it.name }) { f ->
-            val on = f == selected
-            val bg by animateColorAsState(if (on) c.accent.copy(alpha = 0.22f) else c.field, tween(Motion.EFFECTS), label = "filterBg")
-            val fg by animateColorAsState(if (on) c.accent else c.textMuted, tween(Motion.EFFECTS), label = "filterFg")
-            Text(
-                f.label, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = fg,
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .background(bg)
-                    .clickable(remember { MutableInteractionSource() }, ripple(color = c.text)) { onSelect(f) }
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-            )
-        }
+        items(Filter.entries, key = { it.name }) { f -> Chip(f.label, f == selected) { onSelect(f) } }
     }
 }
 
+/** Una píldora que se elige: los filtros de la búsqueda, los ánimos de Explorar, los de Tus listas. */
 @Composable
-private fun Results(s: MenuState, currentId: String?, play: (SongItem) -> Unit, onHold: (SongItem) -> Unit, onOpen: (YTItem) -> Unit) {
+private fun Chip(label: String, on: Boolean, onClick: () -> Unit) {
+    val c = Oto.colors
+    val bg by animateColorAsState(if (on) c.accent.copy(alpha = 0.22f) else c.field, tween(Motion.EFFECTS), label = "chipBg")
+    val fg by animateColorAsState(if (on) c.accent else c.textMuted, tween(Motion.EFFECTS), label = "chipFg")
+    Text(
+        label, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = fg, maxLines = 1,
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(bg)
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    )
+}
+
+@Composable
+private fun Results(
+    s: MenuState,
+    currentId: String?,
+    play: (SongItem) -> Unit,
+    onHold: (SongItem) -> Unit,
+    onOpen: (YTItem) -> Unit,
+    /** Poner lo de un álbum, una lista o un artista sin abrirlo; luego [done]. */
+    onPlayItem: (YTItem, done: () -> Unit) -> Unit,
+) {
     when {
         s.searchError != null && s.results.isEmpty() -> Empty(R.drawable.ic_search, "La búsqueda falló", s.searchError)
         s.results.isEmpty() && s.searching -> Skeleton(modifier = Modifier.padding(Space.md))
@@ -713,13 +947,62 @@ private fun Results(s: MenuState, currentId: String?, play: (SongItem) -> Unit, 
         s.results.isEmpty() -> Empty(R.drawable.ic_search, "Sin resultados", "Prueba con otro nombre o con el artista.")
         else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = Space.sm, vertical = Space.xs)) {
             // Canciones, artistas, álbumes y listas mezclados, como en Spotify: lo que no es una canción se abre.
-            items(s.results, key = { it.id }) { item ->
-                when (item) {
+            itemsIndexed(s.results, key = { _, it -> it.id }) { i, item ->
+                // Arriba, lo que YouTube Music da por principal (ver Search.rank): en grande y con su botón de poner.
+                if (i == 0 && s.filter == Filter.All) TopResult(
+                    item, item.id == currentId,
+                    onClick = { if (item is SongItem) play(item) else onOpen(item) },
+                    onPlay = { done -> if (item is SongItem) { done(); play(item) } else onPlayItem(item, done) },
+                    onLongClick = (item as? SongItem)?.let { { onHold(it) } },
+                    modifier = Modifier.animateItem(),
+                )
+                else when (item) {
                     is SongItem -> SongRow(item.title, item.subtitle(), item.thumbnail, item.id == currentId, onClick = { play(item) }, onLongClick = { onHold(item) },
                         modifier = Modifier.animateItem())
                     else -> SongRow(item.title, kind(item), item.thumbnail, false, onClick = { onOpen(item) }, modifier = Modifier.animateItem(), round = item is ArtistItem)
                 }
             }
+        }
+    }
+}
+
+/** El resultado principal: carátula grande, nombre, qué es y un botón para ponerlo sin abrirlo. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TopResult(item: YTItem, current: Boolean, onClick: () -> Unit, onPlay: (done: () -> Unit) -> Unit, onLongClick: (() -> Unit)?, modifier: Modifier = Modifier) {
+    val c = Oto.colors
+    val round = item is ArtistItem
+    // Un álbum o un artista tarda un momento en llegar: mientras, el botón queda a medias y no se repite.
+    var loading by remember(item.id) { mutableStateOf(false) }
+    val alpha by animateFloatAsState(if (loading) 0.5f else 1f, tween(Motion.EFFECTS), label = "topPlay")
+    Box(
+        modifier
+            .padding(horizontal = Space.sm, vertical = Space.xs)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.xl))
+            .background(c.field)
+            .combinedClickable(remember { MutableInteractionSource() }, ripple(color = c.text), onLongClick = onLongClick, onClick = onClick)
+            .padding(Space.lg),
+    ) {
+        Column(Modifier.padding(end = 56.dp)) {
+            Art(item.thumbnail, 88.dp, if (round) 88.dp else Radius.md)
+            Spacer(Modifier.height(14.dp))
+            Text(item.title, style = OtoType.title, color = if (current) c.accent else c.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(if (item is SongItem) "Canción · " + item.artists.joinToString { it.name } else kind(item), style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Box(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .size(48.dp)
+                .graphicsLayer { this.alpha = alpha }
+                .clip(CircleShape)
+                .background(c.accent)
+                .clickable(remember { MutableInteractionSource() }, ripple(color = c.onAccent)) {
+                    if (!loading) { loading = true; onPlay { loading = false } }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(painterResource(R.drawable.ic_play_arrow), "Reproducir", Modifier.size(28.dp), tint = c.onAccent)
         }
     }
 }
@@ -875,7 +1158,12 @@ private fun ArtistView(
         }
         when {
             d.error != null -> item(key = "error") { Empty(R.drawable.ic_person, "No se pudo abrir", d.error, Modifier.height(240.dp)) }
-            songs == null -> item(key = "loading") { Skeleton(rows = 6, modifier = Modifier.padding(top = Space.lg)) }
+            songs == null -> item(key = "loading") {
+                Column {
+                    Skeleton(rows = TOP_SONGS, modifier = Modifier.padding(top = Space.lg, start = Space.sm, end = Space.sm))
+                    ShelfSkeleton(1)
+                }
+            }
             else -> {
                 if (songs.isNotEmpty()) {
                     item(key = "topTitle") { SectionTitle("Lo más oído") }
@@ -904,6 +1192,8 @@ private fun LocalView(
     play: (SongItem) -> Unit,
     onHoldOther: (SongItem) -> Unit,
     onAdd: (LocalPlaylist, Heard) -> Unit,
+    /** Ir a buscar canciones (abre el buscador). */
+    onFind: () -> Unit,
 ) {
     val prefs = (LocalContext.current.applicationContext as OtoApp).prefs
     val flipped by prefs.sortFlipped.collectAsStateWithLifecycle(initialValue = emptySet())
@@ -928,7 +1218,13 @@ private fun LocalView(
                 got == list.songs.size -> " · descargada"
                 else -> " · descargando ($got de ${list.songs.size})"
             }
-            PageHeader(onBack, { if (likes) LikedArt(112.dp) else Mosaic(list.songs, 112.dp) }, list.name, sub, onMenu = { onMenu(list) }) {
+            val art = @Composable {
+                Box {
+                    if (likes) LikedArt(112.dp) else Mosaic(list.songs, 112.dp)
+                    if (downloaded && list.songs.isNotEmpty()) DownloadMark(got, list.songs.size, Modifier.align(Alignment.BottomEnd).padding(Space.xs + 2.dp), size = 28.dp)
+                }
+            }
+            PageHeader(onBack, art, list.name, sub, onMenu = { onMenu(list) }) {
                 if (list.songs.isNotEmpty()) {
                     Pill("Reproducir", { onPlay(shown, null, newest) }, icon = R.drawable.ic_play_arrow)
                     ShuffleButton()
@@ -939,10 +1235,9 @@ private fun LocalView(
             if (likes) Empty(
                 R.drawable.ic_favorite, "Aún no te gusta nada",
                 "Toca dos veces la carátula de lo que suena. Mantenla pulsada para guardarla en otra lista.", Modifier.height(260.dp),
-            ) else Empty(
-                R.drawable.ic_add, "Está vacía",
-                "Mantén pulsada cualquier canción, aquí o en Explorar, y elige «Guardar en…». O mantén pulsada la carátula de lo que suena.", Modifier.height(260.dp),
-            )
+            ) else Empty(R.drawable.ic_queue_music, "Aún no tiene canciones", "", Modifier.height(260.dp)) {
+                Pill("Buscar canciones", onFind, icon = R.drawable.ic_search)
+            }
         }
         if (list.songs.size > 1) item(key = "sort") {
             SortRow(newest) { scope.launch { prefs.flipSort(list.id) } }
@@ -1263,26 +1558,57 @@ private fun CrossfadeRow(prefs: Prefs) {
     }
 }
 
-/** Lo que ocupa Oto en el móvil y su tope (ver [Storage]); tocar lo vacía. */
+/**
+ * Lo que ocupa Oto en el móvil, con una barra hasta su tope (ver [Storage]). Se vacía con su botón y un segundo toque:
+ * antes bastaba rozar la fila.
+ */
 @Composable
 private fun SpaceRow(app: OtoApp) {
+    val c = Oto.colors
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     var used by remember { mutableStateOf<Long?>(null) }
     var clearing by remember { mutableStateOf(false) }
+    var confirm by remember { mutableStateOf(false) }
+    LaunchedEffect(confirm) { if (confirm) { delay(3000); confirm = false } }
     LaunchedEffect(clearing) { if (!clearing) used = withContext(Dispatchers.IO) { Storage.used(app) } }
     val body = when {
         clearing -> "Vaciando…"
         used == null -> "Midiendo…"
-        else -> "${bytes(used!!)} ahora · nunca más de ${bytes(Storage.TOTAL_BYTES)}. Toca para vaciarlo."
+        else -> "${bytes(used!!)} de ${bytes(Storage.TOTAL_BYTES)}. Lo descargado no cuenta ni se toca."
     }
-    SettingRow(R.drawable.ic_hard_drive, "Espacio en el móvil", body) {
-        if (clearing) return@SettingRow
-        haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-        clearing = true
-        scope.launch {
-            withContext(Dispatchers.IO) { Storage.clear(app, app.player.state.value.id) }
-            clearing = false
+    val fill by animateFloatAsState(((used ?: 0L).toFloat() / Storage.TOTAL_BYTES).coerceIn(0f, 1f), tween(Motion.SPATIAL, easing = Motion.Standard), label = "space")
+    Row(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.md)) {
+        SettingIcon(R.drawable.ic_hard_drive)
+        Spacer(Modifier.width(Space.md))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Espacio en el móvil", style = OtoType.rowTitle, color = c.text, modifier = Modifier.weight(1f))
+                val fg by animateColorAsState(if (confirm) DANGER else c.text, tween(Motion.EFFECTS), label = "clearFg")
+                Text(
+                    if (confirm) "Toca otra vez" else "Vaciar", style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = fg,
+                    modifier = Modifier
+                        .graphicsLayer { alpha = if (clearing || used == 0L) 0.4f else 1f }
+                        .clip(CircleShape)
+                        .background(c.field)
+                        .clickable(remember { MutableInteractionSource() }, ripple(color = c.text)) {
+                            if (clearing || used == 0L) return@clickable
+                            if (!confirm) { confirm = true; return@clickable }
+                            confirm = false
+                            haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                            clearing = true
+                            scope.launch {
+                                withContext(Dispatchers.IO) { Storage.clear(app, app.player.state.value.id) }
+                                clearing = false
+                            }
+                        }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
+            Text(body, style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.padding(top = 2.dp))
+            Box(Modifier.padding(top = Space.sm).fillMaxWidth().height(6.dp).clip(CircleShape).background(c.field)) {
+                Box(Modifier.fillMaxWidth(fill).fillMaxHeight().clip(CircleShape).background(c.textMuted))
+            }
         }
     }
 }
@@ -1328,6 +1654,7 @@ private fun YourMusic(
     playlists: List<LocalPlaylist>?,
     pinned: Set<String>,
     folders: Set<String>,
+    played: Map<String, Long>,
     currentId: String?,
     play: (SongItem) -> Unit,
     onHold: (SongItem) -> Unit,
@@ -1343,10 +1670,12 @@ private fun YourMusic(
     onReorder: (List<String>, Map<String, Int>) -> Unit,
     spots: Map<String, Int>?,
     onDjMenu: () -> Unit,
+    onAll: () -> Unit,
+    state: LazyListState,
 ) {
     if (spots == null) return
     if (history == null || playlists == null || liked == null) return
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = Space.lg)) {
+    LazyColumn(Modifier.fillMaxSize(), state = state, contentPadding = PaddingValues(bottom = Space.lg)) {
         item(key = "listsTitle") {
             Row(Modifier.fillMaxWidth().padding(end = Space.md), verticalAlignment = Alignment.CenterVertically) {
                 SectionTitle("Tus listas", Modifier.weight(1f))
@@ -1357,15 +1686,12 @@ private fun YourMusic(
         }
         if (arranging) item(key = "arrangeHint") {
             Text(
-                "Arrastra tus listas para cambiarlas de sitio. Las de arriba se mueven entre ellas, y las de abajo igual.",
+                "Arrastra para cambiar el orden de esta fila. Las demás se recolocan en «Todas tus listas».",
                 style = OtoType.rowSub, color = Oto.colors.textMuted, modifier = Modifier.padding(start = Space.lg, end = Space.lg, bottom = Space.sm),
             )
         }
-        // Dos filas: arriba Me gusta y lo fijado; abajo, el resto. Una carpeta ocupa el sitio de la primera de sus listas.
-        // Las carpetas aún vacías van delante, como lo recién creado.
-        val used = playlists.mapNotNullTo(HashSet()) { it.folder }
-        val shelf = folders.filter { it !in used }.sorted().map { Shelved(it, emptyList()) } +
-            playlists.groupBy { it.folder ?: "\u0000" + it.id }.values.map { g -> Shelved(g.first().folder, g) }
+        // Arriba, en grande, el DJ, Me gusta y lo fijado; debajo, en baldosas, lo demás que has oído hace menos.
+        val shelf = shelfOf(playlists, folders)
         val (pinnedShelf, rest) = shelf.partition { it.key in pinned }
         // El DJ y Me gusta están siempre arriba, aunque no tengas nada (así se sabe que existen), donde los dejaras.
         val top = pinnedShelf.toMutableList().apply {
@@ -1400,9 +1726,12 @@ private fun YourMusic(
                 if (playlists.isEmpty()) item(key = "new") { NewListCard(onNew) }
             }
         }
+        // Con muchas listas, un segundo carrusel no se acababa nunca. Seis a la vista; todas, con su orden y sus filtros,
+        // en su página.
         if (rest.isNotEmpty()) item(key = "rest") {
-            ShelfRow(rest, arranging, Modifier.padding(top = Space.xs), onMove = reorder, onOpen = open, onMenu = menu)
+            Tiles(byPlayed(rest, played).take(TILES), Modifier.padding(top = Space.sm), enabled = !arranging, onOpen = open, onMenu = menu)
         }
+        if (rest.size > TILES) item(key = "all") { AllRow(playlists.size, enabled = !arranging, onClick = onAll) }
         item(key = "historyTitle") { SectionTitle("Oído hace poco") }
         if (history.isEmpty()) item(key = "historyEmpty") {
             Text("Lo que vayas oyendo aparecerá aquí.", style = OtoType.rowSub, color = Oto.colors.textMuted, modifier = Modifier.padding(horizontal = Space.lg))
@@ -1506,6 +1835,287 @@ private data class Shelved(val folder: String?, val lists: List<LocalPlaylist>, 
 
     /** Las carpetas vacías no se mueven: no tienen sitio entre las listas, van delante. */
     val movable get() = special != null || lists.isNotEmpty()
+
+    val name get() = folder ?: lists.firstOrNull()?.name.orEmpty()
+}
+
+/**
+ * Tus listas como se ven en Tus listas: las carpetas aún vacías delante (como lo recién creado) y después cada lista
+ * suelta, o cada carpeta en el sitio de la primera de sus listas.
+ */
+private fun shelfOf(playlists: List<LocalPlaylist>, folders: Set<String>): List<Shelved> {
+    val used = playlists.mapNotNullTo(HashSet()) { it.folder }
+    return folders.filter { it !in used }.sorted().map { Shelved(it, emptyList()) } +
+        playlists.groupBy { it.folder ?: "\u0000" + it.id }.values.map { g -> Shelved(g.first().folder, g) }
+}
+
+/** Lo oído hace menos, primero; lo nunca oído, detrás y en su orden. Una carpeta cuenta cuando suena ella o una suya. */
+private fun byPlayed(entries: List<Shelved>, played: Map<String, Long>): List<Shelved> =
+    entries.sortedByDescending { e -> maxOf(played[e.key] ?: 0L, e.lists.maxOfOrNull { played[it.id] ?: 0L } ?: 0L) }
+
+/** Listas y carpetas en baldosas de dos en dos. [enabled] = false: recolocando la fila de arriba, se apagan. */
+@Composable
+private fun Tiles(entries: List<Shelved>, modifier: Modifier = Modifier, enabled: Boolean = true, onOpen: (Shelved) -> Unit, onMenu: (Shelved) -> Unit) {
+    val dim by animateFloatAsState(if (enabled) 1f else 0.4f, tween(Motion.EFFECTS), label = "tilesDim")
+    Column(modifier.padding(horizontal = Space.lg).graphicsLayer { alpha = dim }, verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+        entries.chunked(2).forEach { pair ->
+            Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                pair.forEach { e -> Tile(e, Modifier.weight(1f), enabled, onClick = { onOpen(e) }, onLongClick = { onMenu(e) }) }
+                if (pair.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** Una lista o carpeta en pequeño: la portada a la izquierda, a sangre, y el nombre con lo que tiene. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun Tile(e: Shelved, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit, onLongClick: () -> Unit) {
+    val c = Oto.colors
+    val haptics = LocalHapticFeedback.current
+    Row(
+        modifier
+            .height(TILE)
+            .clip(RoundedCornerShape(Radius.md))
+            .background(c.field)
+            .combinedClickable(
+                remember { MutableInteractionSource() }, ripple(color = c.text), enabled = enabled,
+                onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onLongClick() }, onClick = onClick,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (e.folder != null) FolderArt(e.lists, TILE, corner = 0.dp) else Mosaic(e.lists.first().songs, TILE, corner = 0.dp)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f).padding(end = Space.sm)) {
+            Text(e.name, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                if (e.folder != null) folderCount(e.lists.size) else count(e.lists.first().songs.size),
+                style = OtoType.rowSub.copy(fontSize = 12.sp, lineHeight = 16.sp), color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** «Todas tus listas», con cuántas hay. */
+@Composable
+private fun AllRow(n: Int, enabled: Boolean, onClick: () -> Unit) {
+    val c = Oto.colors
+    val dim by animateFloatAsState(if (enabled) 1f else 0.4f, tween(Motion.EFFECTS), label = "allDim")
+    Row(
+        Modifier
+            .padding(start = Space.lg, end = Space.lg, top = Space.sm)
+            .fillMaxWidth()
+            .height(48.dp)
+            .graphicsLayer { alpha = dim }
+            .clip(CircleShape)
+            .background(c.field)
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), enabled = enabled, onClick = onClick)
+            .padding(start = Space.lg, end = Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Todas tus listas", style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.08f), color = c.text)
+        Spacer(Modifier.width(Space.sm))
+        Text("$n", style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.weight(1f))
+        Icon(painterResource(R.drawable.ic_chevron_right), null, Modifier.size(22.dp), tint = c.textMuted)
+    }
+}
+
+private enum class ListsFilter(val label: String) { Lists("Listas"), Folders("Carpetas"), Downloaded("Descargadas") }
+
+/**
+ * Todas tus listas y carpetas en baldosas: por cuándo sonaron, por nombre o en tu orden; y solo las listas, las
+ * carpetas o lo descargado. Recolocando ([arranging]) cada una se arrastra a su sitio: ese es «Tu orden», el mismo de
+ * Tu música.
+ */
+@Composable
+private fun AllListsView(
+    entries: List<Shelved>,
+    played: Map<String, Long>,
+    downloaded: Set<String>,
+    arranging: Boolean,
+    onBack: () -> Unit,
+    onOpen: (Shelved) -> Unit,
+    onMenu: (Shelved) -> Unit,
+    onNew: () -> Unit,
+    onDoneArranging: () -> Unit,
+    onMove: (List<String>) -> Unit,
+) {
+    val c = Oto.colors
+    val memory = MenuMemory.of(LocalContext.current)
+    val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    val savedSort by memory.listsSort.collectAsStateWithLifecycle(initialValue = null)
+    var filter by rememberSaveable { mutableStateOf<ListsFilter?>(null) }
+    // Recolocar es cambiar «Tu orden»: al acabar se sigue viendo así, no vuelve a otro orden.
+    LaunchedEffect(arranging) { if (arranging) memory.setListsSort(ListsSort.Custom) }
+    val sort = if (arranging) ListsSort.Custom else savedSort ?: return
+    val lists = remember(entries) { entries.flatMap { it.lists } }
+    val shown = remember(entries, played, downloaded, sort, filter, arranging) {
+        val base = when (if (arranging) null else filter) {
+            null -> entries
+            ListsFilter.Lists -> lists.map { Shelved(null, listOf(it)) }
+            ListsFilter.Folders -> entries.filter { it.folder != null }
+            ListsFilter.Downloaded -> lists.filter { it.id in downloaded }.map { Shelved(null, listOf(it)) }
+        }
+        when (sort) {
+            ListsSort.Recent -> byPlayed(base, played)
+            ListsSort.Name -> Collator.getInstance(Locale.forLanguageTag("es")).let { k -> k.strength = Collator.PRIMARY; base.sortedWith { a, b -> k.compare(a.name, b.name) } }
+            ListsSort.Custom -> base
+        }
+    }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.padding(start = Space.sm, end = Space.md), verticalAlignment = Alignment.CenterVertically) {
+            RoundIcon(R.drawable.ic_arrow_back, onClick = onBack)
+            Column(Modifier.weight(1f)) {
+                Text("Tus listas", style = OtoType.title, color = c.text)
+                val folders = entries.count { it.folder != null }
+                Text(
+                    listOfNotNull(if (lists.size == 1) "1 lista" else "${lists.size} listas", folders.takeIf { it > 0 }?.let { if (it == 1) "1 carpeta" else "$it carpetas" }).joinToString(" · "),
+                    style = OtoType.rowSub, color = c.textMuted,
+                )
+            }
+            AnimatedContent(arranging, transitionSpec = { fadeIn(tween(Motion.EFFECTS)) togetherWith fadeOut(tween(Motion.EFFECTS_FAST)) }, label = "listsAction") { a ->
+                if (a) Pill("Listo", onDoneArranging, icon = R.drawable.ic_check) else Pill("Nueva", onNew, filled = false, icon = R.drawable.ic_add)
+            }
+        }
+        AnimatedContent(arranging, transitionSpec = { fadeIn(tween(Motion.EFFECTS, delayMillis = 40)) togetherWith fadeOut(tween(Motion.EFFECTS_FAST)) }, label = "listsBar") { a ->
+            if (a) Text(
+                "Arrastra cada una a su sitio. Este es «Tu orden», el mismo que en Tu música.",
+                style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.md),
+            ) else LazyRow(
+                contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                modifier = Modifier.padding(vertical = Space.sm),
+            ) {
+                item(key = "sort") {
+                    SortChip(sort) {
+                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                        scope.launch { memory.setListsSort(ListsSort.entries[(sort.ordinal + 1) % ListsSort.entries.size]) }
+                    }
+                }
+                items(ListsFilter.entries, key = { it.name }) { f -> Chip(f.label, f == filter) { filter = if (filter == f) null else f } }
+            }
+        }
+        if (shown.isEmpty()) when (filter) {
+            ListsFilter.Folders -> Empty(R.drawable.ic_folder, "No tienes carpetas", "Junta varias listas en una con «Nueva» y «Carpeta».")
+            ListsFilter.Downloaded -> Empty(R.drawable.ic_download_for_offline, "Nada descargado", "En una lista, toca ··· y elige «Descargar».")
+            else -> Empty(R.drawable.ic_queue_music, "Aún no tienes listas", "Crea una con «Nueva», o tráete las tuyas de Spotify desde Ajustes.")
+        } else ListsGrid(shown, arranging, onOpen, onMenu, onMove)
+    }
+}
+
+/** El orden de «Todas tus listas»: tocarla pasa al siguiente. */
+@Composable
+private fun SortChip(sort: ListsSort, onNext: () -> Unit) {
+    val c = Oto.colors
+    Row(
+        Modifier
+            .clip(CircleShape)
+            .background(c.field)
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onNext)
+            .padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(painterResource(R.drawable.ic_swap_vert), null, Modifier.size(18.dp), tint = c.text)
+        Spacer(Modifier.width(Space.xs))
+        AnimatedContent(sort, transitionSpec = { fadeIn(tween(Motion.EFFECTS)) togetherWith fadeOut(tween(Motion.EFFECTS_FAST)) using SizeTransform(clip = false) }, label = "sortChip") { s ->
+            Text(s.label, style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = c.text, maxLines = 1)
+        }
+    }
+}
+
+/** Las baldosas de «Todas tus listas»; recolocando, cada una se arrastra (como la fila de arriba de Tu música). */
+@Composable
+private fun ListsGrid(entries: List<Shelved>, arranging: Boolean, onOpen: (Shelved) -> Unit, onMenu: (Shelved) -> Unit, onMove: (List<String>) -> Unit) {
+    val haptics = LocalHapticFeedback.current
+    val state = rememberLazyGridState()
+    // Un solo estado para siempre, como en ShelfRow: el gesto se queda con lo que veía al empezar.
+    var order by remember { mutableStateOf(entries) }
+    LaunchedEffect(entries) { order = entries }
+    val saved by rememberUpdatedState(entries)
+    val moved by rememberUpdatedState(onMove)
+    val reorder = rememberReorderableLazyGridState(state) { from, to ->
+        val a = order.indexOfFirst { it.key == from.key }
+        val b = order.indexOfFirst { it.key == to.key }
+        if (a < 0 || b < 0 || !order[b].movable) return@rememberReorderableLazyGridState
+        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+        order = order.toMutableList().apply { add(b, removeAt(a)) }
+    }
+    LazyVerticalGrid(
+        GridCells.Fixed(2), Modifier.fillMaxSize(), state = state,
+        contentPadding = PaddingValues(start = Space.lg, end = Space.lg, top = Space.xs, bottom = Space.lg),
+        horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalArrangement = Arrangement.spacedBy(Space.sm),
+    ) {
+        items(order, key = { it.key }) { e ->
+            ReorderableItem(reorder, e.key) { dragging ->
+                val movable = arranging && e.movable
+                val wobble = if (movable && !dragging) {
+                    val t = rememberInfiniteTransition(label = "tileWobble")
+                    t.animateFloat(-0.8f, 0.8f, infiniteRepeatable(tween(150 + (e.key.hashCode() and 63), easing = LinearEasing), RepeatMode.Reverse), label = "tileWobble").value
+                } else 0f
+                Tile(
+                    e,
+                    Modifier
+                        .graphicsLayer {
+                            rotationZ = wobble
+                            if (dragging) {
+                                scaleX = 1.05f; scaleY = 1.05f
+                                shadowElevation = 12.dp.toPx()
+                                shape = RoundedCornerShape(Radius.md)
+                                clip = true
+                            }
+                        }
+                        .draggableHandle(
+                            enabled = movable,
+                            onDragStarted = { haptics.performHapticFeedback(HapticFeedbackType.LongPress) },
+                            onDragStopped = { if (order.map { it.key } != saved.map { it.key }) moved(order.flatMap { o -> o.lists.map { it.id } }) },
+                        ),
+                    enabled = !arranging,
+                    onClick = { onOpen(e) },
+                    onLongClick = { onMenu(e) },
+                )
+            }
+        }
+    }
+}
+
+/** Lo buscado hace poco, al tocar el buscador vacío: búsquedas y lo que abriste desde ellas, cada cosa con su ×. */
+@Composable
+private fun Recents(list: List<Recent>?, onPick: (Recent) -> Unit, onForget: (Recent) -> Unit) {
+    val c = Oto.colors
+    when {
+        list == null -> Unit
+        list.isEmpty() -> Empty(R.drawable.ic_search, "Busca lo que quieras", "Canciones, artistas, álbumes o listas. Lo que busques se queda aquí.")
+        else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
+            item(key = "title") {
+                Text("RECIENTES", style = OtoType.label, color = c.textMuted, modifier = Modifier.padding(start = Space.sm, top = Space.sm, bottom = Space.xs))
+            }
+            items(list, key = { it.key }) { r ->
+                SongRow(
+                    r.title,
+                    when (r.kind) {
+                        Recent.Kind.Query -> ""
+                        Recent.Kind.Artist -> "Artista"
+                        Recent.Kind.Album -> listOfNotNull("Álbum", r.sub).joinToString(" · ")
+                        Recent.Kind.Playlist -> listOfNotNull("Lista", r.sub).joinToString(" · ")
+                    },
+                    r.art, false, onClick = { onPick(r) },
+                    modifier = Modifier.animateItem(),
+                    round = r.kind == Recent.Kind.Artist,
+                    lead = if (r.kind != Recent.Kind.Query) null else ({
+                        Box(Modifier.size(44.dp).clip(CircleShape).background(c.field), contentAlignment = Alignment.Center) {
+                            Icon(painterResource(R.drawable.ic_history), null, Modifier.size(22.dp), tint = c.textMuted)
+                        }
+                    }),
+                    trailing = {
+                        Box(
+                            Modifier.size(40.dp).clip(CircleShape).clickable(remember { MutableInteractionSource() }, ripple(color = c.text)) { onForget(r) },
+                            contentAlignment = Alignment.Center,
+                        ) { Icon(painterResource(R.drawable.ic_close), "Quitar", Modifier.size(20.dp), tint = c.textMuted) }
+                    },
+                )
+            }
+        }
+    }
 }
 
 /** Una carpeta: las portadas de sus primeras listas, con la marca de carpeta. */
@@ -1528,17 +2138,17 @@ private fun FolderCard(name: String, lists: List<LocalPlaylist>, onClick: () -> 
 
 /** Cuatro listas en cuadrícula (cada una, su primera carátula) y la carpeta en una esquina. */
 @Composable
-private fun FolderArt(lists: List<LocalPlaylist>, size: Dp) {
+private fun FolderArt(lists: List<LocalPlaylist>, size: Dp, corner: Dp = if (size < 64.dp) Radius.sm else Radius.md) {
     val c = Oto.colors
     // Vacía, solo la carpeta, grande.
     if (lists.none { it.songs.isNotEmpty() }) {
-        Box(Modifier.size(size).clip(RoundedCornerShape(if (size < 64.dp) Radius.sm else Radius.md)).background(c.field), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(size).clip(RoundedCornerShape(corner)).background(c.field), contentAlignment = Alignment.Center) {
             Icon(painterResource(R.drawable.ic_folder), null, Modifier.size(size * 0.3f), tint = c.textFaint)
         }
         return
     }
     Box(Modifier.size(size)) {
-        Mosaic(lists.mapNotNull { l -> l.songs.firstOrNull { it.artwork != null } }, size)
+        Mosaic(lists.mapNotNull { l -> l.songs.firstOrNull { it.artwork != null } }, size, corner)
         Box(
             Modifier
                 .align(Alignment.BottomStart)
@@ -1604,7 +2214,7 @@ private fun FolderView(
 @Composable
 private fun ColumnScope.FillFolder(folder: String, lists: List<LocalPlaylist>, onToggle: (LocalPlaylist, Boolean) -> Unit) {
     val c = Oto.colors
-    Text(folder, style = OtoType.title, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(Space.md))
+    FloatHeader({ FolderArt(lists.filter { it.folder == folder }, 48.dp) }, folder, "Marca las listas que van dentro")
     if (lists.isEmpty()) Text("Aún no tienes listas.", style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm))
     LazyColumn(Modifier.heightIn(max = 420.dp)) {
         items(lists, key = { it.id }) { l ->
@@ -1618,7 +2228,7 @@ private fun ColumnScope.FillFolder(folder: String, lists: List<LocalPlaylist>, o
 @Composable
 private fun ColumnScope.MoveTo(list: LocalPlaylist, folders: List<String>, onPick: (String?) -> Unit) {
     val c = Oto.colors
-    Text(list.name, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(Space.md))
+    FloatHeader({ Mosaic(list.songs, 48.dp) }, list.name, if (list.folder == null) "Elige en qué carpeta va" else "Ahora en «${list.folder}»")
     folders.forEach { f ->
         ActionRow(R.drawable.ic_folder, f, trailing = if (f == list.folder) { { Icon(painterResource(R.drawable.ic_check), null, Modifier.size(20.dp), tint = c.accent) } } else null) {
             onPick(f)
@@ -1633,6 +2243,7 @@ private fun ColumnScope.MoveTo(list: LocalPlaylist, folders: List<String>, onPic
 @Composable
 private fun ColumnScope.FolderActions(
     folder: String,
+    lists: List<LocalPlaylist>,
     pinned: Boolean,
     onPin: () -> Unit,
     onAdd: () -> Unit,
@@ -1640,7 +2251,7 @@ private fun ColumnScope.FolderActions(
     onArrange: (() -> Unit)?,
     onUngroup: () -> Unit,
 ) {
-    Text(folder, style = OtoType.rowTitle, color = Oto.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(Space.md))
+    FloatHeader({ FolderArt(lists, 48.dp) }, folder, folderCount(lists.size))
     ActionRow(R.drawable.ic_keep, if (pinned) "Quitar de arriba" else "Fijar arriba", onClick = onPin)
     onArrange?.let { ActionRow(R.drawable.ic_swap_horiz, "Mover", onClick = it) }
     ActionRow(R.drawable.ic_add, "Añadir o quitar listas", onClick = onAdd)
@@ -1708,14 +2319,7 @@ private fun ColumnScope.SongActions(
     val c = Oto.colors
     val context = LocalContext.current
     val song = h.song
-    Row(Modifier.padding(Space.sm), verticalAlignment = Alignment.CenterVertically) {
-        Art(song.thumbnail, 48.dp, Radius.sm)
-        Spacer(Modifier.width(Space.md))
-        Column(Modifier.weight(1f)) {
-            Text(song.title, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(song.artists.joinToString { it.name }, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
+    FloatHeader({ Art(song.thumbnail, 48.dp, Radius.sm) }, song.title, song.artists.joinToString { it.name })
     Spacer(Modifier.height(Space.xs))
     ActionRow(R.drawable.ic_queue_music, "Reproducir a continuación", onClick = onNext)
     ActionRow(R.drawable.ic_add, "Guardar en…", onClick = onSave)
@@ -1730,6 +2334,8 @@ private fun ColumnScope.ListActions(
     list: LocalPlaylist,
     pinned: Boolean,
     downloaded: Boolean,
+    /** Cuántas hay ya descargadas, si la lista lo está. */
+    downloadState: Int?,
     onDownload: () -> Unit,
     onPin: () -> Unit,
     onRename: () -> Unit,
@@ -1737,18 +2343,16 @@ private fun ColumnScope.ListActions(
     onDelete: () -> Unit,
     onArrange: (() -> Unit)? = null,
 ) {
-    val c = Oto.colors
-    // Borrar y quitar la descarga piden un segundo toque: no hay deshacer, y volver a bajarla gasta datos.
-    var confirm by remember(list) { mutableStateOf(false) }
-    LaunchedEffect(confirm) { if (confirm) { delay(3000); confirm = false } }
-    var unDownload by remember(list) { mutableStateOf(false) }
-    LaunchedEffect(unDownload) { if (unDownload) { delay(3000); unDownload = false } }
-    Text(list.name, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(Space.md))
+    // Borrar y quitar la descarga van al primer toque: el aviso de abajo deja deshacerlo.
+    val sub = count(list.songs.size) + when {
+        downloadState == null -> ""
+        downloadState >= list.songs.size -> " · descargada"
+        else -> " · bajando $downloadState de ${list.songs.size}"
+    }
+    FloatHeader({ if (list.id == LIKED_ID) LikedArt(48.dp) else Mosaic(list.songs, 48.dp) }, list.name, sub)
     if (list.songs.isNotEmpty() || downloaded) {
         if (!downloaded) ActionRow(R.drawable.ic_download, "Descargar", onClick = onDownload)
-        else ActionRow(R.drawable.ic_download_done, if (unDownload) "Toca otra vez para quitarla" else "Quitar la descarga", tint = if (unDownload) Color(0xFFFF8A80) else c.text) {
-            if (unDownload) onDownload() else unDownload = true
-        }
+        else ActionRow(R.drawable.ic_download_done, "Quitar la descarga", onClick = onDownload)
     }
     // Me gusta no se fija, ni se renombra, ni se mueve ni se borra.
     if (list.id == LIKED_ID) {
@@ -1760,9 +2364,7 @@ private fun ColumnScope.ListActions(
     onArrange?.let { ActionRow(R.drawable.ic_swap_horiz, "Mover", onClick = it) }
     ActionRow(R.drawable.ic_edit, "Cambiar el nombre", onClick = onRename)
     ActionRow(R.drawable.ic_folder, if (list.folder == null) "Meter en una carpeta" else "Cambiar de carpeta", onClick = onMove)
-    ActionRow(R.drawable.ic_delete, if (confirm) "Toca otra vez para borrarla" else "Borrar la lista", tint = if (confirm) Color(0xFFFF8A80) else c.text) {
-        if (confirm) onDelete() else confirm = true
-    }
+    ActionRow(R.drawable.ic_delete, "Borrar la lista", onClick = onDelete)
 }
 
 @Composable
@@ -1772,11 +2374,17 @@ private fun ColumnScope.NameField(n: Naming, onDone: (String) -> Unit) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(n) { delay(120); focus.requestFocus() }
     val ok = name.isNotBlank()
-    Text(
+    FloatHeader(
+        {
+            IconArt(
+                when { n.rename != null || n.folder != null -> R.drawable.ic_edit; n.newFolder -> R.drawable.ic_create_new_folder; else -> R.drawable.ic_queue_music },
+                48.dp,
+            )
+        },
         when { n.rename != null || n.folder != null -> "Cambiar el nombre"; n.newFolder -> "Nueva carpeta"; else -> "Nueva lista" },
-        style = OtoType.title, color = c.text, modifier = Modifier.padding(start = Space.md, top = Space.md, end = Space.md),
+        n.rename?.name ?: n.folder,
     )
-    Spacer(Modifier.height(Space.md))
+    Spacer(Modifier.height(Space.sm))
     Box(
         Modifier
             .padding(horizontal = Space.sm)
@@ -1810,3 +2418,11 @@ private fun ColumnScope.NameField(n: Naming, onDone: (String) -> Unit) {
 
 private const val TOP_SONGS = 5
 private const val RECOMPUTE_MS = 1_500L
+private const val SONGS_PER_COLUMN = 4
+private const val TILES = 6
+private val TILE = 56.dp
+private const val NOTICE_MS = 1_800L
+private const val UNDO_MS = 4_000L
+
+/** El rojo suave de lo que pide un segundo toque. */
+private val DANGER = Color(0xFFFF8A80)

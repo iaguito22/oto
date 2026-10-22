@@ -30,6 +30,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -76,6 +82,8 @@ fun SongRow(
     round: Boolean = false,
     downloaded: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
+    /** En lugar de la carátula (una búsqueda reciente lleva su reloj). */
+    lead: (@Composable () -> Unit)? = null,
 ) {
     val c = Oto.colors
     Row(
@@ -91,11 +99,11 @@ fun SongRow(
             .padding(horizontal = Space.sm, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Art(artwork, 44.dp, if (round) 44.dp else Radius.sm)
+        if (lead != null) lead() else Art(artwork, 44.dp, if (round) 44.dp else Radius.sm)
         Spacer(Modifier.width(Space.md))
         Column(Modifier.weight(1f)) {
             Text(title, style = OtoType.rowTitle, color = if (current) c.accent else c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            if (subtitle.isNotEmpty() || downloaded) Row(verticalAlignment = Alignment.CenterVertically) {
                 // Descargada: una flecha pequeña delante, como en Spotify.
                 if (downloaded) {
                     Icon(painterResource(io.github.iaguito22.oto.R.drawable.ic_download_for_offline), "Descargada", Modifier.size(14.dp), tint = c.accent)
@@ -182,6 +190,55 @@ fun Skeleton(rows: Int = 6, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * Lo que ocupa el sitio de unos carruseles mientras llegan: título y tres tarjetas que respiran, con la forma de lo
+ * que va a llegar (antes eran filas de lista, y al llegar todo saltaba).
+ */
+@Composable
+fun ShelfSkeleton(shelves: Int, modifier: Modifier = Modifier) {
+    val c = Oto.colors
+    val t = rememberInfiniteTransition(label = "shelfSkeleton")
+    val a by t.animateFloat(0.5f, 1f, infiniteRepeatable(tween(900, easing = Motion.Standard), RepeatMode.Reverse), label = "breath")
+    Column(modifier.graphicsLayer { alpha = a }) {
+        repeat(shelves) {
+            // Como SectionTitle: 16 arriba, 8 abajo y una línea de 23.
+            Box(Modifier.padding(start = Space.lg, top = Space.lg + 4.dp, bottom = Space.sm + 4.dp).height(15.dp).fillMaxWidth(0.42f).clip(CircleShape).background(c.field))
+            // Como un carrusel de Card: más ancho que la pantalla, la tercera asoma.
+            Row(Modifier.horizontalScroll(rememberScrollState(), enabled = false).padding(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                repeat(3) {
+                    Column(Modifier.width(140.dp + Space.md).padding(Space.xs + 2.dp)) {
+                        Box(Modifier.size(140.dp).clip(RoundedCornerShape(Radius.md)).background(c.field))
+                        Spacer(Modifier.height(Space.sm + 2.dp))
+                        Box(Modifier.height(12.dp).fillMaxWidth(0.8f).clip(CircleShape).background(c.field))
+                        Spacer(Modifier.height(6.dp))
+                        Box(Modifier.height(10.dp).fillMaxWidth(0.55f).clip(CircleShape).background(c.field))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * En la esquina de la portada de una lista descargada: un aro que se llena mientras baja ([done] de [total]) y, al
+ * acabar, la marca de descargada.
+ */
+@Composable
+fun DownloadMark(done: Int, total: Int, modifier: Modifier = Modifier, size: Dp = 24.dp) {
+    val c = Oto.colors
+    val p by animateFloatAsState(if (total == 0) 1f else (done.toFloat() / total).coerceIn(0f, 1f), tween(Motion.SPATIAL, easing = Motion.Standard), label = "downloadMark")
+    Box(modifier.size(size).clip(CircleShape).background(c.base.copy(alpha = 0.78f)), contentAlignment = Alignment.Center) {
+        if (done >= total) Icon(painterResource(io.github.iaguito22.oto.R.drawable.ic_download_for_offline), "Descargada", Modifier.size(size - 4.dp), tint = c.accent)
+        else Canvas(Modifier.size(size * 0.62f)) {
+            val w = 2.5.dp.toPx()
+            val inset = Offset(w / 2, w / 2)
+            val arc = Size(this.size.width - w, this.size.height - w)
+            drawArc(c.text.copy(alpha = 0.18f), 0f, 360f, false, inset, arc, style = Stroke(w))
+            drawArc(c.accent, -90f, 360f * p, false, inset, arc, style = Stroke(w, cap = StrokeCap.Round))
+        }
+    }
+}
+
 /** Un hueco vacío explicado: icono, una frase y, si hace falta, qué hacer. */
 @Composable
 fun Empty(icon: Int, title: String, body: String, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null) {
@@ -190,8 +247,10 @@ fun Empty(icon: Int, title: String, body: String, modifier: Modifier = Modifier,
         Icon(painterResource(icon), null, Modifier.size(36.dp), tint = c.textFaint)
         Spacer(Modifier.height(Space.md))
         Text(title, style = OtoType.rowTitle, color = c.text, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(4.dp))
-        Text(body, style = OtoType.rowSub, color = c.textMuted, textAlign = TextAlign.Center)
+        if (body.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(body, style = OtoType.rowSub, color = c.textMuted, textAlign = TextAlign.Center)
+        }
         if (action != null) {
             Spacer(Modifier.height(Space.lg))
             action()

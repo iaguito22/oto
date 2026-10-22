@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -45,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.exoplayer.offline.Download
 import com.metrolist.innertube.models.SongItem
+import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.LIKED_ID
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.OtoApp
@@ -64,16 +66,20 @@ const val DOWNLOADS_ID = "downloads"
 
 /**
  * Lo descargado: las listas (con lo que entre en ellas después) y las canciones sueltas, cada cosa con su ×. Todo
- * suena sin conexión. Borrar pide un segundo toque: volver a bajarlo gasta datos.
+ * suena sin conexión. La × quita al momento ([onRemoveList], [onRemoveSong]) y el aviso deja deshacerlo: lo quitado
+ * no se borra hasta que el aviso se va ([gone]: lo que está esperando). Borrarlo todo sí pide un segundo toque.
  */
 @Composable
 internal fun DownloadsView(
     currentId: String?,
+    gone: Set<String>,
     onBack: () -> Unit,
     onOpen: (String) -> Unit,
     play: (SongItem) -> Unit,
     onPlayAll: (LocalPlaylist) -> Unit,
     onHold: (SongItem) -> Unit,
+    onRemoveList: (LocalPlaylist) -> Unit,
+    onRemoveSong: (Heard) -> Unit,
 ) {
     val c = Oto.colors
     val app = LocalContext.current.applicationContext as OtoApp
@@ -92,8 +98,8 @@ internal fun DownloadsView(
     var confirm by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(confirm) { if (confirm != null) { delay(3000); confirm = null } }
 
-    val lists = listIds?.mapNotNull { id -> if (id == LIKED_ID) liked else playlists?.firstOrNull { it.id == id } }.orEmpty()
-    val songs = singles.orEmpty()
+    val lists = listIds?.filter { "dl:$it" !in gone }?.mapNotNull { id -> if (id == LIKED_ID) liked else playlists?.firstOrNull { it.id == id } }.orEmpty()
+    val songs = singles.orEmpty().filter { "ds:${it.id}" !in gone }
     val isDone = { id: String -> states[id] == Download.STATE_COMPLETED }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
@@ -105,7 +111,8 @@ internal fun DownloadsView(
                 }
                 val pending = states.count { it.value != Download.STATE_COMPLETED }
                 val line = buildList {
-                    add(count(done) + if (size > 0) " · ${bytes(size)}" else "")
+                    // Lo que se acaba de quitar (y aún se puede deshacer) ya no cuenta.
+                    add(count((lists.flatMap { it.songs } + songs).distinctBy { it.id }.count { isDone(it.id) }) + if (size > 0) " · ${bytes(size)}" else "")
                     if (pending > 0) add(
                         when {
                             waiting && saver -> "$pending esperando al wifi"
@@ -140,26 +147,20 @@ internal fun DownloadsView(
             val got = l.songs.count { isDone(it.id) }
             ListRow(
                 l,
-                if (got == l.songs.size) "Descargada · ${count(got)}" else "$got de ${l.songs.size} descargadas",
-                confirming = confirm == "l:" + l.id,
+                if (got == l.songs.size) "Descargada · ${count(got)}" else "Bajando · $got de ${l.songs.size}",
+                got,
                 onClick = { onOpen(l.id) },
-                onRemove = {
-                    if (confirm == "l:" + l.id) { confirm = null; scope.launch { prefs.setDownloadList(l.id, false) } } else confirm = "l:" + l.id
-                },
+                onRemove = { onRemoveList(l) },
                 modifier = Modifier.animateItem(),
             )
         }
         if (songs.isNotEmpty()) item(key = "songsTitle") { Label("Canciones") }
         items(songs, key = { "s:" + it.id }) { h ->
             SongRow(
-                h.title, if (confirm == "s:" + h.id) "Toca otra vez la × para borrarla" else h.artist, h.artwork, h.id == currentId,
+                h.title, h.artist, h.artwork, h.id == currentId,
                 onClick = { play(h.toSong()) }, onLongClick = { onHold(h.toSong()) }, downloaded = isDone(h.id),
                 modifier = Modifier.animateItem(),
-                trailing = {
-                    RemoveButton(confirm == "s:" + h.id) {
-                        if (confirm == "s:" + h.id) { confirm = null; scope.launch { prefs.setDownloadSong(h, false) } } else confirm = "s:" + h.id
-                    }
-                },
+                trailing = { RemoveButton { onRemoveSong(h) } },
             )
         }
         if (lists.isNotEmpty() || songs.isNotEmpty()) item(key = "clear") {
@@ -178,10 +179,8 @@ private fun Label(text: String) {
 }
 
 @Composable
-private fun RemoveButton(confirming: Boolean, onClick: () -> Unit) {
+private fun RemoveButton(onClick: () -> Unit) {
     val c = Oto.colors
-    // Rojo suave en el segundo toque, como «Borrar la lista».
-    val tint by animateColorAsState(if (confirming) Color(0xFFFF8A80) else c.textMuted, tween(Motion.EFFECTS), label = "removeTint")
     Box(
         Modifier
             .size(40.dp)
@@ -189,13 +188,13 @@ private fun RemoveButton(confirming: Boolean, onClick: () -> Unit) {
             .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(painterResource(R.drawable.ic_close), "Quitar la descarga", Modifier.size(20.dp), tint = tint)
+        Icon(painterResource(R.drawable.ic_close), "Quitar la descarga", Modifier.size(20.dp), tint = c.textMuted)
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ListRow(l: LocalPlaylist, status: String, confirming: Boolean, onClick: () -> Unit, onRemove: () -> Unit, modifier: Modifier) {
+private fun ListRow(l: LocalPlaylist, status: String, got: Int, onClick: () -> Unit, onRemove: () -> Unit, modifier: Modifier) {
     val c = Oto.colors
     Row(
         modifier
@@ -205,12 +204,16 @@ private fun ListRow(l: LocalPlaylist, status: String, confirming: Boolean, onCli
             .padding(horizontal = Space.sm, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (l.id == LIKED_ID) LikedArt(52.dp) else Mosaic(l.songs, 52.dp)
+        // Lo que baja lleva su aro en la esquina; lo bajado, la marca.
+        Box {
+            if (l.id == LIKED_ID) LikedArt(52.dp) else Mosaic(l.songs, 52.dp)
+            DownloadMark(got, l.songs.size, Modifier.align(Alignment.BottomEnd).offset(4.dp, 4.dp), size = 22.dp)
+        }
         Spacer(Modifier.width(Space.md))
         Column(Modifier.weight(1f)) {
             Text(l.name, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(if (confirming) "Toca otra vez la × para quitar la descarga" else status, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(status, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        RemoveButton(confirming, onRemove)
+        RemoveButton(onRemove)
     }
 }
