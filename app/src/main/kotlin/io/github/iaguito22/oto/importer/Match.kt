@@ -4,6 +4,7 @@ import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.WatchEndpoint.WatchEndpointMusicSupportedConfigs.WatchEndpointMusicConfig.Companion.MUSIC_VIDEO_TYPE_UGC
 import java.text.Normalizer
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 
 /** Una canción tal y como la da Spotify: lo justo para encontrarla en YouTube Music. */
@@ -13,14 +14,16 @@ data class SourceTrack(val title: String, val artists: List<String>, val album: 
  * La misma canción aunque llegue con otro id: «Canción (Official Video)» de «Artista» y «Canción» de «Artista, Otro».
  * La radio y la búsqueda la usan para no repetir.
  */
-fun songKey(title: String, artist: String): String {
+fun songKey(title: String, artist: String): String = Matcher.memo(KEYS, title + '\u0000' + artist) {
     val a = Matcher.norm(artist.substringBefore(',').substringBefore(" & "))
     var t = title.replace(VIDEO_TAGS, "")
     // Los vídeos suelen llamarse «Artista - Canción».
     val dash = t.indexOf(" - ")
     if (dash > 0 && Matcher.norm(t.substring(0, dash)).let { it.isNotEmpty() && (a.contains(it) || it.contains(a)) }) t = t.substring(dash + 3)
-    return Matcher.norm(t) + "|" + a
+    Matcher.norm(t) + "|" + a
 }
+
+private val KEYS = ConcurrentHashMap<String, String>()
 
 private val VIDEO_TAGS = Regex("""\s*[(\[][^)\]]*\b(official|oficial|video|vídeo|audio|lyrics?|letra|visuali[sz]er|mv)\b[^)\]]*[)\]]""", RegexOption.IGNORE_CASE)
 
@@ -97,11 +100,29 @@ object Matcher {
         .replace(FEAT_PAREN, " ")
         .replace(FEAT_TAIL, " ")
 
-    fun norm(s: String): String = Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD)
-        .replace(MARKS, "")
-        .replace("&", " and ")
-        .replace(NON_WORD, " ")
-        .trim()
+    fun norm(s: String): String = memo(NORMS, s) {
+        Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD)
+            .replace(MARKS, "")
+            .replace("&", " and ")
+            .replace(NON_WORD, " ")
+            .trim()
+    }
+
+    /**
+     * Lo ya calculado, de memoria. Tus listas repiten mucho los mismos artistas y canciones, y el DJ, las listas
+     * hechas con lo tuyo y la búsqueda las recorren enteras cada vez: sin esto, normalizar era casi todo su tiempo.
+     * Con tope: al llenarse se vacía.
+     */
+    internal inline fun memo(cache: ConcurrentHashMap<String, String>, key: String, compute: () -> String): String {
+        cache[key]?.let { return it }
+        val v = compute()
+        if (cache.size >= CACHE_MAX) cache.clear()
+        cache[key] = v
+        return v
+    }
+
+    private val NORMS = ConcurrentHashMap<String, String>()
+    private const val CACHE_MAX = 40_000
 
     private fun words(s: String): Set<String> = norm(s).split(' ').filter { it.isNotEmpty() && !(it.length == 4 && it.all(Char::isDigit)) }.toSet()
 

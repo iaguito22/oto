@@ -2,6 +2,7 @@ package io.github.iaguito22.oto.dj
 
 import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.LocalPlaylist
+import io.github.iaguito22.oto.traced
 import kotlin.random.Random
 
 /**
@@ -12,7 +13,10 @@ import kotlin.random.Random
 object Smart {
     const val PREFIX = "smart:"
 
-    fun lists(lists: List<LocalPlaylist>, liked: List<Heard>, history: List<Heard>, plays: List<Play>, now: Long): List<LocalPlaylist> {
+    fun lists(lists: List<LocalPlaylist>, liked: List<Heard>, history: List<Heard>, plays: List<Play>, now: Long): List<LocalPlaylist> =
+        traced("oto.smart") { build(lists, liked, history, plays, now) }
+
+    private fun build(lists: List<LocalPlaylist>, liked: List<Heard>, history: List<Heard>, plays: List<Play>, now: Long): List<LocalPlaylist> {
         val profile = Profile(lists, liked, history, plays, now)
         val day = now / DAY
         val known = HashMap<String, Heard>()

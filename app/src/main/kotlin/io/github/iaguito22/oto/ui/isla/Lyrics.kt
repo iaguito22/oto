@@ -49,6 +49,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,6 +98,7 @@ import io.github.iaguito22.oto.ui.theme.Oto
 import io.github.iaguito22.oto.ui.theme.OtoType
 import io.github.iaguito22.oto.ui.theme.Space
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.max
@@ -241,6 +243,7 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
     }
 
     val clock = remember { LyricsClock() }
+    val covered = LocalCovered.current
     LaunchedEffect(id, playing) {
         // Se ancla a la posición y avanza con el tiempo del fotograma; si el reproductor se separa mucho (un salto,
         // un corte), se vuelve a anclar, y si se separa poco se le acerca sin que se note.
@@ -249,13 +252,22 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
         }
         var anchorPos = connection.position().toDouble()
         var anchorT = -1L
-        while (true) withFrameNanos { now ->
+        while (true) {
+            // Tapada por una hoja se queda quieta: se ve desenfocada a través de ella, y moverla obligaba a desenfocar
+            // otra vez toda la pantalla de detrás en cada fotograma. Al destaparse, vuelve a anclarse.
+            if (covered()) {
+                snapshotFlow { covered() }.first { !it }
+                anchorPos = connection.position().toDouble()
+                anchorT = -1L
+            }
+            withFrameNanos { now ->
             if (anchorT < 0) anchorT = now
             val est = anchorPos + (now - anchorT) / 1e6
             val real = connection.position().toDouble()
             val diff = real - est
             if (abs(diff) > 180) { anchorPos = real; anchorT = now } else anchorPos += diff * 0.08
             clock.ms = (anchorPos + (now - anchorT) / 1e6).toLong() + LEAD_MS
+            }
         }
     }
     val active by remember(rows) { derivedStateOf { val t = clock.ms; rows.indexOfLast { it.start <= t } } }

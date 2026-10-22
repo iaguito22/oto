@@ -21,7 +21,8 @@ import org.junit.Test
 class PodcastEnrichmentTest {
     @Test
     fun `new episodes enrich missing artists and preserve linked or unresolved episodes`() = runBlocking {
-        val lookedUp = mutableListOf<String>()
+        // Las búsquedas van en paralelo: con una lista normal alguna se perdía y la prueba fallaba a veces.
+        val lookedUp = java.util.Collections.synchronizedList(mutableListOf<String>())
         val engine = MockEngine { request ->
             val response = when {
                 request.url.encodedPath.endsWith("/browse") -> browseResponse

@@ -11,12 +11,16 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.metrolist.innertube.models.Artist
 import com.metrolist.innertube.models.SongItem
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -87,6 +91,10 @@ enum class DropStyle { Ring, Liquid }
 
 /** Lo que la app recuerda entre sesiones. */
 class Prefs(private val context: Context) {
+    // Las listas, Me gusta y el historial se decodifican una vez por cambio y se comparten: antes cada pantalla y
+    // servicio que los miraba decodificaba por su cuenta los megas de JSON de tus listas (cuatro veces al abrir la app).
+    private val shared = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     val tutorialDone: Flow<Boolean> = context.store.data.map { it[TUTORIAL_DONE] ?: false }
 
     suspend fun setTutorialDone(done: Boolean) {
@@ -206,7 +214,8 @@ class Prefs(private val context: Context) {
         }
     }
 
-    val history: Flow<List<Heard>> = context.store.data.map { decode(it[HISTORY]) }
+    val history: Flow<List<Heard>> = context.store.data.map { it[HISTORY] }.distinctUntilChanged().map(::decode)
+        .flowOn(Dispatchers.Default).shareIn(shared, SharingStarted.Eagerly, 1)
 
     /** La más reciente primero, sin repetidas, hasta [HISTORY_SIZE]. */
     suspend fun addHeard(h: Heard) {
@@ -219,9 +228,11 @@ class Prefs(private val context: Context) {
     // ---- Me gusta ----
 
     /** La última que te gustó, la primera. */
-    val liked: Flow<List<Heard>> = context.store.data.map { it[LIKED] }.distinctUntilChanged().map(::decode).flowOn(Dispatchers.Default)
+    val liked: Flow<List<Heard>> = context.store.data.map { it[LIKED] }.distinctUntilChanged().map(::decode)
+        .flowOn(Dispatchers.Default).shareIn(shared, SharingStarted.Eagerly, 1)
 
     val likedIds: Flow<Set<String>> = liked.map { l -> l.mapTo(HashSet()) { it.id } }
+        .shareIn(shared, SharingStarted.Eagerly, 1)
 
     /** «Me gusta» como lista: así se enseña y suena igual que las tuyas. */
     val likedList: Flow<LocalPlaylist> = liked.map { LocalPlaylist(LIKED_ID, "Me gusta", it) }
@@ -281,7 +292,12 @@ class Prefs(private val context: Context) {
     // ---- Listas ----
 
     // Decodificar varios megas de JSON no puede ir en el hilo de la interfaz.
-    val playlists: Flow<List<LocalPlaylist>> = context.lists.data.map { it[PLAYLISTS] }.distinctUntilChanged().map(::decodeLists).flowOn(Dispatchers.Default)
+    val playlists: Flow<List<LocalPlaylist>> = context.lists.data.map { it[PLAYLISTS] }.distinctUntilChanged().map(::decodeLists)
+        .flowOn(Dispatchers.Default).shareIn(shared, SharingStarted.Eagerly, 1)
+
+    /** Los ids de todo lo que está en alguna de tus listas: para saber al momento si una canción está guardada. */
+    val listedIds: Flow<Set<String>> = playlists.map { l -> l.flatMapTo(HashSet()) { p -> p.songs.map { it.id } } }
+        .shareIn(shared, SharingStarted.Eagerly, 1)
 
     /** La nueva va la primera; devuelve su id. */
     suspend fun createPlaylist(name: String, first: Heard? = null): String = createPlaylist(name, listOfNotNull(first))
@@ -417,29 +433,34 @@ class Prefs(private val context: Context) {
         context.lists.edit { p -> p[PLAYLISTS] = encodeLists(f(decodeLists(p[PLAYLISTS]))) }
     }
 
+    // Las canciones de cada lista van dentro del mismo JSON, sin pasar a texto y volver a leerlo (eso duplicaba el
+    // trabajo con miles de canciones).
     private fun encodeLists(list: List<LocalPlaylist>) = JSONArray().apply {
-        list.forEach { put(JSONObject().put("id", it.id).put("n", it.name).put("s", JSONArray(encode(it.songs))).put("f", it.from).put("d", it.folder)) }
+        list.forEach { put(JSONObject().put("id", it.id).put("n", it.name).put("s", songsJson(it.songs)).put("f", it.from).put("d", it.folder)) }
     }.toString()
 
-    private fun decodeLists(s: String?): List<LocalPlaylist> = runCatching {
+    private fun decodeLists(s: String?): List<LocalPlaylist> = traced("oto.decodeLists") { decodeListsRaw(s) }
+
+    private fun decodeListsRaw(s: String?): List<LocalPlaylist> = runCatching {
         val a = JSONArray(s ?: return emptyList())
         (0 until a.length()).map { i ->
             val o = a.getJSONObject(i)
-            LocalPlaylist(o.getString("id"), o.optString("n"), decode(o.optJSONArray("s")?.toString()), o.optString("f").ifEmpty { null }, o.optString("d").ifEmpty { null })
+            LocalPlaylist(o.getString("id"), o.optString("n"), runCatching { songs(o.optJSONArray("s")) }.getOrDefault(emptyList()), o.optString("f").ifEmpty { null }, o.optString("d").ifEmpty { null })
         }
     }.getOrDefault(emptyList())
 
-    private fun encode(list: List<Heard>) = JSONArray().apply {
+    private fun encode(list: List<Heard>) = songsJson(list).toString()
+
+    private fun songsJson(list: List<Heard>) = JSONArray().apply {
         list.forEach { put(JSONObject().put("id", it.id).put("t", it.title).put("a", it.artist).put("i", it.artwork).put("ai", it.artistId)) }
-    }.toString()
+    }
 
-    private fun decode(s: String?): List<Heard> = runCatching {
-        val a = JSONArray(s ?: return emptyList())
-        (0 until a.length()).map { i ->
-            val o = a.getJSONObject(i)
-            Heard(o.getString("id"), o.optString("t"), o.optString("a"), o.optString("i").ifEmpty { null }, o.optString("ai").ifEmpty { null })
-        }
-    }.getOrDefault(emptyList())
+    private fun decode(s: String?): List<Heard> = runCatching { songs(JSONArray(s ?: return emptyList())) }.getOrDefault(emptyList())
+
+    private fun songs(a: JSONArray?): List<Heard> = if (a == null) emptyList() else (0 until a.length()).map { i ->
+        val o = a.getJSONObject(i)
+        Heard(o.getString("id"), o.optString("t"), o.optString("a"), o.optString("i").ifEmpty { null }, o.optString("ai").ifEmpty { null })
+    }
 
     private companion object {
         const val HISTORY_SIZE = 50

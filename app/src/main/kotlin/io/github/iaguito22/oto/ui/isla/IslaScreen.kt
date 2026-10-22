@@ -91,7 +91,6 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.TileMode
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -115,7 +114,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.imageLoader
 import coil3.request.ImageRequest
-import coil3.toBitmap
 import io.github.iaguito22.oto.DropStyle
 import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.OtoApp
@@ -130,6 +128,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.painterResource
 import io.github.iaguito22.oto.R
@@ -141,6 +141,7 @@ import io.github.iaguito22.oto.ui.theme.Oto
 import io.github.iaguito22.oto.ui.theme.OtoTheme
 import io.github.iaguito22.oto.ui.theme.OtoType
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -199,14 +200,14 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
     }
     // Guardar lo que suena: doble toque en la carátula = Me gusta; mantenerla (o tocar su marca) = elegir dónde.
     val likedIds by app.prefs.likedIds.collectAsStateWithLifecycle(initialValue = emptySet())
-    val lists by app.prefs.playlists.collectAsStateWithLifecycle(initialValue = emptyList())
+    val listed by app.prefs.listedIds.collectAsStateWithLifecycle(initialValue = emptySet())
     var saving by remember { mutableStateOf<Heard?>(null) }
     var burst by remember { mutableIntStateOf(0) }
     val saved: (String?) -> Saved = { id ->
         when {
             id == null -> Saved.No
             id in likedIds -> Saved.Liked
-            lists.any { l -> l.songs.any { it.id == id } } -> Saved.Listed
+            id in listed -> Saved.Listed
             else -> Saved.No
         }
     }
@@ -261,7 +262,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
 
     Box(Modifier.fillMaxSize().background(c.base)) {
         Backdrop(np.artwork)
-        Stage(
+        CompositionLocalProvider(LocalCovered provides { sheet.isOpen && sheet.morph.value >= 0.98f }) { Stage(
             np, connection, drop, lyrics, openSource, openArtist, saved, like, save, burst, { flash = it },
             Modifier.graphicsLayer {
                 // Lo de detrás se aleja y se desenfoca mientras la hoja crece: hace de cristal sin capturar la pantalla.
@@ -271,7 +272,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
                 scaleX = s; scaleY = s
                 renderEffect = if (m > 0.01f) BlurEffect(28.dp.toPx() * m, 28.dp.toPx() * m, TileMode.Decal) else null
             },
-        )
+        ) }
         Drop(
             state = drop,
             playing = np.playing,
@@ -331,8 +332,7 @@ private fun Backdrop(artwork: String?) {
     // Se carga antes de cambiar, así el fundido va de una imagen a otra y no pasa por negro.
     val image by produceState<ImageBitmap?>(null, artwork) {
         if (artwork == null) { value = null; return@produceState }
-        val r = context.imageLoader.execute(ImageRequest.Builder(context).data(smallArtwork(artwork)).build())
-        r.image?.toBitmap()?.asImageBitmap()?.let { value = it }
+        blurredArtwork(context, artwork)?.let { value = it }
     }
     Crossfade(image, animationSpec = tween(BACKDROP_MS, easing = Motion.Standard), label = "backdrop") { bmp ->
         if (bmp != null) Image(
@@ -341,10 +341,7 @@ private fun Backdrop(artwork: String?) {
             colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }),
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    scaleX = 1.35f; scaleY = 1.35f
-                    renderEffect = BlurEffect(64.dp.toPx(), 64.dp.toPx(), TileMode.Clamp)
-                },
+                .graphicsLayer { scaleX = 1.35f; scaleY = 1.35f },
         )
     }
     Box(
@@ -813,8 +810,12 @@ private fun Progress(np: NowPlaying, connection: PlayerConnection, modifier: Mod
     val pos = remember { mutableLongStateOf(0L) }
     var drag by remember { mutableStateOf<Float?>(null) }
     val dur = np.durationMs
+    val hidden = LocalCovered.current
     LaunchedEffect(np.id, np.playing, dur) {
         do {
+            // Tapada por una hoja se ve desenfocada a través de ella: moverla obligaba a desenfocar otra vez toda la
+            // pantalla de detrás en cada fotograma. Al destaparse salta a donde va.
+            if (hidden()) snapshotFlow { hidden() }.first { !it }
             withFrameNanos { }
             if (drag == null) pos.longValue = connection.position()
         } while (np.playing)
@@ -908,6 +909,12 @@ private fun Modifier.fadeEdges() = graphicsLayer { compositingStrategy = Composi
     }
 
 private fun time(secs: Int) = "%d:%02d".format(secs / 60, secs % 60)
+
+/**
+ * Una hoja tapa la pantalla principal: lo que se anima solo (la barra de tiempo, la letra) se queda quieto. Detrás de
+ * la hoja se ve desenfocado, y cada cambio obligaba a desenfocar otra vez la pantalla entera.
+ */
+val LocalCovered = staticCompositionLocalOf<() -> Boolean> { { false } }
 
 /** Las carátulas de las dos siguientes, ya en caché: al pasar de canción la nueva entra ya pintada. */
 @Composable

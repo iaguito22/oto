@@ -133,6 +133,8 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sh.calvin.reorderable.ReorderableItem
@@ -182,9 +184,15 @@ fun MenuSheet(
     // lo oído, y cada canción que empieza cambia el historial. Con muchas listas rehacerlas cuesta segundos y el
     // cálculo no se corta a medias: pasando canciones rápido se amontonaban hasta dejar el móvil sin memoria. Así se
     // espera a que el historial pare quieto un momento, y collectLatest no empieza uno sin que acabe el anterior.
+    // Con la hoja cerrada no se mira nada (oyendo música con la app delante, cada canción lo rehacía para nadie): la
+    // primera vez se hace al abrir la app y luego al abrir la hoja, si algo cambió.
     var smart by remember { mutableStateOf(emptyList<LocalPlaylist>()) }
+    val shown by rememberUpdatedState(open)
     LaunchedEffect(Unit) {
-        snapshotFlow { Triple(history, liked, playlists) }
+        var done = false
+        snapshotFlow { Triple(history, liked, playlists).takeIf { shown || !done } }
+            .filterNotNull()
+            .distinctUntilChanged()
             .debounce(RECOMPUTE_MS)
             .collectLatest { (h, lk, l) ->
                 vm.taste = withContext(Dispatchers.Default) {
@@ -194,6 +202,7 @@ fun MenuSheet(
                 smart = withContext(Dispatchers.Default) {
                     runCatching { Smart.lists(l, lk?.songs.orEmpty(), h, app.plays.all(), System.currentTimeMillis()) }.getOrDefault(emptyList())
                 }
+                done = true
             }
     }
     // Recolocando Tus listas: cada lista o carpeta se arrastra a su sitio, hasta «Listo».

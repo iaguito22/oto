@@ -31,9 +31,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import io.github.iaguito22.oto.DropStyle
 import io.github.iaguito22.oto.playback.AudioLevels
+import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
@@ -75,6 +79,14 @@ class DropState {
 
     /** El dedo está tocando la gota (para el tutorial). */
     val touching get() = target != null || pressTarget > 1f
+
+    /** Quieta del todo, en pausa: solo le queda respirar despacio (ver [Drop]). */
+    internal val resting
+        get() = target == null && pressTarget == 1f && abs(press - 1f) < 1e-3f && abs(vx) + abs(vy) < 1f &&
+            abs(px) + abs(py) < 0.5f && wobble > 0.999f && pulse < 1e-3f && abs(alpha - 0.7f) < 1e-3f && abs(speed - 0.22f) < 1e-3f
+
+    /** Un toque la despierta al momento, aunque estuviera a medio sueño entre dos fotogramas lentos. */
+    internal val poke = Channel<Unit>(Channel.CONFLATED)
 
     internal fun step(dtRaw: Float, playing: Boolean, level: Float) {
         val dt = dtRaw.coerceIn(0f, 0.05f)
@@ -141,6 +153,7 @@ fun Drop(
     val isPlaying by rememberUpdatedState(playing)
     val cue by rememberUpdatedState(onCue)
     val gesture by rememberUpdatedState(onGesture)
+    val shown by rememberUpdatedState(visible)
 
     // Solo corre mientras la app se ve: con la pantalla apagada no se gasta ni un fotograma.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -148,6 +161,16 @@ fun Drop(
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             var last = withFrameNanos { it }
             while (true) {
+                // Tapada por una hoja no se ve: ni se mueve ni pide fotogramas. Si los pidiera, lo de detrás (que se ve
+                // desenfocado a través de la hoja) se volvía a desenfocar en cada uno, y eso es lo más caro de la app.
+                if (shown() <= 0f) {
+                    snapshotFlow { shown() > 0f }.first { it }
+                    last = withFrameNanos { it }
+                    continue
+                }
+                // Quieta y en pausa solo respira, a menos de medio píxel por fotograma: a 30 por segundo se ve igual
+                // que a 120 y cuesta la cuarta parte. Tocarla la despierta sin esperar.
+                if (!isPlaying && state.resting) withTimeoutOrNull(IDLE_FRAME_MS) { state.poke.receive() }
                 withFrameNanos { now ->
                     state.step((now - last) / 1e9f, isPlaying, AudioLevels.now())
                     last = now
@@ -219,6 +242,7 @@ fun Drop(
                 if (hypot(down.position.x - size.width / 2f, down.position.y - size.height / 2f) > px.reach) return@awaitEachGesture
                 down.consume()
                 state.pressTarget = 1.1f
+                state.poke.trySend(Unit)
                 var moved = false
                 var held = false
                 var dir: Gesture? = null
@@ -278,6 +302,7 @@ fun Drop(
 private val BodyBase = Color(0xFF151515)
 private const val HOLD_HINT_MS = 150L
 private const val HOLD_MS = 480L
+private const val IDLE_FRAME_MS = 33L
 
 /**
  * Tres círculos fundidos con smooth-min (el cuerpo, el puente y el núcleo). El núcleo se ve como luz con el

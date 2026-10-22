@@ -11,20 +11,21 @@ import com.metrolist.innertube.pages.SearchSummaryPage
 import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.importer.Matcher
 import io.github.iaguito22.oto.importer.songKey
+import io.github.iaguito22.oto.traced
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 
 /** Lo tuyo (me gusta, listas, historial): con esto se adelanta un resultado, como hace Spotify. */
 data class Taste(val artists: Set<String> = emptySet(), val songs: Set<String> = emptySet()) {
     companion object {
-        fun of(heard: Sequence<Heard>): Taste {
+        fun of(heard: Sequence<Heard>): Taste = traced("oto.taste") {
             val artists = HashSet<String>()
             val songs = HashSet<String>()
             for (h in heard) {
                 h.artist.split(", ", " & ").map(Matcher::norm).filterTo(artists) { it.isNotEmpty() }
                 songs += songKey(h.title, h.artist)
             }
-            return Taste(artists, songs)
+            Taste(artists, songs)
         }
     }
 }
