@@ -84,7 +84,8 @@ class MenuViewModel : ViewModel() {
         if (q.isBlank()) it.copy(query = q, results = emptyList(), searchError = null, searching = false, filter = Filter.All) else it.copy(query = q, searchError = null)
     }
 
-    fun onFilter(f: Filter) = _state.update { it.copy(filter = f, results = emptyList(), searchError = null) }
+    // El que ya está elegido no hace nada: vaciaba los resultados y, como no cambia, no se volvía a buscar («Sin resultados»).
+    fun onFilter(f: Filter) = _state.update { if (it.filter == f) it else it.copy(filter = f, results = emptyList(), searchError = null) }
 
     private var lastQuery = ""
     private var lastFilter = Filter.All
