@@ -59,19 +59,4 @@ val MediaItem.isAuto get() = mediaMetadata.extras?.getBoolean(AUTO) == true
 const val AUTO = "oto_auto"
 const val ARTIST_NAMES = "oto_artist_names"
 const val ARTIST_IDS = "oto_artist_ids"
-
-// Lo que ocupa la carátula a pantalla completa en un móvil de 1080 px de ancho.
-const val ARTWORK_PX = 1080
-
-private val GOOGLEUSERCONTENT_SIZE = Regex("^(https://(?:lh3|yt3)\\.googleusercontent\\.com/[^?]*?)=w(\\d+)-h(\\d+)[^?]*(\\?.*)?$")
-private val GGPHT_SIZE = Regex("^(https://yt3\\.ggpht\\.com/[^?=]+)=(?:s\\d+|w\\d+-h\\d+)[^?]*(\\?.*)?$")
-
-/** Pide la carátula al tamaño que se va a pintar (de `YouTubeUtils.resize` de Metrolist). */
-fun String.resize(width: Int): String {
-    GOOGLEUSERCONTENT_SIZE.matchEntire(this)?.groupValues?.let { g ->
-        val height = (width.toDouble() * g[3].toInt() / g[2].toInt()).roundToInt().coerceAtLeast(1)
-        return "${g[1]}=w$width-h$height-p-l90-rj${g[4]}"
-    }
-    GGPHT_SIZE.matchEntire(this)?.groupValues?.let { g -> return "${g[1]}=s$width${g[2]}" }
-    return this
-}
+// ARTWORK_PX y String.resize viven en :core (StreamInfo.kt).

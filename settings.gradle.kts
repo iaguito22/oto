@@ -24,3 +24,5 @@ dependencyResolutionManagement {
 rootProject.name = "Oto"
 include(":app")
 include(":innertube")
+include(":core")
+include(":desktopApp")

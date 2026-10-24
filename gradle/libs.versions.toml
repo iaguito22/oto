@@ -4,6 +4,9 @@ reorderable = "3.1.0"
 androidGradlePlugin = "9.4.1"
 kotlin = "2.4.20"
 composeBom = "2026.09.00"
+composeMultiplatform = "1.8.0"
+coroutines = "1.10.2"
+json = "20240303"
 activity = "1.13.0"
 lifecycle = "2.11.0"
 # 1.11.1 oculta los controles multimedia en Android 17 (issue #4404 de Metrolist).
@@ -37,6 +40,10 @@ coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" 
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 palette = { module = "androidx.palette:palette", version.ref = "palette" }
 datastore = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+datastore-core = { module = "androidx.datastore:datastore-preferences-core", version.ref = "datastore" }
+coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
+org-json = { module = "org.json:json", version.ref = "json" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
 ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
@@ -51,5 +58,7 @@ innertubex = { module = "com.github.MetrolistGroup.innertubex:innertubex", versi
 [plugins]
 android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }
 android-library = { id = "com.android.library", version.ref = "androidGradlePlugin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+jetbrains-compose = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

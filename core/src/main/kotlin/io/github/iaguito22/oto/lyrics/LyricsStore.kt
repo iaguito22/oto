@@ -1,6 +1,6 @@
 package io.github.iaguito22.oto.lyrics
 
-import android.util.LruCache
+import io.github.iaguito22.oto.MemCache
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -16,8 +16,8 @@ import java.util.concurrent.ConcurrentHashMap
  * «No hay letra» también se guarda, pero solo unos días: las fuentes la van teniendo con el tiempo.
  */
 class LyricsStore(private val dir: File) {
-    private val memory = LruCache<String, Lyrics>(64)
-    private val romMemory = LruCache<String, Map<String, String>>(64)
+    private val memory = MemCache<String, Lyrics>(64)
+    private val romMemory = MemCache<String, Map<String, String>>(64)
     private val running = ConcurrentHashMap<String, CompletableDeferred<LyricsSource.Fetched>>()
 
     /** Lo que ya está en memoria, sin esperar a nada. */

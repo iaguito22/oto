@@ -1,6 +1,5 @@
 package io.github.iaguito22.oto.playback
 
-import android.content.Context
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertubex.InnerTubeLogEvent
 import com.metrolist.innertubex.InnerTubeLogLevel
@@ -20,8 +19,9 @@ import com.metrolist.innertubex.extraction.YtConfigParser
 import com.metrolist.innertubex.extraction.YtConfigParserImpl
 import com.metrolist.innertubex.extraction.generateClientPlaybackNonce
 import com.metrolist.innertubex.extraction.strategy.PoTokenProviderKind
-import io.github.iaguito22.oto.playback.potoken.PoTokenGenerator
 import com.metrolist.innertubex.extraction.PlayerConfig
+import io.github.iaguito22.oto.KeyValueFile
+import io.github.iaguito22.oto.OtoDirs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +37,7 @@ import kotlin.time.Clock
 
 /**
  * Único punto de extracción de streams. Adaptado de `InnerTubeXPlayer` de Metrolist (GPL-3.0):
- * pide a InnerTubeX solo URL directas (sin HLS ni SABR), que es lo que ExoPlayer reproduce de forma progresiva.
+ * pide a InnerTubeX solo URL directas (sin HLS ni SABR), que es lo que ExoPlayer y DesktopAudioPlayer reproducen de forma progresiva.
  */
 object InnerTubeXPlayer {
     private const val TAG = "InnerTubeX"
@@ -48,14 +48,40 @@ object InnerTubeXPlayer {
     private const val CONFIG_REFRESH_MS = 60 * 60 * 1000L
     private const val CONFIG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000L
 
-    @Volatile private var appContext: Context? = null
     @Volatile private var currentBundle: Bundle? = null
     private val bundleMutex = Mutex()
     private val clientFailures = ConcurrentHashMap<String, FailedClients>()
 
+    fun interface PoTokenCallback {
+        suspend fun obtain(videoId: String, sessionId: String): Pair<String, String>?
+    }
+
+    private val defaultTokenProvider = object : TokenProvider {
+        override val capabilities = TokenProviderCapabilities(providers = emptySet(), usesWebView = false)
+        override suspend fun getPoToken(videoId: String, visitorData: String, cookie: String?): PoTokenResult? = null
+    }
+
+    @Volatile
+    var tokenProvider: TokenProvider = defaultTokenProvider
+
     @Synchronized
-    fun initialize(context: Context) {
-        if (appContext == null) appContext = context.applicationContext
+    fun initialize(customCallback: PoTokenCallback? = null) {
+        if (customCallback != null) {
+            tokenProvider = object : TokenProvider {
+                override val capabilities = TokenProviderCapabilities(
+                    providers = setOf(PoTokenProviderKind.WEB_BOTGUARD),
+                    usesWebView = true,
+                )
+                override suspend fun getPoToken(videoId: String, visitorData: String, cookie: String?): PoTokenResult? =
+                    customCallback.obtain(videoId, visitorData)?.let { (streaming, playerReq) ->
+                        PoTokenResult(
+                            playerRequestToken = playerReq,
+                            streamingDataToken = streaming,
+                            visitorData = visitorData,
+                        )
+                    }
+            }
+        }
     }
 
     /** Descarga la configuración del reproductor y el cifrado antes de la primera canción. */
@@ -95,7 +121,7 @@ object InnerTubeXPlayer {
 
     suspend fun refreshAfterStreamRejection(): Boolean {
         // La configuración guardada puede ser la de un reproductor que YouTube ya no acepta: la próxima, de nuevo.
-        configPrefs.edit().clear().apply()
+        configPrefs.clear()
         return bundle().cipher.refreshAfterStreamRejection()
     }
 
@@ -132,29 +158,7 @@ object InnerTubeXPlayer {
     }
 
     private val configRepository: PlayerConfigRepository by lazy {
-        PrefsPlayerConfigRepository(requireNotNull(appContext) { "InnerTubeXPlayer sin inicializar" })
-    }
-
-    private val poTokenGenerator by lazy {
-        PoTokenGenerator(requireNotNull(appContext) { "InnerTubeXPlayer sin inicializar" })
-    }
-
-    private val tokenProvider = object : TokenProvider {
-        override val capabilities = TokenProviderCapabilities(
-            providers = setOf(PoTokenProviderKind.WEB_BOTGUARD),
-            usesWebView = true,
-        )
-
-        override suspend fun getPoToken(videoId: String, visitorData: String, cookie: String?): PoTokenResult? =
-            poTokenGenerator.getWebClientPoToken(videoId, visitorData)?.let {
-                PoTokenResult(
-                    playerRequestToken = it.playerRequestPoToken,
-                    streamingDataToken = it.streamingDataPoToken,
-                    visitorData = visitorData,
-                )
-            }
-
-        override suspend fun close() = poTokenGenerator.close()
+        PrefsPlayerConfigRepository(OtoDirs.keyValue("innertubex_player_config"))
     }
 
     private val logger = InnerTubeLogger { e: InnerTubeLogEvent ->
@@ -248,7 +252,7 @@ object InnerTubeXPlayer {
     private val refreshing = AtomicBoolean(false)
     private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val configPrefs by lazy {
-        requireNotNull(appContext) { "InnerTubeXPlayer sin inicializar" }.getSharedPreferences("oto_player_config", Context.MODE_PRIVATE)
+        OtoDirs.keyValue("oto_player_config")
     }
 
     private fun savedConfig(login: Boolean): Pair<PlayerConfig, Long>? = runCatching {
@@ -266,29 +270,27 @@ object InnerTubeXPlayer {
         val o = JSONObject().put("playerUrl", c.playerUrl).put("at", System.currentTimeMillis())
             .put("visitorData", c.visitorData.orEmpty()).put("clientVersion", c.clientVersion.orEmpty()).put("hostFlags", c.encryptedHostFlags.orEmpty())
         c.signatureTimestamp?.let { o.put("sts", it) }
-        configPrefs.edit().putString(configKey(login), o.toString()).apply()
+        configPrefs.putString(configKey(login), o.toString())
     }
 
     private fun configKey(login: Boolean) = if (login) "login" else "visitor"
 
-    private class PrefsPlayerConfigRepository(context: Context) : PlayerConfigRepository {
-        private val prefs = context.getSharedPreferences("innertubex_player_config", Context.MODE_PRIVATE)
-
+    private class PrefsPlayerConfigRepository(private val prefs: KeyValueFile) : PlayerConfigRepository {
         override val enabled = true
         override val sourceUrl = URL
         override val defaultSourceUrl = URL
         override var cachedJson: String
             get() = prefs.getString("json", "").orEmpty()
-            set(v) = prefs.edit().putString("json", v).apply()
+            set(v) = prefs.putString("json", v)
         override var cachedAtMs: Long
             get() = prefs.getLong("cached_at_ms", 0L)
-            set(v) = prefs.edit().putLong("cached_at_ms", v).apply()
+            set(v) = prefs.putLong("cached_at_ms", v)
         override var cachedSourceUrl: String
             get() = prefs.getString("source_url", "").orEmpty()
-            set(v) = prefs.edit().putString("source_url", v).apply()
+            set(v) = prefs.putString("source_url", v)
         override var cachedEtag: String
             get() = prefs.getString("etag", "").orEmpty()
-            set(v) = prefs.edit().putString("etag", v).apply()
+            set(v) = prefs.putString("etag", v)
 
         private companion object {
             const val URL = "https://raw.githubusercontent.com/ZemerTeam/zemer-cipher/master/library/src/main/assets/player_configs.json"

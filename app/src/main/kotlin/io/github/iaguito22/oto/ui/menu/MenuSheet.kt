@@ -195,7 +195,7 @@ fun MenuSheet(
     val s by vm.state.collectAsStateWithLifecycle()
     val app = LocalContext.current.applicationContext as OtoApp
     val prefs = app.prefs
-    val memory = remember { MenuMemory.of(app) }
+    val memory = remember { MenuMemory.of() }
     val history by prefs.history.collectAsStateWithLifecycle(initialValue = null)
     val savedLists by prefs.playlists.collectAsStateWithLifecycle(initialValue = null)
     val savedLiked by prefs.likedList.collectAsStateWithLifecycle(initialValue = null)
@@ -858,9 +858,10 @@ private fun Explore(
                 items(smart, key = { it.id }) { l -> PlaylistCard(l, onClick = { onSmart(l) }) }
             }
         }
+        val homeErr = s.homeError
         when {
-            list == null && s.homeError != null -> item(key = "error") {
-                Empty(R.drawable.ic_library_music, "No se pudo cargar", s.homeError, Modifier.height(320.dp)) { Pill("Reintentar", onRetry, filled = false) }
+            list == null && homeErr != null -> item(key = "error") {
+                Empty(R.drawable.ic_library_music, "No se pudo cargar", homeErr, Modifier.height(320.dp)) { Pill("Reintentar", onRetry, filled = false) }
             }
             list == null -> item(key = "loading") { ShelfSkeleton(3) }
             else -> shelves(list, currentId, play, onHold, onOpen)
@@ -949,8 +950,9 @@ private fun Results(
     /** Poner lo de un álbum, una lista o un artista sin abrirlo; luego [done]. */
     onPlayItem: (YTItem, done: () -> Unit) -> Unit,
 ) {
+    val searchErr = s.searchError
     when {
-        s.searchError != null && s.results.isEmpty() -> Empty(R.drawable.ic_search, "La búsqueda falló", s.searchError)
+        searchErr != null && s.results.isEmpty() -> Empty(R.drawable.ic_search, "La búsqueda falló", searchErr)
         s.results.isEmpty() && s.searching -> Skeleton(modifier = Modifier.padding(Space.md))
         s.results.isEmpty() && s.query.trim().length < 2 -> Empty(R.drawable.ic_search, "Sigue escribiendo", "Con dos letras ya busca.")
         s.results.isEmpty() -> Empty(R.drawable.ic_search, "Sin resultados", "Prueba con otro nombre o con el artista.")
@@ -1117,8 +1119,9 @@ private fun DetailView(
                 }
             }
         }
+        val detailErr = d.error
         when {
-            d.error != null -> item(key = "error") { Empty(R.drawable.ic_library_music, "No se pudo abrir", d.error, Modifier.height(240.dp)) }
+            detailErr != null -> item(key = "error") { Empty(R.drawable.ic_library_music, "No se pudo abrir", detailErr, Modifier.height(240.dp)) }
             songs == null -> item(key = "loading") { Skeleton(rows = 8) }
             else -> itemsIndexed(songs, key = { i, it -> "${it.id}-$i" }) { i, song ->
                 SongRow(song.title, song.subtitle(), song.thumbnail, song.id == currentId, onClick = { onPlay(songs, i) }, onLongClick = { onHold(song) })
@@ -1154,7 +1157,8 @@ private fun ArtistView(
                     Spacer(Modifier.height(Space.md))
                     Text(d.item.title, style = OtoType.display.copy(fontSize = OtoType.display.fontSize * 0.86f), color = c.text, maxLines = 2,
                         overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = Space.lg))
-                    if (!d.sub.isNullOrEmpty()) Text(d.sub, style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
+                    val artistSub = d.sub
+                    if (!artistSub.isNullOrEmpty()) Text(artistSub, style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
                     if (!songs.isNullOrEmpty()) {
                         Spacer(Modifier.height(Space.md))
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
@@ -1165,8 +1169,9 @@ private fun ArtistView(
                 }
             }
         }
+        val artistErr = d.error
         when {
-            d.error != null -> item(key = "error") { Empty(R.drawable.ic_person, "No se pudo abrir", d.error, Modifier.height(240.dp)) }
+            artistErr != null -> item(key = "error") { Empty(R.drawable.ic_person, "No se pudo abrir", artistErr, Modifier.height(240.dp)) }
             songs == null -> item(key = "loading") {
                 Column {
                     Skeleton(rows = TOP_SONGS, modifier = Modifier.padding(top = Space.lg, start = Space.sm, end = Space.sm))
@@ -1950,7 +1955,7 @@ private fun AllListsView(
     onMove: (List<String>) -> Unit,
 ) {
     val c = Oto.colors
-    val memory = MenuMemory.of(LocalContext.current)
+    val memory = MenuMemory.of()
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val savedSort by memory.listsSort.collectAsStateWithLifecycle(initialValue = null)

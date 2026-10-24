@@ -188,11 +188,13 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
         haptics.performHapticFeedback(HapticFeedbackType.Confirm)
         // Solo esa página: atrás cierra la hoja, no vuelve a lo que quedara abierto de antes.
         menu.closeAll()
+        val srcItem = src?.item
+        val srcLocal = src?.local
         when {
-            src?.item != null -> { menu.open(src.item); sheet.open(SheetKind.Menu, origin) }
-            src?.local != null -> {
-                if (src.local == DOWNLOADS_ID) menu.openDownloads()
-                else if (src.local.startsWith(FOLDER_PREFIX)) menu.openFolder(src.local.removePrefix(FOLDER_PREFIX)) else menu.openLocal(src.local)
+            srcItem != null -> { menu.open(srcItem); sheet.open(SheetKind.Menu, origin) }
+            srcLocal != null -> {
+                if (srcLocal == DOWNLOADS_ID) menu.openDownloads()
+                else if (srcLocal.startsWith(FOLDER_PREFIX)) menu.openFolder(srcLocal.removePrefix(FOLDER_PREFIX)) else menu.openLocal(srcLocal)
                 sheet.open(SheetKind.Menu, origin)
             }
             else -> sheet.open(SheetKind.Queue, origin)

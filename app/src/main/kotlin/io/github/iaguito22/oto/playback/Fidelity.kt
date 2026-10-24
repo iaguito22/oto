@@ -18,42 +18,7 @@ import io.github.iaguito22.oto.QualityMode
 import java.io.IOException
 import kotlin.math.min
 
-/**
- * La calidad de una canción. Se decide una vez, al empezar a cargarla, y no cambia hasta que acaba: cada una se
- * guarda en la caché con su propia clave (`id` la alta, `id~l` la baja), así nunca se mezclan trozos de dos formatos.
- */
-enum class Tier(val suffix: String) {
-    High(""), Low("~l");
-
-    fun key(id: String) = id + suffix
-
-    companion object {
-        fun idOf(key: String) = key.substringBefore('~')
-        /** La que pide la clave, si la pide (una canción que se pasó a baja por no arrancar). */
-        fun forcedBy(key: String) = entries.firstOrNull { it.suffix.isNotEmpty() && key.endsWith(it.suffix) }
-    }
-}
-
-/** Lo que manda al elegir: los ajustes y cómo va la red justo ahora. */
-data class Conditions(val mode: QualityMode, val dataSaver: Boolean, val metered: Boolean, val bandwidthBps: Long)
-
-/**
- * Qué calidad pedir para una canción que aún no ha empezado a cargar. Si ya está entera en alta en la caché, esa:
- * no gasta datos ni puede cortarse.
- */
-fun chooseTier(c: Conditions, cachedHigh: Boolean): Tier = when {
-    cachedHigh -> Tier.High
-    c.dataSaver && c.metered -> Tier.Low
-    c.mode == QualityMode.Max -> Tier.High
-    // Auto: alta si la conexión da para bajarla bastante más deprisa de lo que suena; si no, la que no se corta.
-    c.bandwidthBps >= AUTO_HIGH_BPS -> Tier.High
-    else -> Tier.Low
-}
-
-// La alta ronda los 150 kbps y se baja entera a trozos, a la velocidad de la red: con el doble ya llega muy por delante
-// de lo que suena. Antes pedía 500 kbps y en datos móviles bajaba a menudo sin hacer falta; si aun así una no arranca,
-// [PlaybackService] la pasa a baja antes de que empiece (y la precarga deja el principio ya bajado).
-const val AUTO_HIGH_BPS = 300_000L
+// Tier, Conditions, chooseTier y AUTO_HIGH_BPS viven en :core (StreamInfo.kt).
 
 /**
  * Cuánto carga por delante: la que suena entera y la siguiente entera, en cuanto se puede (una canción son 2-6 MB),

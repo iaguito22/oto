@@ -130,7 +130,7 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
-        InnerTubeXPlayer.initialize(this)
+        (application as OtoApp).initInnerTube()
         val sources = DefaultMediaSourceFactory(dataSourceFactory()).setLoadErrorHandlingPolicy(PatientErrorPolicy(::isConnectionLost))
         player = ExoPlayer.Builder(this, renderersFactory())
             .setMediaSourceFactory(sources)

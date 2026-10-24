@@ -1,14 +1,13 @@
 package io.github.iaguito22.oto
 
-import android.content.Context
 import androidx.datastore.core.DataMigration
+import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import com.metrolist.innertube.models.Artist
 import com.metrolist.innertube.models.SongItem
 import kotlinx.coroutines.CoroutineScope
@@ -25,18 +24,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-private val Context.store by preferencesDataStore("oto")
-
-// Las listas, aparte: con lo importado de Spotify pesan megas, y así oír una canción (historial) no las reescribe.
-// Antes vivían en «oto»: la primera vez se mudan.
-private val Context.lists by preferencesDataStore("oto_lists", produceMigrations = { ctx ->
-    listOf(object : DataMigration<Preferences> {
-        override suspend fun shouldMigrate(currentData: Preferences) = currentData[PLAYLISTS] == null && ctx.store.data.first()[PLAYLISTS] != null
-        override suspend fun migrate(currentData: Preferences): Preferences =
-            currentData.toMutablePreferences().apply { ctx.store.data.first()[PLAYLISTS]?.let { this[PLAYLISTS] = it } }
-        override suspend fun cleanUp() { ctx.store.edit { it.remove(PLAYLISTS) } }
-    })
-})
 private val TUTORIAL_DONE = booleanPreferencesKey("tutorial_done")
 private val HISTORY = stringPreferencesKey("history")
 private val PLAYLISTS = stringPreferencesKey("playlists")
@@ -90,136 +77,146 @@ enum class QualityMode { Auto, Max }
 enum class DropStyle { Ring, Liquid }
 
 /** Lo que la app recuerda entre sesiones. */
-class Prefs(private val context: Context) {
+class Prefs(
+    private val store: DataStore<Preferences> = OtoDirs.dataStore("oto"),
+    private val lists: DataStore<Preferences> = OtoDirs.dataStore("oto_lists") { mainStore ->
+        listOf(object : DataMigration<Preferences> {
+            override suspend fun shouldMigrate(currentData: Preferences) = currentData[PLAYLISTS] == null && mainStore.data.first()[PLAYLISTS] != null
+            override suspend fun migrate(currentData: Preferences): Preferences =
+                currentData.toMutablePreferences().apply { mainStore.data.first()[PLAYLISTS]?.let { this[PLAYLISTS] = it } }
+            override suspend fun cleanUp() { mainStore.edit { it.remove(PLAYLISTS) } }
+        })
+    },
+) {
     // Las listas, Me gusta y el historial se decodifican una vez por cambio y se comparten: antes cada pantalla y
     // servicio que los miraba decodificaba por su cuenta los megas de JSON de tus listas (cuatro veces al abrir la app).
     private val shared = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    val tutorialDone: Flow<Boolean> = context.store.data.map { it[TUTORIAL_DONE] ?: false }
+    val tutorialDone: Flow<Boolean> = store.data.map { it[TUTORIAL_DONE] ?: false }
 
     suspend fun setTutorialDone(done: Boolean) {
-        context.store.edit { it[TUTORIAL_DONE] = done }
+        store.edit { it[TUTORIAL_DONE] = done }
     }
 
     /** A la derecha de la barra: lo que falta (-1:23) o lo que dura (3:45). */
-    val showRemaining: Flow<Boolean> = context.store.data.map { it[REMAINING] ?: false }
+    val showRemaining: Flow<Boolean> = store.data.map { it[REMAINING] ?: false }
 
     suspend fun setShowRemaining(on: Boolean) {
-        context.store.edit { it[REMAINING] = on }
+        store.edit { it[REMAINING] = on }
     }
 
     /** Con qué calidad suena: ver [QualityMode]. */
-    val quality: Flow<QualityMode> = context.store.data
+    val quality: Flow<QualityMode> = store.data
         .map { p -> QualityMode.entries.firstOrNull { it.name == p[QUALITY] } ?: QualityMode.Auto }
         .distinctUntilChanged()
 
     suspend fun setQuality(mode: QualityMode) {
-        context.store.edit { it[QUALITY] = mode.name }
+        store.edit { it[QUALITY] = mode.name }
     }
 
     /** Con datos móviles, la calidad baja aunque la conexión dé para más. */
-    val dataSaver: Flow<Boolean> = context.store.data.map { it[DATA_SAVER] ?: false }.distinctUntilChanged()
+    val dataSaver: Flow<Boolean> = store.data.map { it[DATA_SAVER] ?: false }.distinctUntilChanged()
 
     suspend fun setDataSaver(on: Boolean) {
-        context.store.edit { it[DATA_SAVER] = on }
+        store.edit { it[DATA_SAVER] = on }
     }
 
     /** Aleatorio, como el botón de Spotify: vale para todo lo que se ponga hasta quitarlo. */
-    val shuffle: Flow<Boolean> = context.store.data.map { it[SHUFFLE] ?: false }.distinctUntilChanged()
+    val shuffle: Flow<Boolean> = store.data.map { it[SHUFFLE] ?: false }.distinctUntilChanged()
 
     suspend fun setShuffle(on: Boolean) {
-        context.store.edit { it[SHUFFLE] = on }
+        store.edit { it[SHUFFLE] = on }
     }
 
     /** Segundos de fundido entre canciones (0: sin fundido). Ver [io.github.iaguito22.oto.playback.Crossfade]. */
-    val crossfade: Flow<Int> = context.store.data.map { it[CROSSFADE] ?: DEFAULT_CROSSFADE }.distinctUntilChanged()
+    val crossfade: Flow<Int> = store.data.map { it[CROSSFADE] ?: DEFAULT_CROSSFADE }.distinctUntilChanged()
 
     suspend fun setCrossfade(seconds: Int) {
-        context.store.edit { it[CROSSFADE] = seconds }
+        store.edit { it[CROSSFADE] = seconds }
     }
 
     /** Una lista que acaba vuelve a empezar; si no, siguen canciones parecidas (como la reproducción automática). */
-    val loop: Flow<Boolean> = context.store.data.map { it[LOOP] ?: false }.distinctUntilChanged()
+    val loop: Flow<Boolean> = store.data.map { it[LOOP] ?: false }.distinctUntilChanged()
 
     suspend fun setLoop(on: Boolean) {
-        context.store.edit { it[LOOP] = on }
+        store.edit { it[LOOP] = on }
     }
 
     /** La letra en otra escritura (japonés, coreano…) lleva debajo cómo se lee. */
-    val romanize: Flow<Boolean> = context.store.data.map { it[ROMANIZE] ?: true }.distinctUntilChanged()
+    val romanize: Flow<Boolean> = store.data.map { it[ROMANIZE] ?: true }.distinctUntilChanged()
 
     suspend fun setRomanize(on: Boolean) {
-        context.store.edit { it[ROMANIZE] = on }
+        store.edit { it[ROMANIZE] = on }
     }
 
     /** Ver [DropStyle]. Lo que viene puesto es el aro: con él la pantalla queda más limpia. */
-    val dropStyle: Flow<DropStyle> = context.store.data
+    val dropStyle: Flow<DropStyle> = store.data
         .map { p -> DropStyle.entries.firstOrNull { it.name == p[DROP_STYLE] } ?: DropStyle.Ring }
         .distinctUntilChanged()
 
     suspend fun setDropStyle(style: DropStyle) {
-        context.store.edit { it[DROP_STYLE] = style.name }
+        store.edit { it[DROP_STYLE] = style.name }
     }
 
     /** La carátula late un poco con los graves, como la gota. */
-    val coverBeat: Flow<Boolean> = context.store.data.map { it[COVER_BEAT] ?: true }.distinctUntilChanged()
+    val coverBeat: Flow<Boolean> = store.data.map { it[COVER_BEAT] ?: true }.distinctUntilChanged()
 
     suspend fun setCoverBeat(on: Boolean) {
-        context.store.edit { it[COVER_BEAT] = on }
+        store.edit { it[COVER_BEAT] = on }
     }
 
     // ---- Descargas (ver Downloads): lo que pediste tener sin conexión ----
 
     /** Las listas descargadas (también [LIKED_ID]): lo que entre en ellas se descarga también. */
-    val downloadLists: Flow<Set<String>> = context.store.data.map { it[DOWNLOAD_LISTS].orEmpty() }.distinctUntilChanged()
+    val downloadLists: Flow<Set<String>> = store.data.map { it[DOWNLOAD_LISTS].orEmpty() }.distinctUntilChanged()
 
     suspend fun setDownloadList(id: String, on: Boolean) {
-        context.store.edit { p -> p[DOWNLOAD_LISTS] = p[DOWNLOAD_LISTS].orEmpty().let { if (on) it + id else it - id } }
+        store.edit { p -> p[DOWNLOAD_LISTS] = p[DOWNLOAD_LISTS].orEmpty().let { if (on) it + id else it - id } }
     }
 
     /** Las canciones descargadas una a una, la última primero. */
-    val downloadSongs: Flow<List<Heard>> = context.store.data.map { it[DOWNLOAD_SONGS] }.distinctUntilChanged().map(::decode)
+    val downloadSongs: Flow<List<Heard>> = store.data.map { it[DOWNLOAD_SONGS] }.distinctUntilChanged().map(::decode)
 
     suspend fun setDownloadSong(h: Heard, on: Boolean) {
-        context.store.edit { p ->
+        store.edit { p ->
             val rest = decode(p[DOWNLOAD_SONGS]).filter { it.id != h.id }
             p[DOWNLOAD_SONGS] = encode(if (on) listOf(h) + rest else rest)
         }
     }
 
     suspend fun clearDownloads() {
-        context.store.edit { it.remove(DOWNLOAD_LISTS); it.remove(DOWNLOAD_SONGS) }
+        store.edit { it.remove(DOWNLOAD_LISTS); it.remove(DOWNLOAD_SONGS) }
     }
 
     /**
      * Las listas que se ven al revés de lo normal. Lo normal: Me gusta, lo último que te gustó arriba; las demás, en el
      * orden en que entraron (como en Spotify).
      */
-    val sortFlipped: Flow<Set<String>> = context.store.data.map { it[SORT_FLIPPED].orEmpty() }.distinctUntilChanged()
+    val sortFlipped: Flow<Set<String>> = store.data.map { it[SORT_FLIPPED].orEmpty() }.distinctUntilChanged()
 
     suspend fun flipSort(id: String) {
-        context.store.edit { p -> p[SORT_FLIPPED] = p[SORT_FLIPPED].orEmpty().let { if (id in it) it - id else it + id } }
+        store.edit { p -> p[SORT_FLIPPED] = p[SORT_FLIPPED].orEmpty().let { if (id in it) it - id else it + id } }
     }
 
-    val pinned: Flow<Set<String>> = context.store.data.map { it[PINNED].orEmpty() }.distinctUntilChanged()
+    val pinned: Flow<Set<String>> = store.data.map { it[PINNED].orEmpty() }.distinctUntilChanged()
 
     suspend fun togglePin(key: String) {
-        context.store.edit { p -> p[PINNED] = p[PINNED].orEmpty().let { if (key in it) it - key else it + key } }
+        store.edit { p -> p[PINNED] = p[PINNED].orEmpty().let { if (key in it) it - key else it + key } }
     }
 
     private suspend fun renamePin(old: String, new: String?) {
-        context.store.edit { p ->
+        store.edit { p ->
             val set = p[PINNED].orEmpty()
             if (old in set) p[PINNED] = set - old + listOfNotNull(new)
         }
     }
 
-    val history: Flow<List<Heard>> = context.store.data.map { it[HISTORY] }.distinctUntilChanged().map(::decode)
+    val history: Flow<List<Heard>> = store.data.map { it[HISTORY] }.distinctUntilChanged().map(::decode)
         .flowOn(Dispatchers.Default).shareIn(shared, SharingStarted.Eagerly, 1)
 
     /** La más reciente primero, sin repetidas, hasta [HISTORY_SIZE]. */
     suspend fun addHeard(h: Heard) {
-        context.store.edit { p ->
+        store.edit { p ->
             val list = listOf(h) + decode(p[HISTORY]).filter { it.id != h.id }
             p[HISTORY] = encode(list.take(HISTORY_SIZE))
         }
@@ -228,7 +225,7 @@ class Prefs(private val context: Context) {
     // ---- Me gusta ----
 
     /** La última que te gustó, la primera. */
-    val liked: Flow<List<Heard>> = context.store.data.map { it[LIKED] }.distinctUntilChanged().map(::decode)
+    val liked: Flow<List<Heard>> = store.data.map { it[LIKED] }.distinctUntilChanged().map(::decode)
         .flowOn(Dispatchers.Default).shareIn(shared, SharingStarted.Eagerly, 1)
 
     val likedIds: Flow<Set<String>> = liked.map { l -> l.mapTo(HashSet()) { it.id } }
@@ -239,7 +236,7 @@ class Prefs(private val context: Context) {
 
     /** Entra la primera o sale. */
     suspend fun setLiked(h: Heard, on: Boolean) {
-        context.store.edit { p ->
+        store.edit { p ->
             val rest = decode(p[LIKED]).filter { it.id != h.id }
             p[LIKED] = encode(if (on) listOf(h) + rest else rest)
         }
@@ -247,7 +244,7 @@ class Prefs(private val context: Context) {
 
     /** Varias a la vez (un álbum): entran las que falten, delante y en su orden; o salen todas. */
     suspend fun setLikedAll(songs: List<Heard>, on: Boolean) {
-        context.store.edit { p ->
+        store.edit { p ->
             val ids = songs.mapTo(HashSet()) { it.id }
             val rest = decode(p[LIKED]).filter { it.id !in ids }
             p[LIKED] = encode(if (on) songs.distinctBy { it.id } + rest else rest)
@@ -256,7 +253,7 @@ class Prefs(private val context: Context) {
 
     /** Las que aún no estaban, detrás de las que ya te gustaban (lo importado es más antiguo). */
     suspend fun addLikedAll(songs: List<Heard>) {
-        context.store.edit { p ->
+        store.edit { p ->
             val list = decode(p[LIKED])
             val have = list.mapTo(HashSet()) { it.id }
             p[LIKED] = encode(list + songs.filter { have.add(it.id) })
@@ -266,7 +263,7 @@ class Prefs(private val context: Context) {
     /** Devuelve si ahora te gusta. */
     suspend fun toggleLike(h: Heard): Boolean {
         var now = false
-        context.store.edit { p ->
+        store.edit { p ->
             val list = decode(p[LIKED])
             now = list.none { it.id == h.id }
             p[LIKED] = encode(if (now) listOf(h) + list else list.filter { it.id != h.id })
@@ -275,24 +272,24 @@ class Prefs(private val context: Context) {
     }
 
     /** Los me gusta que ya sabe YouTube Music (con cuenta, ver Account). */
-    suspend fun likesSent(): Set<String> = context.store.data.first()[LIKES_SENT].orEmpty()
+    suspend fun likesSent(): Set<String> = store.data.first()[LIKES_SENT].orEmpty()
 
     suspend fun markLikeSent(id: String, on: Boolean) {
-        context.store.edit { p -> p[LIKES_SENT] = p[LIKES_SENT].orEmpty().let { if (on) it + id else it - id } }
+        store.edit { p -> p[LIKES_SENT] = p[LIKES_SENT].orEmpty().let { if (on) it + id else it - id } }
     }
 
     suspend fun markLikesSent(ids: Collection<String>) {
-        context.store.edit { p -> p[LIKES_SENT] = p[LIKES_SENT].orEmpty() + ids }
+        store.edit { p -> p[LIKES_SENT] = p[LIKES_SENT].orEmpty() + ids }
     }
 
     suspend fun clearLikesSent() {
-        context.store.edit { it.remove(LIKES_SENT) }
+        store.edit { it.remove(LIKES_SENT) }
     }
 
     // ---- Listas ----
 
     // Decodificar varios megas de JSON no puede ir en el hilo de la interfaz.
-    val playlists: Flow<List<LocalPlaylist>> = context.lists.data.map { it[PLAYLISTS] }.distinctUntilChanged().map(::decodeLists)
+    val playlists: Flow<List<LocalPlaylist>> = lists.data.map { it[PLAYLISTS] }.distinctUntilChanged().map(::decodeLists)
         .flowOn(Dispatchers.Default).shareIn(shared, SharingStarted.Eagerly, 1)
 
     /** Los ids de todo lo que está en alguna de tus listas: para saber al momento si una canción está guardada. */
@@ -335,24 +332,24 @@ class Prefs(private val context: Context) {
     // ---- Carpetas: una carpeta es un nombre que comparten varias listas ----
 
     /** Las carpetas creadas con «Nueva → Carpeta»: así existen aunque aún no tengan listas. */
-    val folders: Flow<Set<String>> = context.store.data.map { it[FOLDERS].orEmpty() }.distinctUntilChanged()
+    val folders: Flow<Set<String>> = store.data.map { it[FOLDERS].orEmpty() }.distinctUntilChanged()
 
     /** Dónde van el DJ y Me gusta en la fila de arriba de Tus listas (por su clave); si no se han movido, delante. */
-    val spots: Flow<Map<String, Int>> = context.store.data.map { p ->
+    val spots: Flow<Map<String, Int>> = store.data.map { p ->
         p[SPOTS]?.split(',')?.mapNotNull { e -> e.split(':').takeIf { it.size == 2 }?.let { (k, v) -> v.toIntOrNull()?.let { k to it } } }?.toMap()
             ?: mapOf("dj" to 0, LIKED_ID to 1)
     }.distinctUntilChanged()
 
     suspend fun setSpots(spots: Map<String, Int>) {
-        context.store.edit { it[SPOTS] = spots.entries.joinToString(",") { (k, v) -> "$k:$v" } }
+        store.edit { it[SPOTS] = spots.entries.joinToString(",") { (k, v) -> "$k:$v" } }
     }
 
     suspend fun createFolder(name: String) {
-        context.store.edit { p -> p[FOLDERS] = p[FOLDERS].orEmpty() + name.trim() }
+        store.edit { p -> p[FOLDERS] = p[FOLDERS].orEmpty() + name.trim() }
     }
 
     private suspend fun forgetFolder(old: String, new: String?) {
-        context.store.edit { p -> p[FOLDERS] = p[FOLDERS].orEmpty() - old + listOfNotNull(new) }
+        store.edit { p -> p[FOLDERS] = p[FOLDERS].orEmpty() - old + listOfNotNull(new) }
     }
 
     /** A la carpeta [folder] (null: fuera de cualquiera). Entra la primera de las suyas. */
@@ -410,10 +407,10 @@ class Prefs(private val context: Context) {
     // ---- Copia en la cuenta (ver Cloud) ----
 
     /** Lo que ya está subido: junto a las listas, porque pesa lo mismo que ellas. */
-    suspend fun cloud(): String? = context.lists.data.first()[CLOUD]
+    suspend fun cloud(): String? = lists.data.first()[CLOUD]
 
     suspend fun setCloud(s: String?) {
-        context.lists.edit { p -> if (s == null) p.remove(CLOUD) else p[CLOUD] = s }
+        lists.edit { p -> if (s == null) p.remove(CLOUD) else p[CLOUD] = s }
     }
 
     /** Las que falten (por id) entran detrás, en el orden dado; y se suman las carpetas, fijadas y órdenes. */
@@ -422,7 +419,7 @@ class Prefs(private val context: Context) {
             val have = l.mapTo(HashSet()) { it.id }
             l + lists.filter { have.add(it.id) }
         }
-        context.store.edit { p ->
+        store.edit { p ->
             p[FOLDERS] = p[FOLDERS].orEmpty() + folders
             p[PINNED] = p[PINNED].orEmpty() + pinned
             p[SORT_FLIPPED] = p[SORT_FLIPPED].orEmpty() + flipped
@@ -430,7 +427,7 @@ class Prefs(private val context: Context) {
     }
 
     private suspend fun editLists(f: (List<LocalPlaylist>) -> List<LocalPlaylist>) {
-        context.lists.edit { p -> p[PLAYLISTS] = encodeLists(f(decodeLists(p[PLAYLISTS]))) }
+        lists.edit { p -> p[PLAYLISTS] = encodeLists(f(decodeLists(p[PLAYLISTS]))) }
     }
 
     // Las canciones de cada lista van dentro del mismo JSON, sin pasar a texto y volver a leerlo (eso duplicaba el

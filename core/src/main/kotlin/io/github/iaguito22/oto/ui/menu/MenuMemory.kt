@@ -1,21 +1,21 @@
 package io.github.iaguito22.oto.ui.menu
 
-import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import com.metrolist.innertube.models.AlbumItem
 import com.metrolist.innertube.models.Artist
 import com.metrolist.innertube.models.ArtistItem
 import com.metrolist.innertube.models.PlaylistItem
 import com.metrolist.innertube.models.YTItem
+import io.github.iaguito22.oto.OtoDirs
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 import org.json.JSONObject
 
-private val Context.menuStore by preferencesDataStore("oto_menu")
 private val RECENTS = stringPreferencesKey("recents")
 private val PLAYED = stringPreferencesKey("lists_played")
 private val LISTS_SORT = stringPreferencesKey("lists_sort")
@@ -24,42 +24,42 @@ private val LISTS_SORT = stringPreferencesKey("lists_sort")
  * Lo que recuerda el Menú y nada más necesita: lo buscado hace poco y cuándo sonó por última vez cada lista o carpeta.
  * En su propio DataStore: no se mezcla con Prefs ni con las listas.
  */
-class MenuMemory private constructor(private val context: Context) {
+class MenuMemory private constructor(private val menuStore: DataStore<Preferences> = OtoDirs.dataStore("oto_menu")) {
 
     /** Lo último buscado o abierto desde la búsqueda, lo más reciente primero. */
-    val recents: Flow<List<Recent>> = context.menuStore.data.map { decodeRecents(it[RECENTS]) }.distinctUntilChanged()
+    val recents: Flow<List<Recent>> = menuStore.data.map { decodeRecents(it[RECENTS]) }.distinctUntilChanged()
 
     /** Lo buscado entra arriba; si ya estaba (el mismo texto o lo mismo abierto), sube. */
     suspend fun remember(r: Recent) {
-        context.menuStore.edit { p ->
+        menuStore.edit { p ->
             val rest = decodeRecents(p[RECENTS]).filter { it.key != r.key }
             p[RECENTS] = encodeRecents((listOf(r) + rest).take(RECENTS_SIZE))
         }
     }
 
     suspend fun forget(r: Recent) {
-        context.menuStore.edit { p -> p[RECENTS] = encodeRecents(decodeRecents(p[RECENTS]).filter { it.key != r.key }) }
+        menuStore.edit { p -> p[RECENTS] = encodeRecents(decodeRecents(p[RECENTS]).filter { it.key != r.key }) }
     }
 
     /** Cuándo sonó cada lista ([LocalPlaylist.id]) o carpeta («d:» + nombre, como al fijarla), en ms. */
-    val played: Flow<Map<String, Long>> = context.menuStore.data.map { p ->
+    val played: Flow<Map<String, Long>> = menuStore.data.map { p ->
         p[PLAYED]?.let { s -> runCatching { JSONObject(s).let { o -> o.keys().asSequence().associateWith { o.getLong(it) } } }.getOrNull() }.orEmpty()
     }.distinctUntilChanged()
 
     suspend fun markPlayed(key: String, at: Long) {
-        context.menuStore.edit { p ->
+        menuStore.edit { p ->
             val o = p[PLAYED]?.let { runCatching { JSONObject(it) }.getOrNull() } ?: JSONObject()
             p[PLAYED] = o.put(key, at).toString()
         }
     }
 
     /** Cómo se ordena «Todas tus listas». */
-    val listsSort: Flow<ListsSort> = context.menuStore.data.map { p ->
+    val listsSort: Flow<ListsSort> = menuStore.data.map { p ->
         ListsSort.entries.firstOrNull { it.name == p[LISTS_SORT] } ?: ListsSort.Recent
     }.distinctUntilChanged()
 
     suspend fun setListsSort(sort: ListsSort) {
-        context.menuStore.edit { it[LISTS_SORT] = sort.name }
+        menuStore.edit { it[LISTS_SORT] = sort.name }
     }
 
     private fun encodeRecents(list: List<Recent>) = JSONArray().apply {
@@ -80,8 +80,8 @@ class MenuMemory private constructor(private val context: Context) {
 
         @Volatile private var instance: MenuMemory? = null
 
-        fun of(context: Context): MenuMemory = instance ?: synchronized(this) {
-            instance ?: MenuMemory(context.applicationContext).also { instance = it }
+        fun of(@Suppress("UNUSED_PARAMETER") context: Any? = null): MenuMemory = instance ?: synchronized(this) {
+            instance ?: MenuMemory().also { instance = it }
         }
     }
 }

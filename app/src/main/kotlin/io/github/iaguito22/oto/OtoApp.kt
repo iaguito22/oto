@@ -33,14 +33,25 @@ import java.util.Locale
 class OtoApp : Application(), SingletonImageLoader.Factory {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val player by lazy { PlayerConnection(this, prefs, plays, scope) }
-    val prefs by lazy { Prefs(this) }
+    val prefs by lazy { OtoDirs.init(filesDir, cacheDir); Prefs() }
     val importer by lazy { Importer(prefs, scope) }
-    val account by lazy { Account(this, prefs, scope) }
+    val account by lazy { OtoDirs.init(filesDir, cacheDir); Account(prefs, scope) }
     val cloud by lazy { Cloud(prefs, account, scope) }
     /** Lo que vas escuchando, para el DJ (lo escribe el servicio). */
     val plays by lazy { Plays(File(filesDir, "plays.jsonl")) }
     val djCatalog by lazy { YouTubeCatalog(File(cacheDir, "dj")) }
     val lyrics by lazy { LyricsStore(File(cacheDir, "lyrics")) }
+    private val poToken by lazy {
+        val gen = io.github.iaguito22.oto.playback.potoken.PoTokenGenerator(this)
+        InnerTubeXPlayer.PoTokenCallback { videoId, sessionId ->
+            gen.getWebClientPoToken(videoId, sessionId)?.let { it.streamingDataPoToken to it.playerRequestPoToken }
+        }
+    }
+
+    fun initInnerTube() {
+        OtoDirs.init(filesDir, cacheDir)
+        InnerTubeXPlayer.initialize(poToken)
+    }
 
     // Una SimpleCache por carpeta y proceso: vive aquí y no en el servicio, que puede recrearse.
     @get:OptIn(UnstableApi::class)
@@ -54,8 +65,11 @@ class OtoApp : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        OtoDirs.init(filesDir, cacheDir)
+        TraceHooks.begin = { android.os.Trace.beginSection(it) }
+        TraceHooks.end = { android.os.Trace.endSection() }
         if (BuildConfig.DEBUG) Timber.plant(Timber.DebugTree())
-        InnerTubeXPlayer.initialize(this)
+        initInnerTube()
 
         val system = Locale.getDefault()
         YouTube.locale = YouTubeLocale(gl = system.country.ifBlank { "ES" }, hl = system.language.ifBlank { "es" })

@@ -61,7 +61,7 @@ class Downloads(private val app: OtoApp) {
 
     /** Debe crearse en el hilo principal: es el que usan sus avisos. */
     val manager: DownloadManager by lazy {
-        InnerTubeXPlayer.initialize(app)
+        app.initInnerTube()
         val network = OkHttpDataSource.Factory(AUDIO_HTTP)
         val upstream = ResolvingDataSource.Factory({ ChunkedDataSource(network.createDataSource()) }, ::resolve)
         DownloadManager(app, app.database, cache, upstream, Executors.newFixedThreadPool(PARALLEL)).apply {

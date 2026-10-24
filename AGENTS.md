@@ -56,7 +56,7 @@ El usuario habla español: textos de la app, commits y respuestas en español.
 
 ## Estructura
 
-Módulos Gradle: `:app` y `:innertube` (copiado de Metrolist b1dd1d0, con el paquete `com.metrolist.innertube` sin cambiar; InnerTubeX v0.10.0).
+Módulos Gradle: `:app`, `:core` (lógica compartida), `:desktopApp` (Linux/Windows) y `:innertube`. Ver `PLAN_IMPLEMENTACION.md` para el escritorio. Antes: `:app` y `:innertube` (copiado de Metrolist b1dd1d0, con el paquete `com.metrolist.innertube` sin cambiar; InnerTubeX v0.10.0).
 Paquete de la app: `io.github.iaguito22.oto`, en `app/src/main/kotlin/...`.
 
 | Carpeta | Contenido |

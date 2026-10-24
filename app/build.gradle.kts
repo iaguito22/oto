@@ -93,6 +93,7 @@ kotlin {
 
 dependencies {
     implementation(project(":innertube"))
+    implementation(project(":core"))
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
@@ -114,7 +115,6 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.palette)
     implementation(libs.datastore)
-    implementation(libs.timber)
     testImplementation(libs.junit)
     // El org.json de android.jar en las pruebas de JVM es un esqueleto vacío.
     testImplementation("com.vaadin.external.google:android-json:0.0.20131108.vaadin1")

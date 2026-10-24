@@ -1,11 +1,11 @@
 package io.github.iaguito22.oto.account
 
-import android.content.Context
-import android.webkit.CookieManager
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import com.metrolist.innertube.YouTube
+import io.github.iaguito22.oto.OtoDirs
 import io.github.iaguito22.oto.Prefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,8 +32,6 @@ data class Session(
     val photo: String? = null,
 )
 
-// Aparte de las preferencias: es una credencial y no tiene por qué viajar con nada más.
-private val Context.accountStore by preferencesDataStore("oto_account")
 private val SESSION = stringPreferencesKey("session")
 
 /**
@@ -41,14 +39,19 @@ private val SESSION = stringPreferencesKey("session")
  * que oyes cuenta en tu historial de YouTube y lo que te gusta en Oto también le gusta a YouTube Music. Sin ella, Oto
  * funciona igual, pero como un visitante.
  */
-class Account(private val context: Context, private val prefs: Prefs, private val scope: CoroutineScope) {
+class Account(
+    private val prefs: Prefs,
+    private val scope: CoroutineScope,
+    private val accountStore: DataStore<Preferences> = OtoDirs.dataStore("oto_account"),
+    private val onClearWebCookies: (suspend () -> Unit)? = null,
+) {
     private val _session = MutableStateFlow<Session?>(null)
     val session: StateFlow<Session?> = _session.asStateFlow()
     private var likes: Job? = null
 
     /** Al arrancar, antes de la primera petición: si no, la portada saldría anónima. */
     fun restore(): Session? {
-        val s = runCatching { runBlocking { context.accountStore.data.first()[SESSION]?.let(::decode) } }.getOrNull()
+        val s = runCatching { runBlocking { accountStore.data.first()[SESSION]?.let(::decode) } }.getOrNull()
         apply(s)
         return s
     }
@@ -58,17 +61,14 @@ class Account(private val context: Context, private val prefs: Prefs, private va
         // Con la sesión puesta, YouTube dice quién eres.
         val info = withContext(Dispatchers.IO) { YouTube.accountInfo() }.getOrNull()
         val full = s.copy(name = info?.name.orEmpty(), email = info?.email, photo = info?.thumbnailUrl)
-        context.accountStore.edit { it[SESSION] = encode(full) }
+        accountStore.edit { it[SESSION] = encode(full) }
         _session.value = full
     }
 
     suspend fun signOut() {
-        context.accountStore.edit { it.remove(SESSION) }
+        accountStore.edit { it.remove(SESSION) }
         prefs.clearLikesSent()
-        withContext(Dispatchers.Main) {
-            CookieManager.getInstance().removeAllCookies(null)
-            CookieManager.getInstance().flush()
-        }
+        onClearWebCookies?.invoke()
         apply(null)
         // Sin cuenta, otra vez un visitante con su visitorData.
         withContext(Dispatchers.IO) { YouTube.visitorData() }.onSuccess { YouTube.visitorData = it }
