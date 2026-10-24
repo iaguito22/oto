@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Oto - inicio de sesion",
+  "version": "1.0",
+  "description": "Pasa tu sesion de YouTube Music a la app Oto de escritorio, solo a 127.0.0.1.",
+  "permissions": ["cookies", "storage"],
+  "host_permissions": ["https://*.youtube.com/*", "https://*.google.com/*", "http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js", "scripts": ["background.js"] },
+  "content_scripts": [
+    { "matches": ["https://music.youtube.com/*"], "js": ["content.js"], "run_at": "document_start" }
+  ],
+  "web_accessible_resources": [
+    { "resources": ["page.js"], "matches": ["https://music.youtube.com/*"] }
+  ],
+  "browser_specific_settings": { "gecko": { "id": "oto-login@iaguito22.github.io" } }
+}

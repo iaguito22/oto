@@ -70,6 +70,7 @@ fun main() {
     val account = Account(prefs, appScope)
     val cloud = Cloud(prefs, account, appScope)
     val importer = Importer(prefs, appScope)
+    val login = BrowserLogin(account, appScope)
     val plays = Plays(File(OtoDirs.filesDir, "plays.jsonl"))
     val djCatalog = YouTubeCatalog(File(OtoDirs.cacheDir, "dj"))
     val lyricsStore = LyricsStore(File(OtoDirs.cacheDir, "lyrics"))
@@ -205,6 +206,7 @@ fun main() {
                     importer = importer,
                     account = account,
                     cloud = cloud,
+                    login = login,
                     palette = palette,
                     currentMediaId = nowPlaying.id,
                     queue = queue,

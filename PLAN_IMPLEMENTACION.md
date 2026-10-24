@@ -68,10 +68,16 @@ export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
 - `Main.kt` solo abre con rueda hacia abajo; falta cerrar con rueda hacia arriba cuando la lista del menú está arriba del todo.
 - Fin: abrir/cerrar con rueda, `Ctrl+K` y `Escape`, sin parpadeos al encadenar eventos.
 
-### T4. Sesión de YouTube Music en escritorio
-- `Account.signIn(Session)` necesita `cookie`, `visitorData`, `dataSyncId`, `authUser`. Android los saca de un WebView.
-- Opciones: ventana con login embebido (JCEF/WebView externo) o importar una sesión exportada. Decidir con el usuario.
-- Fin: `Cloud` sincroniza listas y Me gusta con el móvil.
+### T4. Sesión de YouTube Music en escritorio (implementada, sin probar)
+- Código: `desktopApp/.../BrowserLogin.kt` (servidor en 127.0.0.1, token de un solo uso, 5 min) y la extensión
+  `desktopApp/src/main/resources/oto-login-extension/` (MV3: Chrome/Chromium/Brave/Edge y Firefox).
+- Flujo: "Iniciar sesión" abre `https://music.youtube.com/?oto_login=PUERTO.TOKEN`; la extensión espera a que haya sesión,
+  lee las cookies (incluidas las HttpOnly, que una página no puede ver) y `yt.config_`, y hace POST a `/session`.
+  `Account.signIn(Session)` hace el resto y `Cloud` sincroniza.
+- Fin: instalar la extensión una vez ("Instalar extensión" extrae la carpeta; cargarla sin empaquetar en
+  `chrome://extensions` o `about:debugging`), pulsar "Iniciar sesión", ver el nombre de la cuenta y que las listas
+  del móvil aparecen.
+- Trampa: la extensión sin firmar en Firefox solo dura hasta cerrarlo; para uso diario, firmarla o usar Chromium.
 
 ### T5. Cola, aleatorio y bucle en la UI de escritorio
 - `QueuePane` solo salta a una canción: añadir mover/quitar con `move`/`remove` y botones de `setShuffle`/`setLoop`.

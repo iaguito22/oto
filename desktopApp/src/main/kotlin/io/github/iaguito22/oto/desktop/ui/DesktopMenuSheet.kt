@@ -83,6 +83,8 @@ import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.QualityMode
 import io.github.iaguito22.oto.account.Account
+import io.github.iaguito22.oto.desktop.BrowserLogin
+import io.github.iaguito22.oto.desktop.LoginState
 import io.github.iaguito22.oto.account.Cloud
 import io.github.iaguito22.oto.account.CloudState
 import io.github.iaguito22.oto.account.Session
@@ -114,6 +116,7 @@ fun DesktopMenuSheet(
     importer: Importer,
     account: Account,
     cloud: Cloud,
+    login: BrowserLogin,
     palette: ArtworkPalette,
     currentMediaId: String?,
     queue: List<QueueEntry>,
@@ -386,6 +389,7 @@ fun DesktopMenuSheet(
                                     importer = importer,
                                     account = account,
                                     cloud = cloud,
+                                    login = login,
                                     session = session,
                                     cloudState = cloudState,
                                     importState = importState,
@@ -781,6 +785,7 @@ private fun SettingsAndAccountPane(
     importer: Importer,
     account: Account,
     cloud: Cloud,
+    login: BrowserLogin,
     session: Session?,
     cloudState: CloudState,
     importState: ImportState,
@@ -822,11 +827,21 @@ private fun SettingsAndAccountPane(
                         scope.launch { account.signOut(); cloud.forget() }
                     }
                 } else {
+                    val loginState by login.state.collectAsState()
                     Text(
-                        "Sin sesión. Las listas y «Me gusta» se sincronizan por tu cuenta de YouTube Music una vez iniciada.",
+                        "Se abre music.youtube.com en tu navegador y la sesión llega sola a Oto (solo a 127.0.0.1).",
                         fontSize = 12.sp,
                         color = Color.White.copy(alpha = 0.65f),
                     )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        MenuTabPill("Iniciar sesión", true, palette.primary) { login.start() }
+                        MenuTabPill("Instalar extensión (una vez)", false, palette.secondary) { login.extractExtension() }
+                    }
+                    when (val ls = loginState) {
+                        LoginState.Waiting -> Text("Esperando al navegador… inicia sesión en la pestaña que se ha abierto.", fontSize = 12.sp, color = palette.primary)
+                        is LoginState.Failed -> Text(ls.why, fontSize = 12.sp, color = palette.secondary)
+                        LoginState.Done, LoginState.Idle -> Unit
+                    }
                 }
             }
         }
