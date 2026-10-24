@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -103,6 +104,7 @@ fun main() {
         )
 
         var menuOpen by remember { mutableStateOf(false) }
+        var headerStyle by remember { mutableIntStateOf(0) } // 0 = Lateral Pill, 1 = Lateral Circle, 2 = Under Vinyl
         var lastWheelToggleMs by remember { mutableLongStateOf(0L) }
 
         Window(
@@ -118,6 +120,18 @@ fun main() {
                         }
                         ev.isCtrlPressed && ev.key == Key.K -> {
                             menuOpen = !menuOpen
+                            true
+                        }
+                        ev.key == Key.F1 -> {
+                            headerStyle = 0
+                            true
+                        }
+                        ev.key == Key.F2 -> {
+                            headerStyle = 1
+                            true
+                        }
+                        ev.key == Key.F3 -> {
+                            headerStyle = 2
                             true
                         }
                         ev.key == Key.Spacebar && !menuOpen -> {
@@ -179,6 +193,7 @@ fun main() {
                     liked = isLiked,
                     lyrics = lyrics,
                     lyricsLoading = lyricsLoading,
+                    headerStyle = headerStyle,
                     onTogglePlay = player::toggle,
                     onPrev = player::previous,
                     onNext = player::next,

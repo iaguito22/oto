@@ -128,6 +128,7 @@ fun DesktopStage(
     liked: Boolean,
     lyrics: Lyrics?,
     lyricsLoading: Boolean,
+    headerStyle: Int = 0,
     onTogglePlay: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
@@ -244,6 +245,7 @@ fun DesktopStage(
                             palette = animPal,
                             liked = liked,
                             skipDir = skipDir,
+                            headerStyle = headerStyle,
                             onTogglePlay = onTogglePlay,
                             onPrev = { skipDir = -1; onPrev() },
                             onNext = { skipDir = 1; onNext() },
@@ -263,20 +265,25 @@ fun DesktopStage(
                             onOpenSource = onOpenSource,
                         )
 
-                        Spacer(Modifier.height(10.dp))
+                        if (headerStyle != 2) {
+                            Spacer(Modifier.height(10.dp))
 
-                        // Cabecera: Título arriba, Artista y botón Guardar en la misma fila
-                        TrackHeader(
-                            title = nowPlaying.title.ifBlank { "Elige algo para empezar" },
-                            artist = nowPlaying.artist.ifBlank { "Oto · YouTube Music" },
-                            mediaId = nowPlaying.id,
-                            accent = animPal.primary,
-                            liked = liked,
-                            onToggleLike = onToggleLike,
-                            skipDir = skipDir,
-                        )
+                            // Cabecera: Título arriba, Artista y botón Guardar
+                            TrackHeader(
+                                title = nowPlaying.title.ifBlank { "Elige algo para empezar" },
+                                artist = nowPlaying.artist.ifBlank { "Oto · YouTube Music" },
+                                mediaId = nowPlaying.id,
+                                accent = animPal.primary,
+                                liked = liked,
+                                onToggleLike = onToggleLike,
+                                skipDir = skipDir,
+                                style = headerStyle,
+                            )
 
-                        Spacer(Modifier.height(14.dp))
+                            Spacer(Modifier.height(14.dp))
+                        } else {
+                            Spacer(Modifier.height(20.dp))
+                        }
 
                         // Columna de letra con difuminado suave arriba y abajo
                         Box(
@@ -355,33 +362,63 @@ private fun TrackHeader(
     liked: Boolean,
     onToggleLike: () -> Unit,
     skipDir: Int,
+    style: Int = 0,
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        AnimatedContent(
-            targetState = Pair(mediaId, title),
-            transitionSpec = {
-                (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
-                    (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
-            },
-            label = "trackTitle",
-        ) { (_, curTitle) ->
-            Text(
-                text = curTitle,
-                fontSize = 36.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = Color(0xFFF7F4FF),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+    if (style == 1) {
+        // Opción B: Lateral Editorial (Fila con Título + Botón circular flotante a su derecha, Artista debajo)
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                AnimatedContent(
+                    targetState = Pair(mediaId, title),
+                    transitionSpec = {
+                        (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
+                            (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
+                    },
+                    label = "trackTitle",
+                ) { (_, curTitle) ->
+                    Text(
+                        text = curTitle,
+                        fontSize = 34.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFFF7F4FF),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                // Botón circular limpio tipo icono editorial al lado del título
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(if (liked) accent.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
+                        .border(
+                            1.dp,
+                            if (liked) accent.copy(alpha = 0.60f) else Color.White.copy(alpha = 0.16f),
+                            CircleShape,
+                        )
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onToggleLike,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                        contentDescription = if (liked) "En Me gusta" else "Guardar en Me gusta",
+                        tint = if (liked) accent else Color.White.copy(alpha = 0.88f),
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            }
+
             AnimatedContent(
                 targetState = Pair(mediaId, artist),
                 transitionSpec = {
@@ -399,44 +436,91 @@ private fun TrackHeader(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-
-            Text(
-                text = "·",
-                fontSize = 16.sp,
-                color = Color.White.copy(alpha = 0.40f),
-            )
-
-            // Botón Guardar / Me gusta interactivo tipo píldora
-            Row(
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .background(if (liked) accent.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
-                    .border(
-                        1.dp,
-                        if (liked) accent.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.16f),
-                        CircleShape,
-                    )
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onToggleLike,
-                    )
-                    .padding(horizontal = 12.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Icon(
-                    imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                    contentDescription = if (liked) "En Me gusta" else "Guardar en Me gusta",
-                    tint = if (liked) accent else Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.size(15.dp),
-                )
+        }
+    } else {
+        // Opción A: Lateral Compacta (Título arriba, fila con Artista + separador + píldora [♡ Guardar] / [♥ Guardada])
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            AnimatedContent(
+                targetState = Pair(mediaId, title),
+                transitionSpec = {
+                    (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
+                        (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
+                },
+                label = "trackTitle",
+            ) { (_, curTitle) ->
                 Text(
-                    text = if (liked) "Guardada" else "Guardar",
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (liked) accent else Color.White.copy(alpha = 0.88f),
+                    text = curTitle,
+                    fontSize = 36.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFFF7F4FF),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                AnimatedContent(
+                    targetState = Pair(mediaId, artist),
+                    transitionSpec = {
+                        (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
+                            (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
+                    },
+                    label = "trackArtist",
+                ) { (_, curArtist) ->
+                    Text(
+                        text = curArtist,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = accent,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                Text(
+                    text = "·",
+                    fontSize = 16.sp,
+                    color = Color.White.copy(alpha = 0.40f),
+                )
+
+                // Botón Guardar / Me gusta interactivo tipo píldora
+                Row(
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(if (liked) accent.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
+                        .border(
+                            1.dp,
+                            if (liked) accent.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.16f),
+                            CircleShape,
+                        )
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onToggleLike,
+                        )
+                        .padding(horizontal = 12.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                        contentDescription = if (liked) "En Me gusta" else "Guardar en Me gusta",
+                        tint = if (liked) accent else Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Text(
+                        text = if (liked) "Guardada" else "Guardar",
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (liked) accent else Color.White.copy(alpha = 0.88f),
+                    )
+                }
             }
         }
     }
@@ -452,6 +536,7 @@ private fun CoverCoronaColumn(
     palette: ArtworkPalette,
     liked: Boolean,
     skipDir: Int,
+    headerStyle: Int = 0,
     onTogglePlay: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
@@ -470,6 +555,8 @@ private fun CoverCoronaColumn(
 
     val duration = nowPlaying.durationMs.coerceAtLeast(1L)
     val progress = (positionMs.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+    val discDp = if (headerStyle == 2) 310.dp else 390.dp
+    val discPx = if (headerStyle == 2) 155f else 195f
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -506,7 +593,7 @@ private fun CoverCoronaColumn(
         // Corona 360° + Carátula circular con hover controls
         Box(
             modifier = Modifier
-                .size(390.dp)
+                .size(discDp)
                 .onPointerEvent(PointerEventType.Enter) { discHovered = true }
                 .onPointerEvent(PointerEventType.Exit) {
                     discHovered = false
@@ -515,8 +602,8 @@ private fun CoverCoronaColumn(
                 }
                 .onPointerEvent(PointerEventType.Move) { ev ->
                     val pos = ev.changes.firstOrNull()?.position ?: return@onPointerEvent
-                    val cx = 195f
-                    val cy = 195f
+                    val cx = discPx
+                    val cy = discPx
                     val dx = ((pos.x - cx) / cx).coerceIn(-1f, 1f)
                     val dy = ((pos.y - cy) / cy).coerceIn(-1f, 1f)
                     tiltY = dx * 8f
@@ -744,6 +831,63 @@ private fun CoverCoronaColumn(
                                 modifier = Modifier.size(96.dp),
                             )
                         }
+                    }
+                }
+            }
+        }
+
+        if (headerStyle == 2) {
+            // Opción C: Título, artista y me gusta centrados bajo el vinilo
+            Spacer(Modifier.height(14.dp))
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.fillMaxWidth(0.92f),
+            ) {
+                Text(
+                    text = nowPlaying.title.ifBlank { "Elige algo para empezar" },
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFFF7F4FF),
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = nowPlaying.artist.ifBlank { "Oto · YouTube Music" },
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(if (liked) palette.primary.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
+                            .border(
+                                1.dp,
+                                if (liked) palette.primary.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.16f),
+                                CircleShape,
+                            )
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = onToggleLike,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                            contentDescription = if (liked) "Guardada" else "Guardar",
+                            tint = if (liked) palette.primary else Color.White.copy(alpha = 0.85f),
+                            modifier = Modifier.size(15.dp),
+                        )
                     }
                 }
             }
