@@ -11,6 +11,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +43,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FileUpload
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.MusicNote
@@ -61,13 +63,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -107,6 +113,7 @@ import java.io.File
  * - Se abre y se cierra también con la rueda del ratón (`WheelEvent`) o con `Ctrl+K` / `Escape`.
  * - Comparte `MenuController`, `Prefs`, `Importer`, `Account` y `Cloud` de `:core`.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun DesktopMenuSheet(
     open: Boolean,
@@ -120,6 +127,12 @@ fun DesktopMenuSheet(
     palette: ArtworkPalette,
     currentMediaId: String?,
     queue: List<QueueEntry>,
+    shuffle: Boolean,
+    loop: Boolean,
+    onSetShuffle: (Boolean) -> Unit,
+    onSetLoop: (Boolean) -> Unit,
+    onMoveQueue: (from: Int, to: Int) -> Unit,
+    onRemoveQueue: (index: Int) -> Unit,
     onPlaySong: (SongItem) -> Unit,
     onPlayAll: (List<SongItem>, Int?, YTItem?) -> Unit,
     onPlayLocal: (LocalPlaylist, Int?) -> Unit,
@@ -154,6 +167,12 @@ fun DesktopMenuSheet(
                     .background(Color(0xD9161321))
                     .border(1.dp, palette.primary.copy(alpha = 0.28f), CircleShape)
                     .clickable { onToggleOpen(true) }
+                    .onPointerEvent(PointerEventType.Scroll) { ev ->
+                        val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                        if (dy > 0.5f) {
+                            onToggleOpen(true)
+                        }
+                    }
                     .padding(horizontal = 22.dp, vertical = 11.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -188,7 +207,13 @@ fun DesktopMenuSheet(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.56f))
-                    .clickable { onToggleOpen(false) },
+                    .clickable { onToggleOpen(false) }
+                    .onPointerEvent(PointerEventType.Scroll) { ev ->
+                        val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                        if (dy < -0.5f) {
+                            onToggleOpen(false)
+                        }
+                    },
                 contentAlignment = Alignment.BottomCenter,
             ) {
                 Column(
@@ -207,11 +232,23 @@ fun DesktopMenuSheet(
                             palette.primary.copy(alpha = 0.24f),
                             RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
                         )
-                        .clickable(enabled = false) {}
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
                         .padding(horizontal = 28.dp, vertical = 18.dp),
                 ) {
                     // Tirador superior
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onToggleOpen(false) }
+                            .onPointerEvent(PointerEventType.Scroll) { ev ->
+                                val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                                if (dy < -0.5f) {
+                                    onToggleOpen(false)
+                                }
+                            }
+                            .padding(vertical = 4.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
                         Box(
                             Modifier
                                 .size(44.dp, 4.dp)
@@ -379,7 +416,13 @@ fun DesktopMenuSheet(
                                 QueuePane(
                                     queue = queue,
                                     currentMediaId = currentMediaId,
+                                    shuffle = shuffle,
+                                    loop = loop,
                                     palette = palette,
+                                    onToggleShuffle = { onSetShuffle(!shuffle) },
+                                    onToggleLoop = { onSetLoop(!loop) },
+                                    onMove = onMoveQueue,
+                                    onRemove = onRemoveQueue,
                                     onSkipTo = { idx -> onSkipToQueue(idx); onToggleOpen(false) },
                                 )
                             }
@@ -759,22 +802,159 @@ private fun SearchResultsPane(
 private fun QueuePane(
     queue: List<QueueEntry>,
     currentMediaId: String?,
+    shuffle: Boolean,
+    loop: Boolean,
     palette: ArtworkPalette,
+    onToggleShuffle: () -> Unit,
+    onToggleLoop: () -> Unit,
+    onMove: (from: Int, to: Int) -> Unit,
+    onRemove: (index: Int) -> Unit,
     onSkipTo: (Int) -> Unit,
 ) {
     if (queue.isEmpty()) {
         Text("La cola está vacía.", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
         return
     }
-    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        itemsIndexed(queue, key = { _, e -> e.index }) { idx, entry ->
-            SongRowDesktop(
-                title = entry.title,
-                subtitle = entry.artist,
-                isCurrent = entry.id == currentMediaId,
-                accent = palette.primary,
-                onClick = { onSkipTo(idx) },
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column {
+                Text("Cola de reproducción", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("${queue.size} canciones en total", fontSize = 12.sp, color = Color.White.copy(alpha = 0.6f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                MenuTabPill(
+                    label = if (shuffle) "Aleatorio: Sí" else "Aleatorio: No",
+                    selected = shuffle,
+                    accent = palette.primary,
+                    onClick = onToggleShuffle,
+                )
+                MenuTabPill(
+                    label = if (loop) "Repetir: Sí" else "Repetir: No",
+                    selected = loop,
+                    accent = palette.secondary,
+                    onClick = onToggleLoop,
+                )
+            }
+        }
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            itemsIndexed(queue, key = { idx, e -> "${e.id}-$idx" }) { idx, entry ->
+                QueueRowDesktop(
+                    index = idx + 1,
+                    title = entry.title,
+                    subtitle = entry.artist,
+                    isCurrent = entry.id == currentMediaId,
+                    accent = palette.primary,
+                    canMoveUp = idx > 0,
+                    canMoveDown = idx < queue.lastIndex,
+                    onClick = { onSkipTo(idx) },
+                    onMoveUp = { onMove(idx, idx - 1) },
+                    onMoveDown = { onMove(idx, idx + 1) },
+                    onRemove = { onRemove(idx) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueRowDesktop(
+    index: Int,
+    title: String,
+    subtitle: String,
+    isCurrent: Boolean,
+    accent: Color,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onClick: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (isCurrent) accent.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.03f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (isCurrent) {
+            Icon(
+                imageVector = Icons.Rounded.PlayArrow,
+                contentDescription = "Sonando",
+                tint = accent,
+                modifier = Modifier.size(18.dp),
             )
+        } else {
+            Text(
+                text = "$index",
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Color.White.copy(alpha = 0.45f),
+                modifier = Modifier.width(22.dp),
+            )
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = title,
+                fontSize = 14.sp,
+                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.SemiBold,
+                color = if (isCurrent) accent else Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subtitle.isNotBlank()) {
+                Text(
+                    text = subtitle,
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.56f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (canMoveUp) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onMoveUp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.KeyboardArrowUp, "Subir", tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
+                }
+            } else {
+                Spacer(Modifier.size(28.dp))
+            }
+            if (canMoveDown) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onMoveDown),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.KeyboardArrowDown, "Bajar", tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
+                }
+            } else {
+                Spacer(Modifier.size(28.dp))
+            }
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onRemove),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.Close, "Quitar", tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
+            }
         }
     }
 }

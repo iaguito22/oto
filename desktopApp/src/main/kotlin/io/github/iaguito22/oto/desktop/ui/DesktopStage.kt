@@ -109,6 +109,7 @@ import kotlin.math.sin
  *   controles internos traslúcidos (`Anterior`, `Play/Pause`, `Siguiente`) que **solo aparecen al hacer hover**.
  * - Columna derecha con letras sincronizadas estilo karaoke Caelestia.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun DesktopStage(
     nowPlaying: NowPlaying,
@@ -140,7 +141,17 @@ fun DesktopStage(
     // Dirección de salto para animar la transición de canción en la carátula y el título.
     var skipDir by remember { mutableIntStateOf(1) }
 
-    Box(Modifier.fillMaxSize().background(animPal.deep)) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(animPal.deep)
+            .onPointerEvent(PointerEventType.Scroll) { ev ->
+                val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                if (dy > 0.5f) {
+                    onOpenMenu()
+                }
+            },
+    ) {
         // 1. Carátula desenfocada de fondo + 3 halos radiales vivos que respiran con la música
         if (artwork != null) {
             Image(

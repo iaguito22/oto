@@ -132,6 +132,8 @@ fun main() {
             val nowPlaying by player.state.collectAsState()
             val source by player.source.collectAsState()
             val queue by player.queue.collectAsState()
+            val shuffle by player.shuffle.collectAsState()
+            val loop by player.loop.collectAsState()
             val lyrics by player.lyrics.collectAsState()
             val lyricsLoading by player.lyricsLoading.collectAsState()
             val positionMs by player.positionMs.collectAsState()
@@ -156,12 +158,12 @@ fun main() {
                     .onPointerEvent(PointerEventType.Scroll) { ev ->
                         val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                         val now = System.currentTimeMillis()
-                        if (now - lastWheelToggleMs > 360L) {
-                            if (!menuOpen && dy > 0.7f) {
+                        if (now - lastWheelToggleMs > 280L) {
+                            if (!menuOpen && dy > 0.5f) {
                                 menuOpen = true
                                 lastWheelToggleMs = now
-                            } else if (menuOpen && dy < -1.8f) {
-                                // Con scroll fuerte hacia arriba cierra el menú si estás arriba
+                            } else if (menuOpen && dy < -0.7f) {
+                                menuOpen = false
                                 lastWheelToggleMs = now
                             }
                         }
@@ -210,6 +212,12 @@ fun main() {
                     palette = palette,
                     currentMediaId = nowPlaying.id,
                     queue = queue,
+                    shuffle = shuffle,
+                    loop = loop,
+                    onSetShuffle = player::setShuffle,
+                    onSetLoop = player::setLoop,
+                    onMoveQueue = player::move,
+                    onRemoveQueue = player::remove,
                     onPlaySong = player::play,
                     onPlayAll = { songs, i, item -> player.playAll(songs, i, item) },
                     onPlayLocal = { list, idx -> player.playLocal(list, idx, list.id == LIKED_ID) },
