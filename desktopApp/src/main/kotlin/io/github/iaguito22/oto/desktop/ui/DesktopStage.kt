@@ -28,6 +28,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -61,6 +62,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -69,12 +71,16 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -82,6 +88,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -203,72 +210,88 @@ fun DesktopStage(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 56.dp, vertical = 22.dp),
+                .padding(vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Pill superior centrado: DESDE TU LISTA · <nombre>
-            TopSourceOriginBar(
-                source = source,
-                accent = animPal.primary,
-                liked = liked,
-                onOpenSource = onOpenSource,
-                onToggleLike = onToggleLike,
-            )
-
-            Spacer(Modifier.height(14.dp))
-
-            // Cabecera de ancho completo (de borde izquierdo de carátula a borde derecho de letra),
-            // SIN línea horizontal inferior ni sombra en el texto.
-            SpanTrackHeader(
-                title = nowPlaying.title.ifBlank { "Elige algo para empezar" },
-                artist = nowPlaying.artist.ifBlank { "Oto · YouTube Music" },
-                mediaId = nowPlaying.id,
-                accent = animPal.primary,
-                accentWarm = animPal.secondary,
-                skipDir = skipDir,
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            // Escenario de 2 columnas: Izquierda (Tiempo + Corona 360° con controles hover + Calidad) | Derecha (Letras)
-            Row(
+            Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .widthIn(max = 1260.dp)
+                    .widthIn(max = 1220.dp)
                     .fillMaxWidth()
-                    .padding(bottom = 52.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(56.dp),
+                    .weight(1f)
+                    .padding(horizontal = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Box(
-                    modifier = Modifier.weight(0.46f).fillMaxHeight(),
-                    contentAlignment = Alignment.Center,
+                // Escenario de 2 columnas:
+                // Izquierda: Tiempo + Corona 360° con controles hover + Calidad
+                // Derecha: Origen + Título + Artista/Guardar + Letras con difuminado suave arriba y abajo
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(bottom = 36.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(52.dp),
                 ) {
-                    CoverCoronaColumn(
-                        nowPlaying = nowPlaying,
-                        positionMs = positionMs,
-                        quality = quality,
-                        artwork = artwork,
-                        palette = animPal,
-                        skipDir = skipDir,
-                        onTogglePlay = onTogglePlay,
-                        onPrev = { skipDir = -1; onPrev() },
-                        onNext = { skipDir = 1; onNext() },
-                        onSeek = onSeek,
-                    )
-                }
+                    Box(
+                        modifier = Modifier.weight(0.44f).fillMaxHeight(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CoverCoronaColumn(
+                            nowPlaying = nowPlaying,
+                            positionMs = positionMs,
+                            quality = quality,
+                            artwork = artwork,
+                            palette = animPal,
+                            liked = liked,
+                            skipDir = skipDir,
+                            onTogglePlay = onTogglePlay,
+                            onPrev = { skipDir = -1; onPrev() },
+                            onNext = { skipDir = 1; onNext() },
+                            onSeek = onSeek,
+                            onToggleLike = onToggleLike,
+                        )
+                    }
 
-                Box(
-                    modifier = Modifier.weight(0.54f).fillMaxHeight(),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    LyricsStageColumn(
-                        lyrics = lyrics,
-                        loading = lyricsLoading,
-                        positionMs = positionMs,
-                        palette = animPal,
-                        onSeek = onSeek,
-                    )
+                    Column(
+                        modifier = Modifier.weight(0.56f).fillMaxHeight(),
+                        verticalArrangement = Arrangement.Top,
+                    ) {
+                        // Pill superior alineado al inicio de la columna de la letra
+                        TopSourceOriginBar(
+                            source = source,
+                            accent = animPal.primary,
+                            onOpenSource = onOpenSource,
+                        )
+
+                        Spacer(Modifier.height(10.dp))
+
+                        // Cabecera: Título arriba, Artista y botón Guardar en la misma fila
+                        TrackHeader(
+                            title = nowPlaying.title.ifBlank { "Elige algo para empezar" },
+                            artist = nowPlaying.artist.ifBlank { "Oto · YouTube Music" },
+                            mediaId = nowPlaying.id,
+                            accent = animPal.primary,
+                            liked = liked,
+                            onToggleLike = onToggleLike,
+                            skipDir = skipDir,
+                        )
+
+                        Spacer(Modifier.height(14.dp))
+
+                        // Columna de letra con difuminado suave arriba y abajo
+                        Box(
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            LyricsStageColumn(
+                                lyrics = lyrics,
+                                loading = lyricsLoading,
+                                positionMs = positionMs,
+                                palette = animPal,
+                                onSeek = onSeek,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -279,22 +302,19 @@ fun DesktopStage(
 private fun TopSourceOriginBar(
     source: Source?,
     accent: Color,
-    liked: Boolean,
     onOpenSource: () -> Unit,
-    onToggleLike: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().widthIn(max = 1260.dp),
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Spacer(Modifier.width(42.dp))
-
         Row(
             modifier = Modifier
                 .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.05f))
                 .clickable(onClick = onOpenSource)
-                .padding(horizontal = 14.dp, vertical = 6.dp),
+                .padding(horizontal = 14.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -308,7 +328,7 @@ private fun TopSourceOriginBar(
                 text = (source?.kind ?: "DESDE TU LISTA").uppercase(),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = 1.8.sp,
+                letterSpacing = 1.6.sp,
                 color = Color.White.copy(alpha = 0.62f),
             )
             Text(
@@ -323,50 +343,31 @@ private fun TopSourceOriginBar(
                 color = accent,
             )
         }
-
-        Box(
-            modifier = Modifier
-                .size(38.dp)
-                .clip(CircleShape)
-                .background(if (liked) accent.copy(alpha = 0.20f) else Color.White.copy(alpha = 0.06f))
-                .clickable(onClick = onToggleLike),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                contentDescription = "Me gusta",
-                tint = if (liked) accent else Color.White.copy(alpha = 0.75f),
-                modifier = Modifier.size(19.dp),
-            )
-        }
     }
 }
 
 @Composable
-private fun SpanTrackHeader(
+private fun TrackHeader(
     title: String,
     artist: String,
     mediaId: String?,
     accent: Color,
-    accentWarm: Color,
+    liked: Boolean,
+    onToggleLike: () -> Unit,
     skipDir: Int,
 ) {
-    AnimatedContent(
-        targetState = Triple(mediaId, title, artist),
-        transitionSpec = {
-            (fadeIn(tween(320)) + slideInHorizontally(spring(stiffness = Spring.StiffnessMediumLow)) { skipDir * it / 8 }) togetherWith
-                (fadeOut(tween(180)) + slideOutHorizontally(tween(180)) { -skipDir * it / 10 })
-        },
-        label = "spanHeader",
-    ) { (_, curTitle, curArtist) ->
-        Row(
-            modifier = Modifier
-                .widthIn(max = 1260.dp)
-                .fillMaxWidth()
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        AnimatedContent(
+            targetState = Pair(mediaId, title),
+            transitionSpec = {
+                (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
+                    (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
+            },
+            label = "trackTitle",
+        ) { (_, curTitle) ->
             Text(
                 text = curTitle,
                 fontSize = 36.sp,
@@ -374,19 +375,67 @@ private fun SpanTrackHeader(
                 color = Color(0xFFF7F4FF),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false).padding(end = 24.dp),
             )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            AnimatedContent(
+                targetState = Pair(mediaId, artist),
+                transitionSpec = {
+                    (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
+                        (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
+                },
+                label = "trackArtist",
+            ) { (_, curArtist) ->
                 Text(
                     text = curArtist,
-                    fontSize = 17.sp,
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = accent,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            Text(
+                text = "·",
+                fontSize = 16.sp,
+                color = Color.White.copy(alpha = 0.40f),
+            )
+
+            // Botón Guardar / Me gusta interactivo tipo píldora
+            Row(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(if (liked) accent.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
+                    .border(
+                        1.dp,
+                        if (liked) accent.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.16f),
+                        CircleShape,
+                    )
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onToggleLike,
+                    )
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                    contentDescription = if (liked) "En Me gusta" else "Guardar en Me gusta",
+                    tint = if (liked) accent else Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(15.dp),
+                )
+                Text(
+                    text = if (liked) "Guardada" else "Guardar",
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (liked) accent else Color.White.copy(alpha = 0.88f),
                 )
             }
         }
@@ -401,15 +450,18 @@ private fun CoverCoronaColumn(
     quality: Quality?,
     artwork: ImageBitmap?,
     palette: ArtworkPalette,
+    liked: Boolean,
     skipDir: Int,
     onTogglePlay: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onSeek: (Long) -> Unit,
+    onToggleLike: () -> Unit,
 ) {
     var discHovered by remember { mutableStateOf(false) }
     var tiltX by remember { mutableFloatStateOf(0f) }
     var tiltY by remember { mutableFloatStateOf(0f) }
+    var burstTrigger by remember { mutableLongStateOf(0L) }
 
     val animTiltX by animateFloatAsState(if (discHovered) tiltX else 0f, spring(stiffness = Spring.StiffnessLow), label = "tiltX")
     val animTiltY by animateFloatAsState(if (discHovered) tiltY else 0f, spring(stiffness = Spring.StiffnessLow), label = "tiltY")
@@ -470,22 +522,29 @@ private fun CoverCoronaColumn(
                     tiltY = dx * 8f
                     tiltX = -dy * 8f
                 }
-                .pointerInput(nowPlaying.durationMs) {
-                    detectTapGestures { offset ->
-                        val cx = size.width / 2f
-                        val cy = size.height / 2f
-                        val dx = offset.x - cx
-                        val dy = offset.y - cy
-                        val dist = kotlin.math.sqrt(dx * dx + dy * dy)
-                        val outerR = size.width / 2f
-                        // Si el clic cae en el anillo exterior de la corona, hace seek a ese ángulo:
-                        if (dist in (outerR * 0.84f)..outerR && nowPlaying.durationMs > 0L) {
-                            var deg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat() + 90f
-                            if (deg < 0f) deg += 360f
-                            val targetMs = ((deg / 360f) * nowPlaying.durationMs).toLong()
-                            onSeek(targetMs)
-                        }
-                    }
+                .pointerInput(nowPlaying.id) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            onToggleLike()
+                            burstTrigger = System.currentTimeMillis()
+                        },
+                        onTap = { offset ->
+                            val cx = size.width / 2f
+                            val cy = size.height / 2f
+                            val dx = offset.x - cx
+                            val dy = offset.y - cy
+                            val dist = kotlin.math.sqrt(dx * dx + dy * dy)
+                            val outerR = size.width / 2f
+                            if (dist in (outerR * 0.84f)..outerR && nowPlaying.durationMs > 0L) {
+                                var deg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat() + 90f
+                                if (deg < 0f) deg += 360f
+                                val targetMs = ((deg / 360f) * nowPlaying.durationMs).toLong()
+                                onSeek(targetMs)
+                            } else {
+                                onTogglePlay()
+                            }
+                        },
+                    )
                 },
             contentAlignment = Alignment.Center,
         ) {
@@ -536,8 +595,12 @@ private fun CoverCoronaColumn(
             AnimatedContent(
                 targetState = nowPlaying.id to artwork,
                 transitionSpec = {
-                    (fadeIn(tween(340)) + scaleIn(spring(dampingRatio = 0.78f, stiffness = 320f), initialScale = 0.86f)) togetherWith
-                        (fadeOut(tween(200)) + scaleOut(tween(200), targetScale = 1.08f))
+                    (fadeIn(tween(360)) +
+                        slideInHorizontally(spring(dampingRatio = 0.72f, stiffness = 300f)) { skipDir * it / 3 } +
+                        scaleIn(spring(dampingRatio = 0.78f, stiffness = 300f), initialScale = 0.88f)) togetherWith
+                        (fadeOut(tween(180)) +
+                            slideOutHorizontally(tween(180)) { -skipDir * it / 4 } +
+                            scaleOut(tween(180), targetScale = 1.05f))
                 },
                 label = "discArt",
             ) { (_, bmp) ->
@@ -580,8 +643,8 @@ private fun CoverCoronaColumn(
                                 .background(
                                     Brush.radialGradient(
                                         colors = listOf(
-                                            Color.Black.copy(alpha = 0.52f),
-                                            Color.Black.copy(alpha = 0.24f),
+                                            Color.Black.copy(alpha = 0.54f),
+                                            Color.Black.copy(alpha = 0.26f),
                                         ),
                                     ),
                                 ),
@@ -637,6 +700,49 @@ private fun CoverCoronaColumn(
                                     )
                                 }
                             }
+
+                            // Botón inferior derecho de guardar en la propia carátula
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(22.dp)
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.62f))
+                                    .border(1.dp, Color.White.copy(alpha = 0.20f), CircleShape)
+                                    .clickable(onClick = onToggleLike),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                    contentDescription = "Guardar",
+                                    tint = if (liked) palette.primary else Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(19.dp),
+                                )
+                            }
+                        }
+                    }
+
+                    // HeartBurst animado al hacer doble clic
+                    val burstElapsed = System.currentTimeMillis() - burstTrigger
+                    if (burstElapsed < 650L) {
+                        val p = (burstElapsed.toFloat() / 650f).coerceIn(0f, 1f)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    scaleX = 0.6f + p * 1.3f
+                                    scaleY = 0.6f + p * 1.3f
+                                    alpha = (1f - p).coerceIn(0f, 1f)
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Favorite,
+                                contentDescription = null,
+                                tint = palette.primary,
+                                modifier = Modifier.size(96.dp),
+                            )
                         }
                     }
                 }
@@ -713,80 +819,115 @@ private fun LyricsStageColumn(
 ) {
     val listState = rememberLazyListState()
 
-    when {
-        loading -> {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(start = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                Text(
-                    text = "Buscando letra sincronizada…",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = palette.primary.copy(alpha = 0.75f),
+    // Difuminado generoso arriba y abajo con máscara de gradiente vertical (BlendMode.DstOut)
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                val fadeTop = 130.dp.toPx()
+                val fadeBottom = 160.dp.toPx()
+                // Difuminado superior suave
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(Color.Black, Color.Transparent),
+                        startY = 0f,
+                        endY = fadeTop,
+                    ),
+                    topLeft = Offset.Zero,
+                    size = Size(size.width, fadeTop),
+                    blendMode = BlendMode.DstOut,
                 )
-            }
-        }
-        lyrics is Lyrics.Synced && lyrics.lines.isNotEmpty() -> {
-            val lines = lyrics.lines
-            val activeIdx = remember(lines, positionMs) {
-                lines.indexOfLast { it.start <= positionMs + 120L }.coerceAtLeast(0)
-            }
-            LaunchedEffect(activeIdx) {
-                val target = (activeIdx - 2).coerceAtLeast(0)
-                runCatching { listState.animateScrollToItem(target) }
-            }
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(vertical = 84.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
-            ) {
-                itemsIndexed(lines, key = { idx, l -> "${l.start}-$idx" }) { idx, line ->
-                    SyncedLyricRow(
-                        line = line,
-                        isActive = idx == activeIdx,
-                        isPast = idx < activeIdx,
-                        positionMs = positionMs,
-                        palette = palette,
-                        onClick = { onSeek(line.start) },
-                    )
-                }
-            }
-        }
-        lyrics is Lyrics.Plain && lyrics.lines.isNotEmpty() -> {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(vertical = 48.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                itemsIndexed(lyrics.lines) { _, line: String ->
+                // Difuminado inferior suave
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(Color.Transparent, Color.Black),
+                        startY = size.height - fadeBottom,
+                        endY = size.height,
+                    ),
+                    topLeft = Offset(0f, size.height - fadeBottom),
+                    size = Size(size.width, fadeBottom),
+                    blendMode = BlendMode.DstOut,
+                )
+            },
+    ) {
+        val boxHeightPx = constraints.maxHeight.toFloat()
+        val anchorOffset = (boxHeightPx * 0.30f).toInt()
+
+        when {
+            loading -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = line,
-                        fontSize = 21.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color.White.copy(alpha = 0.78f),
-                        lineHeight = 30.sp,
+                        text = "Buscando letra sincronizada…",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = palette.primary.copy(alpha = 0.75f),
                     )
                 }
             }
-        }
-        else -> {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(start = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    text = "Pura música instrumental o sin letra registrada",
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White.copy(alpha = 0.75f),
-                )
-                Text(
-                    text = "Desliza la rueda del ratón hacia abajo o pulsa la píldora inferior para abrir tu música y explorar.",
-                    fontSize = 14.sp,
-                    color = Color.White.copy(alpha = 0.46f),
-                )
+            lyrics is Lyrics.Synced && lyrics.lines.isNotEmpty() -> {
+                val lines = lyrics.lines
+                val activeIdx = remember(lines, positionMs) {
+                    lines.indexOfLast { it.start <= positionMs + 120L }.coerceAtLeast(0)
+                }
+                LaunchedEffect(activeIdx) {
+                    runCatching {
+                        listState.animateScrollToItem(activeIdx, scrollOffset = -anchorOffset)
+                    }
+                }
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(top = 40.dp, bottom = 60.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    itemsIndexed(lines, key = { idx, l -> "${l.start}-$idx" }) { idx, line ->
+                        val dist = idx - activeIdx
+                        SyncedLyricRow(
+                            line = line,
+                            dist = dist,
+                            positionMs = positionMs,
+                            palette = palette,
+                            onClick = { onSeek(line.start) },
+                        )
+                    }
+                }
+            }
+            lyrics is Lyrics.Plain && lyrics.lines.isNotEmpty() -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(top = 40.dp, bottom = 60.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    itemsIndexed(lyrics.lines) { _, line: String ->
+                        Text(
+                            text = line,
+                            fontSize = 21.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White.copy(alpha = 0.78f),
+                            lineHeight = 30.sp,
+                        )
+                    }
+                }
+            }
+            else -> {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(start = 12.dp, top = 80.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "Pura música instrumental o sin letra registrada",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White.copy(alpha = 0.75f),
+                    )
+                    Text(
+                        text = "Desliza la rueda del ratón hacia abajo o pulsa la píldora inferior para abrir tu música y explorar.",
+                        fontSize = 14.sp,
+                        color = Color.White.copy(alpha = 0.46f),
+                    )
+                }
             }
         }
     }
@@ -795,36 +936,75 @@ private fun LyricsStageColumn(
 @Composable
 private fun SyncedLyricRow(
     line: Line,
-    isActive: Boolean,
-    isPast: Boolean,
+    dist: Int,
     positionMs: Long,
     palette: ArtworkPalette,
     onClick: () -> Unit,
 ) {
-    val scale by animateFloatAsState(if (isActive) 1.03f else 1f, spring(stiffness = Spring.StiffnessLow), label = "lyricScale")
-    val alpha = when {
+    val isActive = dist == 0
+    val scale by animateFloatAsState(
+        targetValue = if (isActive) 1.045f else 1f,
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
+        label = "lyricScale",
+    )
+    val transX by animateFloatAsState(
+        targetValue = if (isActive) 8f else 0f,
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
+        label = "lyricTransX",
+    )
+    val absDist = kotlin.math.abs(dist)
+    val targetAlpha = when {
         isActive -> 1f
-        isPast -> 0.28f
-        else -> 0.42f
+        dist == 1 -> 0.62f
+        dist == -1 -> 0.42f
+        absDist == 2 -> 0.32f
+        absDist == 3 -> 0.22f
+        else -> 0.15f
     }
+    val alpha by animateFloatAsState(
+        targetValue = targetAlpha,
+        animationSpec = tween(320, easing = FastOutSlowInEasing),
+        label = "lyricAlpha",
+    )
+    val blurRadius = when {
+        isActive || absDist <= 1 -> 0.dp
+        absDist == 2 -> 0.8.dp
+        else -> 1.6.dp
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
+                translationX = transX
                 transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
+                this.alpha = alpha
             }
-            .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 4.dp, horizontal = 8.dp),
+            .blur(blurRadius)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(vertical = 4.dp, horizontal = 6.dp),
     ) {
         Text(
             text = line.text.ifBlank { "♪" },
             fontSize = if (isActive) 28.sp else 22.sp,
             fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Bold,
-            color = if (isActive) palette.primary else Color.White.copy(alpha = alpha),
+            color = if (isActive) Color.White else Color.White.copy(alpha = alpha),
             lineHeight = if (isActive) 36.sp else 29.sp,
+            style = if (isActive) {
+                TextStyle(
+                    shadow = Shadow(
+                        color = palette.primary.copy(alpha = 0.65f),
+                        blurRadius = 26f,
+                    ),
+                )
+            } else TextStyle.Default,
         )
     }
 }

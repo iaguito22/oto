@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -55,21 +57,28 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.text.TextStyle
@@ -106,6 +115,8 @@ import kotlinx.coroutines.launch
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
+
+private enum class MenuSubView { None, Settings, Queue }
 
 /**
  * Cajón inferior (`Sheet` estilo prototipo 2 + `fusion.html`):
@@ -150,7 +161,14 @@ fun DesktopMenuSheet(
     val cloudState by cloud.state.collectAsState()
     val scope = rememberCoroutineScope()
 
-    var activeTab by remember { mutableIntStateOf(0) } // 0 = Tu música, 1 = Explorar, 2 = Cola, 3 = Ajustes/Cuenta
+    var selectedPage by remember { mutableIntStateOf(0) } // 0 = Tu música, 1 = Explorar
+    var subView by remember { mutableStateOf(MenuSubView.None) }
+
+    LaunchedEffect(open) {
+        if (!open) {
+            subView = MenuSubView.None
+        }
+    }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         // Píldora inferior cuando está cerrado
@@ -259,37 +277,59 @@ fun DesktopMenuSheet(
 
                     Spacer(Modifier.height(14.dp))
 
-                    // Cabecera: Pestañas + Buscador en vivo + Botón cerrar
+                    // Cabecera estilo móvil / prototipo: Selector Segmentado de 2 pestañas (o Botón Atrás + Título)
+                    // + Buscador YouTube Music + Botón Cola + Botón Ajustes + Botón Cerrar
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         val topPage = menuState.pages.lastOrNull()
-                        if (topPage != null) {
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.08f))
-                                    .clickable { menu.closeDetail() },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(Icons.Rounded.ArrowBack, "Atrás", tint = Color.White, modifier = Modifier.size(18.dp))
-                            }
-                        }
+                        val isDeepNav = topPage != null || subView != MenuSubView.None || menuState.query.isNotBlank()
 
-                        MenuTabPill("Tu música", activeTab == 0 && menuState.query.isBlank() && topPage == null, palette.primary) {
-                            menu.closeAll(); menu.onQuery(""); activeTab = 0
-                        }
-                        MenuTabPill("Explorar", activeTab == 1 && menuState.query.isBlank() && topPage == null, palette.primary) {
-                            menu.closeAll(); menu.onQuery(""); activeTab = 1
-                        }
-                        MenuTabPill("Cola (${queue.size})", activeTab == 2 && menuState.query.isBlank() && topPage == null, palette.primary) {
-                            menu.closeAll(); menu.onQuery(""); activeTab = 2
-                        }
-                        MenuTabPill("Cuenta y Ajustes", activeTab == 3 && menuState.query.isBlank() && topPage == null, palette.primary) {
-                            menu.closeAll(); menu.onQuery(""); activeTab = 3
+                        if (isDeepNav) {
+                            // Sub-navegación: Botón Atrás + Título
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White.copy(alpha = 0.08f))
+                                        .clickable {
+                                            when {
+                                                menuState.query.isNotBlank() -> menu.onQuery("")
+                                                topPage != null -> menu.closeDetail()
+                                                else -> subView = MenuSubView.None
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(Icons.Rounded.ArrowBack, "Atrás", tint = Color.White, modifier = Modifier.size(19.dp))
+                                }
+                                Text(
+                                    text = when {
+                                        menuState.query.isNotBlank() -> "Resultados de búsqueda"
+                                        topPage is Page.Local -> if (topPage.id == LIKED_ID) "Me gusta" else (playlists.firstOrNull { it.id == topPage.id }?.name ?: "Lista")
+                                        topPage is Page.Remote -> topPage.item.title
+                                        subView == MenuSubView.Settings -> "Ajustes y Cuenta"
+                                        subView == MenuSubView.Queue -> "Cola de reproducción"
+                                        else -> ""
+                                    },
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                )
+                            }
+                        } else {
+                            // Selector segmentado de 2 pestañas: [ Tu música | Explorar ]
+                            DesktopSegmentedTabs(
+                                selectedPage = selectedPage,
+                                accent = palette.primary,
+                                onSelect = { selectedPage = it },
+                            )
                         }
 
                         Spacer(Modifier.weight(1f))
@@ -334,9 +374,54 @@ fun DesktopMenuSheet(
                             }
                         }
 
+                        // Botón Cola de reproducción
                         Box(
                             modifier = Modifier
-                                .size(38.dp)
+                                .height(40.dp)
+                                .clip(CircleShape)
+                                .background(if (subView == MenuSubView.Queue) palette.primary.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
+                                .border(1.dp, if (subView == MenuSubView.Queue) palette.primary.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.12f), CircleShape)
+                                .clickable {
+                                    subView = if (subView == MenuSubView.Queue) MenuSubView.None else MenuSubView.Queue
+                                }
+                                .padding(horizontal = 12.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Icon(Icons.Rounded.QueueMusic, "Cola", tint = if (subView == MenuSubView.Queue) palette.primary else Color.White.copy(alpha = 0.85f), modifier = Modifier.size(17.dp))
+                                if (queue.isNotEmpty()) {
+                                    Text(
+                                        text = "${queue.size}",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (subView == MenuSubView.Queue) palette.primary else Color.White.copy(alpha = 0.85f),
+                                    )
+                                }
+                            }
+                        }
+
+                        // Botón Ajustes
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (subView == MenuSubView.Settings) palette.primary.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
+                                .border(1.dp, if (subView == MenuSubView.Settings) palette.primary.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.12f), CircleShape)
+                                .clickable {
+                                    subView = if (subView == MenuSubView.Settings) MenuSubView.None else MenuSubView.Settings
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Rounded.Settings, "Ajustes", tint = if (subView == MenuSubView.Settings) palette.primary else Color.White, modifier = Modifier.size(18.dp))
+                        }
+
+                        // Botón Cerrar
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
                                 .clip(CircleShape)
                                 .background(Color.White.copy(alpha = 0.08f))
                                 .clickable { onToggleOpen(false) },
@@ -386,33 +471,22 @@ fun DesktopMenuSheet(
                                     onOpenItem = menu::open,
                                 )
                             }
-                            activeTab == 0 -> {
-                                YourMusicPane(
-                                    likedList = likedList,
-                                    playlists = playlists,
-                                    history = history,
+                            subView == MenuSubView.Settings -> {
+                                SettingsAndAccountPane(
+                                    prefs = prefs,
+                                    importer = importer,
+                                    account = account,
+                                    cloud = cloud,
+                                    login = login,
+                                    session = session,
+                                    cloudState = cloudState,
+                                    importState = importState,
+                                    qualityMode = qualityMode,
+                                    dataSaver = dataSaver,
                                     palette = palette,
-                                    currentMediaId = currentMediaId,
-                                    onOpenLocal = menu::openLocal,
-                                    onPlayLocal = { list, idx -> onPlayLocal(list, idx); onToggleOpen(false) },
-                                    onPlayDj = { onPlayDj(); onToggleOpen(false) },
-                                    onPlayHeard = { h -> onPlaySong(h.toSong()); onToggleOpen(false) },
                                 )
                             }
-                            activeTab == 1 -> {
-                                ExplorePane(
-                                    shelves = menuState.shelves,
-                                    chips = menuState.chips,
-                                    selectedChip = menuState.chip,
-                                    error = menuState.homeError,
-                                    palette = palette,
-                                    onChip = menu::onChip,
-                                    onRetry = menu::loadHome,
-                                    onPlaySong = { onPlaySong(it); onToggleOpen(false) },
-                                    onOpenItem = menu::open,
-                                )
-                            }
-                            activeTab == 2 -> {
+                            subView == MenuSubView.Queue -> {
                                 QueuePane(
                                     queue = queue,
                                     currentMediaId = currentMediaId,
@@ -426,19 +500,30 @@ fun DesktopMenuSheet(
                                     onSkipTo = { idx -> onSkipToQueue(idx); onToggleOpen(false) },
                                 )
                             }
-                            else -> {
-                                SettingsAndAccountPane(
-                                    prefs = prefs,
-                                    importer = importer,
-                                    account = account,
-                                    cloud = cloud,
-                                    login = login,
-                                    session = session,
-                                    cloudState = cloudState,
-                                    importState = importState,
-                                    qualityMode = qualityMode,
-                                    dataSaver = dataSaver,
+                            selectedPage == 0 -> {
+                                YourMusicPane(
+                                    likedList = likedList,
+                                    playlists = playlists,
+                                    history = history,
                                     palette = palette,
+                                    currentMediaId = currentMediaId,
+                                    onOpenLocal = menu::openLocal,
+                                    onPlayLocal = { list, idx -> onPlayLocal(list, idx); onToggleOpen(false) },
+                                    onPlayDj = { onPlayDj(); onToggleOpen(false) },
+                                    onPlayHeard = { h -> onPlaySong(h.toSong()); onToggleOpen(false) },
+                                )
+                            }
+                            else -> {
+                                ExplorePane(
+                                    shelves = menuState.shelves,
+                                    chips = menuState.chips,
+                                    selectedChip = menuState.chip,
+                                    error = menuState.homeError,
+                                    palette = palette,
+                                    onChip = menu::onChip,
+                                    onRetry = menu::loadHome,
+                                    onPlaySong = { onPlaySong(it); onToggleOpen(false) },
+                                    onOpenItem = menu::open,
                                 )
                             }
                         }
@@ -475,6 +560,62 @@ private fun MenuTabPill(
 }
 
 @Composable
+private fun DesktopSegmentedTabs(
+    selectedPage: Int,
+    accent: Color,
+    onSelect: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .height(40.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.07f))
+            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+            .padding(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .width(114.dp)
+                .fillMaxHeight()
+                .clip(CircleShape)
+                .background(if (selectedPage == 0) accent.copy(alpha = 0.25f) else Color.Transparent)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { onSelect(0) },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "Tu música",
+                fontSize = 13.5.sp,
+                fontWeight = if (selectedPage == 0) FontWeight.Bold else FontWeight.Medium,
+                color = if (selectedPage == 0) Color.White else Color.White.copy(alpha = 0.65f),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .width(114.dp)
+                .fillMaxHeight()
+                .clip(CircleShape)
+                .background(if (selectedPage == 1) accent.copy(alpha = 0.25f) else Color.Transparent)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { onSelect(1) },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "Explorar",
+                fontSize = 13.5.sp,
+                fontWeight = if (selectedPage == 1) FontWeight.Bold else FontWeight.Medium,
+                color = if (selectedPage == 1) Color.White else Color.White.copy(alpha = 0.65f),
+            )
+        }
+    }
+}
+
+@Composable
 private fun YourMusicPane(
     likedList: LocalPlaylist,
     playlists: List<LocalPlaylist>,
@@ -486,122 +627,372 @@ private fun YourMusicPane(
     onPlayDj: () -> Unit,
     onPlayHeard: (Heard) -> Unit,
 ) {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        // Tarjetas rápidas arriba: DJ + Me gusta + Listas guardadas
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 220.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.height(156.dp),
-        ) {
-            item(key = "dj") {
-                QuickCard(
-                    title = "DJ de Oto",
-                    subtitle = "Mezcla inteligente con lo que oyes",
-                    accent = palette.secondary,
-                    icon = { Icon(Icons.Rounded.AutoAwesome, null, tint = palette.secondary) },
-                    onClick = onPlayDj,
-                )
-            }
-            item(key = LIKED_ID) {
-                QuickCard(
-                    title = "Me gusta",
-                    subtitle = "${likedList.songs.size} canciones",
-                    accent = palette.primary,
-                    icon = { Icon(Icons.Rounded.Favorite, null, tint = palette.primary) },
-                    onClick = { onOpenLocal(LIKED_ID) },
-                    onPlayDirect = { onPlayLocal(likedList, null) },
-                )
-            }
-            items(playlists, key = { it.id }) { pl ->
-                QuickCard(
-                    title = pl.name,
-                    subtitle = "${pl.songs.size} canciones",
-                    accent = palette.tertiary,
-                    icon = { Icon(Icons.Rounded.QueueMusic, null, tint = palette.tertiary) },
-                    onClick = { onOpenLocal(pl.id) },
-                    onPlayDirect = { onPlayLocal(pl, null) },
-                )
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(22.dp),
+        contentPadding = PaddingValues(bottom = 24.dp),
+    ) {
+        // 1. Estante fijado (Pinned Shelf): DJ + Me gusta + Listas fijadas
+        item(key = "pinnedShelf") {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                // DJ de Oto con vinilo interactivo giratorio
+                item(key = "djCard") {
+                    DjShelfCard(
+                        accent = palette.secondary,
+                        onClick = onPlayDj,
+                    )
+                }
+
+                // Me gusta con gradiente y corazón brillante
+                item(key = LIKED_ID) {
+                    MeGustaShelfCard(
+                        count = likedList.songs.size,
+                        accent = palette.primary,
+                        onClick = { onOpenLocal(LIKED_ID) },
+                        onPlayDirect = { onPlayLocal(likedList, null) },
+                    )
+                }
+
+                // Listas fijadas / primeras listas
+                items(playlists.take(6), key = { it.id }) { pl ->
+                    PlaylistShelfCard(
+                        playlist = pl,
+                        accent = palette.tertiary,
+                        onClick = { onOpenLocal(pl.id) },
+                        onPlayDirect = { onPlayLocal(pl, null) },
+                    )
+                }
             }
         }
 
-        Text(
-            text = "Escuchado recientemente",
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White.copy(alpha = 0.85f),
-        )
+        // 2. Baldosas de 2 columnas para tus listas
+        if (playlists.isNotEmpty()) {
+            item(key = "playlistsGridHeader") {
+                Text(
+                    text = "Tus listas",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                )
+            }
+            item(key = "playlistsGrid") {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    val pairs = playlists.chunked(2)
+                    pairs.forEach { pair ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            pair.forEach { pl ->
+                                Box(modifier = Modifier.weight(1f)) {
+                                    PlaylistTileDesktop(
+                                        playlist = pl,
+                                        accent = palette.primary,
+                                        onClick = { onOpenLocal(pl.id) },
+                                        onPlayDirect = { onPlayLocal(pl, null) },
+                                    )
+                                }
+                            }
+                            if (pair.size == 1) {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Oído hace poco
+        item(key = "historyHeader") {
+            Text(
+                text = "Oído hace poco",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+            )
+        }
 
         if (history.isEmpty()) {
-            Text(
-                text = "Aún no hay canciones recientes. Busca arriba o ve a «Cuenta y Ajustes» para importar tu oto-spotify.json.",
-                fontSize = 13.sp,
-                color = Color.White.copy(alpha = 0.55f),
-            )
+            item(key = "historyEmpty") {
+                Text(
+                    text = "Aún no hay canciones recientes. Busca arriba o explora música para empezar a escuchar.",
+                    fontSize = 13.5.sp,
+                    color = Color.White.copy(alpha = 0.50f),
+                )
+            }
         } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                items(history, key = { it.id }) { h ->
-                    SongRowDesktop(
-                        title = h.title,
-                        subtitle = h.artist,
-                        isCurrent = h.id == currentMediaId,
-                        accent = palette.primary,
-                        onClick = { onPlayHeard(h) },
-                    )
-                }
+            items(history, key = { it.id }) { h ->
+                SongRowDesktop(
+                    title = h.title,
+                    subtitle = h.artist,
+                    isCurrent = h.id == currentMediaId,
+                    accent = palette.primary,
+                    onClick = { onPlayHeard(h) },
+                )
             }
         }
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun QuickCard(
-    title: String,
-    subtitle: String,
+private fun DjShelfCard(
     accent: Color,
-    icon: @Composable () -> Unit,
     onClick: () -> Unit,
-    onPlayDirect: (() -> Unit)? = null,
+) {
+    var spinning by remember { mutableStateOf(false) }
+    var angle by remember { mutableFloatStateOf(-35f) }
+    LaunchedEffect(spinning) {
+        if (!spinning) return@LaunchedEffect
+        var last = withFrameNanos { it }
+        while (true) {
+            withFrameNanos { now ->
+                angle = (angle + (now - last) / 1e9f * 360f / 3.8f) % 360f
+                last = now
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .width(148.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.White.copy(alpha = 0.06f))
+            .border(1.dp, accent.copy(alpha = 0.24f), RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+            .onPointerEvent(PointerEventType.Enter) { spinning = true }
+            .onPointerEvent(PointerEventType.Exit) { spinning = false }
+            .padding(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(124.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(
+                    Brush.radialGradient(
+                        listOf(Color(0xFF261D38), Color(0xFF130E1F)),
+                    ),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(Modifier.size(116.dp)) {
+                val r = size.minDimension * 0.44f
+                val center = Offset(size.width / 2, size.height / 2)
+                drawCircle(Color.Black.copy(alpha = 0.45f), r * 1.02f, center + Offset(0f, r * 0.03f))
+                drawCircle(Color(0xFF121214), r, center)
+                // Surcos del vinilo
+                var g = 0.46f
+                while (g < 0.96f) {
+                    drawCircle(Color.White.copy(alpha = 0.05f), r * g, center, style = Stroke(width = r * 0.009f))
+                    g += 0.045f * (1.2f - g)
+                }
+                // Brillo de luz sobre el disco
+                for (start in listOf(-70f, 110f)) {
+                    drawArc(
+                        Brush.radialGradient(listOf(Color.White.copy(alpha = 0.12f), Color.Transparent), center, r),
+                        start, 34f, useCenter = true, topLeft = center - Offset(r, r), size = Size(r * 2, r * 2),
+                    )
+                }
+                // Galleta central
+                drawCircle(accent, r * 0.36f, center)
+                rotate(angle, center) {
+                    drawCircle(Color.White.copy(alpha = 0.90f), r * 0.05f, center + Offset(r * 0.22f, 0f))
+                    drawArc(
+                        Color.White.copy(alpha = 0.40f), -40f, 80f, useCenter = false,
+                        topLeft = center - Offset(r * 0.28f, r * 0.28f), size = Size(r * 0.56f, r * 0.56f),
+                        style = Stroke(width = r * 0.02f),
+                    )
+                }
+                drawCircle(Color(0xFF121214), r * 0.04f, center)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "DJ de Oto",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            maxLines = 1,
+        )
+        Text(
+            text = "Mezcla para ti",
+            fontSize = 12.sp,
+            color = Color.White.copy(alpha = 0.55f),
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun MeGustaShelfCard(
+    count: Int,
+    accent: Color,
+    onClick: () -> Unit,
+    onPlayDirect: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .width(148.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(
+                Brush.verticalGradient(
+                    listOf(accent.copy(alpha = 0.28f), Color(0x33120E1F)),
+                ),
+            )
+            .border(1.dp, accent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(124.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(
+                    Brush.radialGradient(
+                        listOf(accent.copy(alpha = 0.35f), Color(0x22120E1F)),
+                    ),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Favorite,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(46.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "Me gusta",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            maxLines = 1,
+        )
+        Text(
+            text = "$count canciones",
+            fontSize = 12.sp,
+            color = Color.White.copy(alpha = 0.55f),
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun PlaylistShelfCard(
+    playlist: LocalPlaylist,
+    accent: Color,
+    onClick: () -> Unit,
+    onPlayDirect: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .width(148.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.White.copy(alpha = 0.06f))
+            .border(1.dp, accent.copy(alpha = 0.24f), RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(124.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color.White.copy(alpha = 0.08f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.QueueMusic,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(42.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = playlist.name,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = "${playlist.songs.size} canciones",
+            fontSize = 12.sp,
+            color = Color.White.copy(alpha = 0.55f),
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun PlaylistTileDesktop(
+    playlist: LocalPlaylist,
+    accent: Color,
+    onClick: () -> Unit,
+    onPlayDirect: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(68.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(Color.White.copy(alpha = 0.06f))
-            .border(1.dp, accent.copy(alpha = 0.22f), RoundedCornerShape(16.dp))
+            .background(Color.White.copy(alpha = 0.05f))
+            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(42.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .size(46.dp)
+                .clip(RoundedCornerShape(10.dp))
                 .background(accent.copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center,
         ) {
-            icon()
+            Icon(
+                imageVector = Icons.Rounded.LibraryMusic,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(24.dp),
+            )
         }
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(subtitle, fontSize = 12.sp, color = Color.White.copy(alpha = 0.58f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                text = playlist.name,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${playlist.songs.size} canciones · Lista propia",
+                fontSize = 12.sp,
+                color = Color.White.copy(alpha = 0.50f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
-        if (onPlayDirect != null) {
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(accent)
-                    .clickable(onClick = onPlayDirect),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Rounded.PlayArrow, "Reproducir", tint = Color(0xFF140E21), modifier = Modifier.size(18.dp))
-            }
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(accent.copy(alpha = 0.20f))
+                .clickable(onClick = onPlayDirect),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.PlayArrow,
+                contentDescription = "Reproducir lista",
+                tint = accent,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }
