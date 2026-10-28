@@ -60,6 +60,7 @@ import io.github.iaguito22.oto.desktop.playback.DesktopPlayerConnection
 import io.github.iaguito22.oto.desktop.ui.ArtworkLoader
 import io.github.iaguito22.oto.desktop.ui.ArtworkPalette
 import io.github.iaguito22.oto.desktop.ui.DesktopMenuSheet
+import io.github.iaguito22.oto.desktop.ui.DesktopQueuePanel
 import io.github.iaguito22.oto.desktop.ui.DesktopStage
 import io.github.iaguito22.oto.desktop.ui.OtoFontFamily
 import io.github.iaguito22.oto.desktop.ui.OtoTypography
@@ -147,6 +148,7 @@ fun main() {
         }
 
         var menuOpen by remember { mutableStateOf(false) }
+        var queueOpen by remember { mutableStateOf(false) }
         var menuTab by remember { mutableIntStateOf(0) } // 0 = Tu música, 1 = Explorar
         var menuTextInputFocused by remember { mutableStateOf(false) }
         var savingTrack by remember { mutableStateOf<Heard?>(null) }
@@ -185,11 +187,16 @@ fun main() {
                             savingTrack = null
                             true
                         }
+                        ev.key == Key.Escape && queueOpen -> {
+                            queueOpen = false
+                            true
+                        }
                         ev.key == Key.Escape && menuOpen -> {
                             menuOpen = false
                             true
                         }
                         (ev.isCtrlPressed && ev.key == Key.K) || (ev.isCtrlPressed && ev.key == Key.F) -> {
+                            queueOpen = false
                             menuOpen = !menuOpen
                             true
                         }
@@ -201,11 +208,13 @@ fun main() {
                         }
                         ev.key == Key.F1 -> {
                             menuTab = 0
+                            queueOpen = false
                             menuOpen = true
                             true
                         }
                         ev.key == Key.F2 -> {
                             menuTab = 1
+                            queueOpen = false
                             menuOpen = true
                             true
                         }
@@ -337,6 +346,7 @@ fun main() {
                         val now = System.currentTimeMillis()
                         if (now - lastWheelToggleMs > 280L) {
                             if (!menuOpen && dy > 0.5f) {
+                                queueOpen = false
                                 menuOpen = true
                                 lastWheelToggleMs = now
                             }
@@ -409,7 +419,10 @@ fun main() {
                         }
                         menuOpen = true
                     },
-                    onOpenMenu = { menuOpen = true },
+                    onOpenMenu = {
+                        queueOpen = false
+                        menuOpen = true
+                    },
                 )
 
                 DesktopMenuSheet(
@@ -418,6 +431,10 @@ fun main() {
                     isPlaying = nowPlaying.playing,
                     onTextInputFocusChange = { menuTextInputFocused = it },
                     onToggleOpen = { menuOpen = it },
+                    onOpenQueue = {
+                        menuOpen = false
+                        queueOpen = true
+                    },
                     menu = menu,
                     prefs = prefs,
                     importer = importer,
@@ -469,6 +486,26 @@ fun main() {
                             cue = if (willBeLiked) CueInfo(Icons.Rounded.Favorite, "Guardado en Me gusta") else CueInfo(Icons.Rounded.FavoriteBorder, "Retirado de Me gusta")
                         }
                     },
+                )
+
+                // La cola se superpone al escenario (no vive dentro del menú) y se cierra con Escape.
+                DesktopQueuePanel(
+                    open = queueOpen,
+                    queue = queue,
+                    currentMediaId = nowPlaying.id,
+                    shuffle = shuffle,
+                    loop = loop,
+                    palette = palette,
+                    onToggleShuffle = { player.setShuffle(!shuffle) },
+                    onToggleLoop = { player.setLoop(!loop) },
+                    onMove = player::move,
+                    onRemove = player::remove,
+                    onClearQueue = player::clearQueue,
+                    onSkipTo = { idx ->
+                        player.skipTo(idx)
+                        queueOpen = false
+                    },
+                    onClose = { queueOpen = false },
                 )
 
                 // Modal emergente de guardado en listas (accesible desde Stage, Menú y atajo de teclado B)

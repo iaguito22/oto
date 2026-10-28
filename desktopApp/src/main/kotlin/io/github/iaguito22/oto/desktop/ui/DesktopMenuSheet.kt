@@ -199,7 +199,7 @@ import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
 
-private enum class MenuSubView { None, Settings, Queue, Import, Downloads }
+private enum class MenuSubView { None, Settings, Import, Downloads }
 
 /** El id con el que una carpeta suena como una lista (y se vuelve a abrir desde lo que suena). */
 private const val FOLDER_PREFIX = "folder:"
@@ -219,6 +219,7 @@ fun DesktopMenuSheet(
     isPlaying: Boolean = false,
     onTextInputFocusChange: (Boolean) -> Unit = {},
     onToggleOpen: (Boolean) -> Unit,
+    onOpenQueue: () -> Unit = {},
     menu: MenuController,
     prefs: Prefs,
     importer: Importer,
@@ -844,12 +845,10 @@ fun DesktopMenuSheet(
                                 SheetCircleIconButton(
                                     icon = Icons.AutoMirrored.Rounded.QueueMusic,
                                     tooltip = "Cola de reproducción",
-                                    active = subView == MenuSubView.Queue,
+                                    active = false,
                                     accent = palette.primary,
                                     badge = if (queue.isNotEmpty()) "${queue.size}" else null,
-                                    onClick = {
-                                        subView = if (subView == MenuSubView.Queue) MenuSubView.None else MenuSubView.Queue
-                                    },
+                                    onClick = onOpenQueue,
                                 )
                                 SheetCircleIconButton(
                                     icon = Icons.Rounded.Settings,
@@ -924,21 +923,6 @@ fun DesktopMenuSheet(
                                         },
                                         onPlayLocal = { list -> onPlayLocal(list, null, false); onToggleOpen(false) },
                                         onPlaySong = { song -> onPlaySong(song); onToggleOpen(false) },
-                                    )
-                                }
-                                subView == MenuSubView.Queue -> {
-                                    QueuePane(
-                                        queue = queue,
-                                        currentMediaId = currentMediaId,
-                                        shuffle = shuffle,
-                                        loop = loop,
-                                        palette = palette,
-                                        onToggleShuffle = { onSetShuffle(!shuffle) },
-                                        onToggleLoop = { onSetLoop(!loop) },
-                                        onMove = onMoveQueue,
-                                        onRemove = onRemoveQueue,
-                                        onClearQueue = onClearQueue,
-                                        onSkipTo = { idx -> onSkipToQueue(idx); onToggleOpen(false) },
                                     )
                                 }
                                 topPage is Page.Folder -> {
@@ -4120,7 +4104,7 @@ private fun TopResultCard(
 }
 
 @Composable
-private fun QueuePane(
+internal fun QueuePane(
     queue: List<QueueEntry>,
     currentMediaId: String?,
     shuffle: Boolean,
@@ -4132,20 +4116,25 @@ private fun QueuePane(
     onRemove: (index: Int) -> Unit,
     onClearQueue: () -> Unit = {},
     onSkipTo: (Int) -> Unit,
+    onClose: (() -> Unit)? = null,
 ) {
-    if (queue.isEmpty()) {
-        Text("La cola está vacía.", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
-        return
-    }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Column {
-                Text("Cola de reproducción", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                Text("${queue.size} canciones en total", fontSize = 12.sp, color = Color.White.copy(alpha = 0.6f))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "Cola de reproducción",
+                    style = OtoType.section,
+                    color = Color.White,
+                )
+                Text(
+                    text = if (queue.isEmpty()) "Nada en cola" else "${queue.size} canciones en total",
+                    style = OtoType.rowSub,
+                    color = Color.White.copy(alpha = 0.62f),
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (queue.size > 1) {
@@ -4167,27 +4156,62 @@ private fun QueuePane(
                     icon = Icons.Rounded.Repeat,
                     tooltip = if (loop) "Bucle activo" else "Activar bucle",
                     active = loop,
-                    accent = palette.secondary,
+                    accent = palette.primary,
                     onClick = onToggleLoop,
                 )
+                if (onClose != null) {
+                    SheetCircleIconButton(
+                        icon = Icons.Rounded.Close,
+                        tooltip = "Cerrar (Esc)",
+                        active = false,
+                        accent = palette.primary,
+                        onClick = onClose,
+                    )
+                }
             }
         }
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            itemsIndexed(queue, key = { idx, e -> "${e.id}-$idx" }) { idx, entry ->
-                QueueRowDesktop(
-                    index = idx + 1,
-                    title = entry.title,
-                    subtitle = entry.artist,
-                    artwork = entry.artwork,
-                    isCurrent = entry.id == currentMediaId,
-                    accent = palette.primary,
-                    canMoveUp = idx > 0,
-                    canMoveDown = idx < queue.lastIndex,
-                    onClick = { onSkipTo(idx) },
-                    onMoveUp = { onMove(idx, idx - 1) },
-                    onMoveDown = { onMove(idx, idx + 1) },
-                    onRemove = { onRemove(idx) },
-                )
+        if (queue.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.30f),
+                        modifier = Modifier.size(38.dp),
+                    )
+                    Text(
+                        text = "La cola está vacía",
+                        style = OtoType.rowTitle,
+                        color = Color.White.copy(alpha = 0.82f),
+                    )
+                    Text(
+                        text = "Pon algo a sonar y aquí verás lo que viene después.",
+                        style = OtoType.rowSub,
+                        color = Color.White.copy(alpha = 0.52f),
+                    )
+                }
+            }
+        } else {
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                itemsIndexed(queue, key = { idx, e -> "${e.id}-$idx" }) { idx, entry ->
+                    QueueRowDesktop(
+                        index = idx + 1,
+                        title = entry.title,
+                        subtitle = entry.artist,
+                        artwork = entry.artwork,
+                        isCurrent = entry.id == currentMediaId,
+                        accent = palette.primary,
+                        canMoveUp = idx > 0,
+                        canMoveDown = idx < queue.lastIndex,
+                        onClick = { onSkipTo(idx) },
+                        onMoveUp = { onMove(idx, idx - 1) },
+                        onMoveDown = { onMove(idx, idx + 1) },
+                        onRemove = { onRemove(idx) },
+                    )
+                }
             }
         }
     }
