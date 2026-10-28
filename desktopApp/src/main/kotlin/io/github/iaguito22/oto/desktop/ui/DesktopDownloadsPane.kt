@@ -39,10 +39,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.metrolist.innertube.models.SongItem
 import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.LIKED_ID
@@ -110,7 +108,7 @@ internal fun DownloadsPane(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RoundButton(MobileIcons.arrowBack, "Volver", onBack)
                     Spacer(Modifier.width(10.dp))
-                    Text("Descargas", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFFFFFFF))
+                    Text("Descargas", style = OtoType.title, color = Color(0xFFFFFFFF))
                 }
                 val parts = buildList {
                     if (done > 0 || size > 0L) add("$done ${if (done == 1) "canción" else "canciones"} · ${formatBytes(size)}")
@@ -119,7 +117,7 @@ internal fun DownloadsPane(
                 if (entries.isNotEmpty()) {
                     Text(
                         "Suenan sin conexión. ${parts.joinToString(" · ")}",
-                        fontSize = 13.sp,
+                        style = OtoType.rowSub,
                         color = Color.White.copy(alpha = 0.58f),
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     )
@@ -147,10 +145,10 @@ internal fun DownloadsPane(
                 ) {
                     Icon(MobileIcons.downloadOffline, null, Modifier.size(44.dp), tint = Color.White.copy(alpha = 0.35f))
                     Spacer(Modifier.height(10.dp))
-                    Text("Nada descargado", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
+                    Text("Nada descargado", style = OtoType.rowTitle, color = Color.White.copy(alpha = 0.8f))
                     Text(
                         "En una lista, abre ··· y elige «Descargar». Una canción suelta: su ··· → «Descargar».",
-                        fontSize = 13.sp,
+                        style = OtoType.rowSub,
                         color = Color.White.copy(alpha = 0.5f),
                         modifier = Modifier.padding(horizontal = 40.dp, vertical = 6.dp),
                     )
@@ -226,9 +224,7 @@ internal fun DownloadsPane(
 private fun SectionLabel(text: String) {
     Text(
         text.uppercase(),
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 0.8.sp,
+        style = OtoType.label,
         color = Color.White.copy(alpha = 0.45f),
         modifier = Modifier.padding(start = 12.dp, top = 18.dp, bottom = 6.dp),
     )
@@ -287,8 +283,8 @@ private fun ListRow(
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(name, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(status, fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.58f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(name, style = OtoType.rowTitle, color = Color(0xFFFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(status, style = OtoType.rowSub, color = Color.White.copy(alpha = 0.58f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (total > 0 && done < total) {
             Icon(MobileIcons.download, null, Modifier.size(18.dp), tint = Color.White.copy(alpha = 0.5f))
@@ -346,13 +342,12 @@ private fun SongDownloadRow(
         Column(Modifier.weight(1f)) {
             Text(
                 heard.title,
-                fontSize = 14.5.sp,
-                fontWeight = FontWeight.Bold,
+                style = OtoType.rowTitle,
                 color = if (isCurrent) accent else Color(0xFFFFFFFF),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text("${heard.artist} · $status", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.58f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${heard.artist} · $status", style = OtoType.rowSub, color = Color.White.copy(alpha = 0.58f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         RemoveButton(onRemove)
     }

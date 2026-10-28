@@ -4955,7 +4955,7 @@ private fun SettingsAndAccountPane(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    "Oto 1.2.0 · GPL-3.0",
+                    "Oto 1.2.2 · GPL-3.0",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White.copy(alpha = 0.50f),
