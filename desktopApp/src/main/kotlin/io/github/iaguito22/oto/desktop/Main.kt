@@ -22,6 +22,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -172,6 +173,7 @@ fun main() {
             onCloseRequest = ::exitApplication,
             state = windowState,
             title = "Oto",
+            icon = painterResource("oto-icon.png"),
             onPreviewKeyEvent = { ev ->
                 if (ev.type == KeyEventType.KeyDown) {
                     lastActivityMs = System.currentTimeMillis()

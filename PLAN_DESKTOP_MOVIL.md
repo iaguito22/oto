@@ -7,7 +7,7 @@ Decisiones tomadas con el usuario (28/10/2026):
 - **Escenario:** se conserva la distribución de la app instalada (carátula cuadrada redondeada, título/artista debajo, letra a la derecha, barra superior de origen y tiempo/calidad). Nada de corona circular.
 - **Colores:** paleta neutra del móvil (`#0B0B0B`, blancos con alfa `.62/.36`) y **un solo acento** extraído de la carátula. Fuera morado/melocotón/azul fijos.
 - **Tipografía:** Rubik + escala `OtoType` exacta. Fuera Plus Jakarta y los tamaños M3 por defecto.
-- **Menú:** hoja flotante grande con la estructura móvil exacta (pestañas arriba, descargas + ajustes, buscador abajo, navegación dentro de la hoja, avisos con deshacer). Ancho adaptativo.
+- **Menú:** hoja flotante grande con la estructura móvil exacta (pestañas arriba, descargas + ajustes, buscador arriba, en la cabecera, navegación dentro de la hoja, avisos con deshacer). Ancho adaptativo.
 - **Cola:** panel inferior que se superpone al escenario y se cierra con Escape.
 - **Letra:** panel fijo a la derecha (no hoja).
 - **Interacción:** se mantienen los atajos y el hover actuales; no se copian los gestos móviles.
@@ -36,3 +36,31 @@ Decisiones tomadas con el usuario (28/10/2026):
 - `:core` puede cambiar si `:app` sigue compilando y los tests pasan.
 - Cada fase: `JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :core:test :app:compileDebugKotlin :desktopApp:compileKotlin`.
 - Commits `tipo: resumen` en español, email noreply.
+
+## Estado (29/10/2026)
+
+Hechas y probadas en ejecución, con un commit por fase:
+
+1. Login con Chrome temporal + CDP.
+2. Descargas reales (reanudables, `.part`, índice, reproducción sin red).
+3. Carpetas, fijadas, «Mover a carpeta…» y renombrar con deshacer.
+4. Tokens neutros y `OtoType`; acento único de la carátula.
+6. Menú móvil con buscador arriba y avisos con deshacer.
+7. Cola superpuesta que se cierra con Escape o clic fuera.
+8. Ajustes en orden móvil y «Espacio en el disco».
+9. Iconos vectoriales del móvil (`MobileIcons`, leídos de los XML copiados).
+10. Empaquetado Linux con `desktopApp/package-linux.sh`.
+
+Pendiente de acabado visual: extender `OtoType`/`Radius`/`Space`/`Motion` a descargas,
+detalle de lista y ajustes.
+
+## Empaquetar en Linux
+
+```sh
+JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./desktopApp/package-linux.sh
+```
+
+Deja `desktopApp/build/dist/Oto-<versión>-x86_64.AppImage` y
+`desktopApp/build/dist/oto_<versión>_amd64.deb`. En Arch no hay `dpkg-deb`, así que
+jpackage no puede crear el `.deb`; el script lo arma con `ar` + `tar` (mismo formato).
+El AppImage necesita `appimagetool`, que el script descarga si no está.
