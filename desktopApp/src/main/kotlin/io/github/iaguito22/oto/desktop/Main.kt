@@ -441,6 +441,8 @@ fun main() {
                     onSaveTrack = { savingTrack = it },
                     nowPlaying = nowPlaying,
                     liked = isLiked,
+                    volume = volume,
+                    onAdjustVolume = player::adjustVolume,
                     onTogglePlay = {
                         val willPlay = !player.state.value.playing
                         player.toggle()

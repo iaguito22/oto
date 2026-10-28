@@ -57,13 +57,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.VolumeDown
+import androidx.compose.material.icons.automirrored.rounded.VolumeMute
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.Sort
+import kotlin.math.roundToInt
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
@@ -228,6 +233,8 @@ fun DesktopMenuSheet(
     onSaveTrack: (Heard) -> Unit = {},
     nowPlaying: NowPlaying? = null,
     liked: Boolean = false,
+    volume: Float = 1.0f,
+    onAdjustVolume: (Float) -> Unit = {},
     onTogglePlay: () -> Unit = {},
     onPrev: () -> Unit = {},
     onNext: () -> Unit = {},
@@ -244,6 +251,7 @@ fun DesktopMenuSheet(
     val cloudState by cloud.state.collectAsState()
     val scope = rememberCoroutineScope()
 
+    var preMuteVol by remember { mutableFloatStateOf(1f) }
     var subView by remember { mutableStateOf(MenuSubView.None) }
     var showAllLists by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
@@ -517,12 +525,12 @@ fun DesktopMenuSheet(
                             }
                         }
 
-                        // 3. Mini controles para accionar mientras estás en el menú
-                        if (nowPlaying != null && !nowPlaying.title.isNullOrBlank()) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
+                        // 3. Mini controles para accionar mientras estás en el menú + Control de volumen (Opción C)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            if (nowPlaying != null && !nowPlaying.title.isNullOrBlank()) {
                                 Box(
                                     modifier = Modifier
                                         .size(28.dp)
@@ -574,9 +582,97 @@ fun DesktopMenuSheet(
                                         modifier = Modifier.size(16.dp),
                                     )
                                 }
+                                Spacer(Modifier.width(2.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .width(1.dp)
+                                        .height(14.dp)
+                                        .background(Color.White.copy(alpha = 0.18f)),
+                                )
+                                Spacer(Modifier.width(2.dp))
                             }
-                        } else {
-                            Spacer(Modifier.width(1.dp))
+
+                            // Control de volumen interactivo (Opción C)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier
+                                    .pointerHoverIcon(PointerIcon.Default)
+                                    .onPointerEvent(PointerEventType.Scroll) { ev ->
+                                        val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                                        if (dy < -0.1f) onAdjustVolume(0.04f)
+                                        else if (dy > 0.1f) onAdjustVolume(-0.04f)
+                                    },
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(26.dp)
+                                        .clip(CircleShape)
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .clickable {
+                                            if (volume > 0.001f) {
+                                                preMuteVol = volume
+                                                onAdjustVolume(-volume)
+                                            } else {
+                                                onAdjustVolume(if (preMuteVol > 0.05f) preMuteVol else 0.7f)
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = when {
+                                            volume <= 0.001f -> Icons.AutoMirrored.Rounded.VolumeMute
+                                            volume < 0.5f -> Icons.AutoMirrored.Rounded.VolumeDown
+                                            else -> Icons.AutoMirrored.Rounded.VolumeUp
+                                        },
+                                        contentDescription = if (volume <= 0.001f) "Desmutear" else "Silenciar",
+                                        tint = Color.White.copy(alpha = 0.82f),
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .width(68.dp)
+                                        .height(18.dp)
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .pointerInput(Unit) {
+                                            detectTapGestures { offset ->
+                                                val ratio = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                                                onAdjustVolume(ratio - volume)
+                                            }
+                                        }
+                                        .pointerInput(Unit) {
+                                            detectHorizontalDragGestures { change, dragAmount ->
+                                                change.consume()
+                                                onAdjustVolume(dragAmount / 68f)
+                                            }
+                                        },
+                                    contentAlignment = Alignment.CenterStart,
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(4.dp)
+                                            .clip(CircleShape)
+                                            .background(Color.White.copy(alpha = 0.20f)),
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .fillMaxWidth(volume.coerceIn(0f, 1f))
+                                                .clip(CircleShape)
+                                                .background(palette.primary),
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "${(volume * 100f).roundToInt()}%",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White.copy(alpha = 0.75f),
+                                    modifier = Modifier.width(32.dp),
+                                )
+                            }
                         }
                     }
 

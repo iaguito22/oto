@@ -225,12 +225,18 @@ fun DesktopStage(
     var isVolHovered by remember { mutableStateOf(false) }
     var preMuteVol by remember { mutableFloatStateOf(1f) }
     var isPointerOverLyrics by remember { mutableStateOf(false) }
+    var showVolOsd by remember { mutableStateOf(false) }
+    LaunchedEffect(volume) {
+        showVolOsd = true
+        kotlinx.coroutines.delay(1800L)
+        showVolOsd = false
+    }
     val volAlpha by animateFloatAsState(
         targetValue = when {
+            menuOpen -> 0f
             isVolHovered -> 1f
-            menuOpen -> 0.15f
-            isIdle -> 0.40f
-            else -> 0.85f
+            showVolOsd -> 0.85f
+            else -> 0f
         },
         animationSpec = tween(220),
         label = "volAlpha",
@@ -470,7 +476,10 @@ fun DesktopStage(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(top = 26.dp, end = 32.dp)
-                .graphicsLayer { alpha = volAlpha }
+                .graphicsLayer {
+                    alpha = volAlpha
+                    translationY = (1f - volAlpha) * -8f
+                }
                 .shadow(20.dp, CircleShape, ambientColor = animPal.primary.copy(alpha = 0.35f), spotColor = Color.Black)
                 .clip(CircleShape)
                 .background(
