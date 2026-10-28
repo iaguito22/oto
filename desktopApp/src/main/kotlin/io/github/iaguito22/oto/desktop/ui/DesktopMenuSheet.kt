@@ -80,7 +80,11 @@ import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.ui.zIndex
+import androidx.compose.material.icons.rounded.CreateNewFolder
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FileUpload
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
@@ -196,6 +200,10 @@ import java.io.File
 
 private enum class MenuSubView { None, Settings, Queue, Import, Downloads }
 
+/** El id con el que una carpeta suena como una lista (y se vuelve a abrir desde lo que suena). */
+private const val FOLDER_PREFIX = "folder:"
+
+
 /**
  * Cajón inferior (`Sheet` estilo prototipo 2 + `fusion.html`):
  * - Píldora inferior de asomo (`Tu música · Explorar · Buscar`) siempre accesible.
@@ -253,6 +261,7 @@ fun DesktopMenuSheet(
     val importState by importer.state.collectAsState()
     val downloadEntries by downloads.entries.collectAsState()
     val downloadLists by prefs.downloadLists.collectAsState(initial = emptySet())
+    val folders by prefs.folders.collectAsState(initial = emptySet())
     val session by account.session.collectAsState()
     val cloudState by cloud.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -930,6 +939,41 @@ fun DesktopMenuSheet(
                                         onSkipTo = { idx -> onSkipToQueue(idx); onToggleOpen(false) },
                                     )
                                 }
+                                topPage is Page.Folder -> {
+                                    val inside = playlists.filter { it.folder == topPage.name }
+                                    FolderDetailPane(
+                                        name = topPage.name,
+                                        lists = inside,
+                                        allPlaylists = playlists,
+                                        palette = palette,
+                                        currentMediaId = currentMediaId,
+                                        onBack = menu::closeDetail,
+                                        onOpenLocal = menu::openLocal,
+                                        onPlayFolder = { songs ->
+                                            onPlayLocal(
+                                                LocalPlaylist(FOLDER_PREFIX + topPage.name, topPage.name, songs),
+                                                null,
+                                                false,
+                                            )
+                                            onToggleOpen(false)
+                                        },
+                                        onToggleInside = { pl, isInside ->
+                                            scope.launch { prefs.moveToFolder(pl.id, if (isInside) topPage.name else null) }
+                                        },
+                                        onRename = { newName ->
+                                            scope.launch {
+                                                prefs.renameFolder(topPage.name, newName)
+                                                menu.renameFolder(topPage.name, newName)
+                                            }
+                                        },
+                                        onUngroup = {
+                                            scope.launch {
+                                                prefs.ungroup(topPage.name)
+                                                menu.closeDetail()
+                                            }
+                                        },
+                                    )
+                                }
                                 topPage is Page.Local -> {
                                     val list = if (topPage.id == LIKED_ID) likedList else playlists.firstOrNull { it.id == topPage.id }
                                     if (list != null) {
@@ -958,6 +1002,14 @@ fun DesktopMenuSheet(
                                             prefs = prefs,
                                             downloads = downloads,
                                             downloadLists = downloadLists,
+                                            folders = folders,
+                                            onMoveToFolder = { folder -> scope.launch { prefs.moveToFolder(list.id, folder) } },
+                                            onCreateFolderAndMove = { name ->
+                                                scope.launch {
+                                                    prefs.createFolder(name)
+                                                    prefs.moveToFolder(list.id, name)
+                                                }
+                                            },
                                         )
                                     }
                                 }
@@ -1004,8 +1056,13 @@ fun DesktopMenuSheet(
                                     AllListsSubPane(
                                         likedList = likedList,
                                         playlists = playlists,
+                                        folders = folders,
                                         palette = palette,
                                         onBack = { showAllLists = false },
+                                        onOpenFolder = { name ->
+                                            showAllLists = false
+                                            menu.openFolder(name)
+                                        },
                                         onOpenLocal = { id ->
                                             showAllLists = false
                                             menu.openLocal(id)
@@ -1027,11 +1084,13 @@ fun DesktopMenuSheet(
                                     YourMusicPane(
                                         likedList = likedList,
                                         playlists = playlists,
+                                        folders = folders,
                                         history = history,
                                         palette = palette,
                                         currentMediaId = currentMediaId,
                                         onOpenLocal = menu::openLocal,
                                         onOpenSmart = menu::openSmart,
+                                        onOpenFolder = menu::openFolder,
                                         onOpenAllLists = { showAllLists = true },
                                         onPlayLocal = { list, idx -> onPlayLocal(list, idx, list.id == LIKED_ID); onToggleOpen(false) },
                                         onPlayDj = { onPlayDj(); onToggleOpen(false) },
@@ -1043,6 +1102,7 @@ fun DesktopMenuSheet(
                                                 menu.openLocal(newId)
                                             }
                                         },
+                                        onCreateFolder = { name -> scope.launch { prefs.createFolder(name) } },
                                     )
                                 }
                                 else -> {
@@ -1285,27 +1345,47 @@ private fun DesktopSegmentedTabs(
 private fun YourMusicPane(
     likedList: LocalPlaylist,
     playlists: List<LocalPlaylist>,
+    folders: Set<String>,
     history: List<Heard>,
     palette: ArtworkPalette,
     currentMediaId: String?,
     onOpenLocal: (String) -> Unit,
     onOpenSmart: (LocalPlaylist) -> Unit,
+    onOpenFolder: (String) -> Unit,
     onOpenAllLists: () -> Unit,
     onPlayLocal: (LocalPlaylist, Int?) -> Unit,
     onPlayDj: () -> Unit,
     onPlayHeard: (Heard) -> Unit,
     onSaveTo: (Heard) -> Unit,
     onCreatePlaylist: (String) -> Unit,
+    onCreateFolder: (String) -> Unit,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
+    var showFolderDialog by remember { mutableStateOf(false) }
     var newListName by remember { mutableStateOf("") }
+    var newFolderName by remember { mutableStateOf("") }
     val createFocusRequester = remember { FocusRequester() }
+    val folderFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(showCreateDialog) {
         if (showCreateDialog) {
             kotlinx.coroutines.delay(100L)
             createFocusRequester.requestFocus()
         }
+    }
+    LaunchedEffect(showFolderDialog) {
+        if (showFolderDialog) {
+            kotlinx.coroutines.delay(100L)
+            folderFocusRequester.requestFocus()
+        }
+    }
+
+    // Una carpeta existe aunque esté vacía: las que aún no tienen listas también salen.
+    val folderLists = remember(playlists, folders) {
+        val used = playlists.mapNotNullTo(HashSet()) { it.folder }
+        folders.filter { it !in used }.sorted().map { it to emptyList<LocalPlaylist>() } +
+            playlists.groupBy { it.folder }.filterKeys { it != null }
+                .map { (folder, lists) -> folder!! to lists }
     }
 
     // Si el usuario tiene menos de 2 listas creadas, completamos los 2 huecos del estante fijado de 4
@@ -1350,23 +1430,46 @@ private fun YourMusicPane(
                     letterSpacing = (-0.4).sp,
                     color = Color(0xFFF3EEFF),
                 )
-                var newHovered by remember { mutableStateOf(false) }
                 Row(
-                    modifier = Modifier
-                        .height(34.dp)
-                        .clip(CircleShape)
-                        .background(if (newHovered) Color.White.copy(alpha = 0.13f) else Color.White.copy(alpha = 0.08f))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
-                        .pointerHoverIcon(PointerIcon.Hand)
-                        .onPointerEvent(PointerEventType.Enter) { newHovered = true }
-                        .onPointerEvent(PointerEventType.Exit) { newHovered = false }
-                        .clickable { showCreateDialog = !showCreateDialog }
-                        .padding(horizontal = 14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Icon(Icons.Rounded.Add, null, tint = Color(0xFFF3EEFF), modifier = Modifier.size(15.dp))
-                    Text("Nueva", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF))
+                    var newHovered by remember { mutableStateOf(false) }
+                    Row(
+                        modifier = Modifier
+                            .height(34.dp)
+                            .clip(CircleShape)
+                            .background(if (newHovered) Color.White.copy(alpha = 0.13f) else Color.White.copy(alpha = 0.08f))
+                            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .onPointerEvent(PointerEventType.Enter) { newHovered = true }
+                            .onPointerEvent(PointerEventType.Exit) { newHovered = false }
+                            .clickable { showCreateDialog = !showCreateDialog; showFolderDialog = false }
+                            .padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(Icons.Rounded.Add, null, tint = Color(0xFFF3EEFF), modifier = Modifier.size(15.dp))
+                        Text("Nueva", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF))
+                    }
+                    var folderHovered by remember { mutableStateOf(false) }
+                    Row(
+                        modifier = Modifier
+                            .height(34.dp)
+                            .clip(CircleShape)
+                            .background(if (folderHovered) Color.White.copy(alpha = 0.13f) else Color.White.copy(alpha = 0.08f))
+                            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .onPointerEvent(PointerEventType.Enter) { folderHovered = true }
+                            .onPointerEvent(PointerEventType.Exit) { folderHovered = false }
+                            .clickable { showFolderDialog = !showFolderDialog; showCreateDialog = false }
+                            .padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(Icons.Rounded.CreateNewFolder, null, tint = Color(0xFFF3EEFF), modifier = Modifier.size(15.dp))
+                        Text("Carpeta", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF))
+                    }
                 }
             }
         }
@@ -1433,6 +1536,115 @@ private fun YourMusicPane(
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     ) {
                         Text("Cancelar", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.70f))
+                    }
+                }
+            }
+        }
+
+        // Creación inline de carpeta (Nueva → Carpeta)
+        if (showFolderDialog) {
+            item(key = "createFolderInline") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.07f))
+                        .border(1.dp, palette.primary.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    BasicTextField(
+                        value = newFolderName,
+                        onValueChange = { newFolderName = it },
+                        singleLine = true,
+                        textStyle = TextStyle(fontFamily = OtoFontFamily, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                        cursorBrush = SolidColor(palette.primary),
+                        decorationBox = { innerTextField ->
+                            if (newFolderName.isBlank()) {
+                                Text("Nombre de la nueva carpeta…", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+                            }
+                            innerTextField()
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(folderFocusRequester)
+                            .onPreviewKeyEvent { ev ->
+                                if (ev.type == KeyEventType.KeyDown && ev.key == Key.Enter && newFolderName.isNotBlank()) {
+                                    onCreateFolder(newFolderName.trim())
+                                    newFolderName = ""
+                                    showFolderDialog = false
+                                    true
+                                } else false
+                            },
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(palette.primary)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable {
+                                if (newFolderName.isNotBlank()) {
+                                    onCreateFolder(newFolderName.trim())
+                                    newFolderName = ""
+                                    showFolderDialog = false
+                                }
+                            }
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                    ) {
+                        Text("Crear", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF101214))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.08f))
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { showFolderDialog = false; newFolderName = "" }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text("Cancelar", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.70f))
+                    }
+                }
+            }
+        }
+
+        // Carpetas: se abren como una página con sus listas dentro.
+        if (folderLists.isNotEmpty()) {
+            item(key = "foldersTitle") {
+                Text(
+                    text = "Carpetas",
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.4).sp,
+                    color = Color(0xFFF3EEFF),
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+            item(key = "foldersGrid") {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    folderLists.chunked(2).forEach { rowFolders ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            rowFolders.forEach { (folder, lists) ->
+                                Box(Modifier.weight(1f)) {
+                                    FolderTileDesktop(
+                                        name = folder,
+                                        lists = lists,
+                                        accent = palette.primary,
+                                        onClick = { onOpenFolder(folder) },
+                                        onPlayDirect = {
+                                            val songs = lists.flatMap { it.songs }.distinctBy { it.id }
+                                            if (songs.isNotEmpty()) {
+                                                onPlayLocal(LocalPlaylist(FOLDER_PREFIX + folder, folder, songs), null)
+                                            }
+                                        },
+                                    )
+                                }
+                            }
+                            if (rowFolders.size == 1) Spacer(Modifier.weight(1f))
+                        }
                     }
                 }
             }
@@ -1610,9 +1822,11 @@ private fun YourMusicPane(
 private fun AllListsSubPane(
     likedList: LocalPlaylist,
     playlists: List<LocalPlaylist>,
+    folders: Set<String>,
     palette: ArtworkPalette,
     onBack: () -> Unit,
     onOpenLocal: (String) -> Unit,
+    onOpenFolder: (String) -> Unit,
     onPlayLocal: (LocalPlaylist) -> Unit,
     onCreatePlaylist: (String) -> Unit,
 ) {
@@ -1649,7 +1863,7 @@ private fun AllListsSubPane(
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("↑↓ Tu orden", "Listas", "Favoritas").forEachIndexed { idx, label ->
+            listOf("↑↓ Tu orden", "Listas", "Favoritas", "Carpetas").forEachIndexed { idx, label ->
                 MenuTabPill(
                     label = label,
                     selected = filterIdx == idx,
@@ -1658,42 +1872,104 @@ private fun AllListsSubPane(
                 )
             }
         }
-        val allItems = remember(likedList, playlists, filterIdx) {
-            val base = listOf(likedList) + playlists
+        val folderEntries = remember(playlists, folders) {
+            val used = playlists.mapNotNullTo(HashSet()) { it.folder }
+            folders.filter { it !in used }.sorted().map { it to emptyList<LocalPlaylist>() } +
+                playlists.groupBy { it.folder }.filterKeys { it != null }
+                    .map { (folder, lists) -> folder!! to lists }
+        }
+        val allItems = remember(likedList, playlists, folderEntries, filterIdx) {
             when (filterIdx) {
-                1 -> playlists
+                1 -> listOf(likedList) + playlists
                 2 -> listOf(likedList)
-                else -> base
+                3 -> emptyList()
+                else -> folderEntries.map { ListsEntry.Folder(it.first, it.second) } +
+                    (listOf(likedList) + playlists).map { ListsEntry.Playlist(it) }
             }
         }
+        val folderOnly = filterIdx == 3
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(bottom = 28.dp),
         ) {
-            val pairs = allItems.chunked(2)
-            itemsIndexed(pairs) { _, pair ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    pair.forEach { pl ->
-                        Box(Modifier.weight(1f)) {
-                            PlaylistTileDesktop(
-                                playlist = pl,
-                                accent = palette.primary,
-                                onClick = { onOpenLocal(pl.id) },
-                                onPlayDirect = { onPlayLocal(pl) },
-                            )
+            if (folderOnly) {
+                val pairs = folderEntries.chunked(2)
+                itemsIndexed(pairs) { _, pair ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        pair.forEach { (folder, lists) ->
+                            Box(Modifier.weight(1f)) {
+                                FolderTileDesktop(
+                                    name = folder,
+                                    lists = lists,
+                                    accent = palette.primary,
+                                    onClick = { onOpenFolder(folder) },
+                                    onPlayDirect = {
+                                        val songs = lists.flatMap { it.songs }.distinctBy { it.id }
+                                        if (songs.isNotEmpty()) onPlayLocal(LocalPlaylist(FOLDER_PREFIX + folder, folder, songs))
+                                    },
+                                )
+                            }
                         }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
                     }
-                    if (pair.size == 1) {
-                        Spacer(Modifier.weight(1f))
+                }
+                if (folderEntries.isEmpty()) {
+                    item(key = "noFolders") {
+                        Text(
+                            "No tienes carpetas. Crea una con «Carpeta» en Tus listas.",
+                            fontSize = 13.5.sp,
+                            color = Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(vertical = 18.dp),
+                        )
+                    }
+                }
+            } else {
+                val pairs = allItems.chunked(2)
+                itemsIndexed(pairs) { _, pair ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        pair.forEach { entry ->
+                            Box(Modifier.weight(1f)) {
+                                when (entry) {
+                                    is ListsEntry.Folder -> FolderTileDesktop(
+                                        name = entry.name,
+                                        lists = entry.lists,
+                                        accent = palette.primary,
+                                        onClick = { onOpenFolder(entry.name) },
+                                        onPlayDirect = {
+                                            val songs = entry.lists.flatMap { it.songs }.distinctBy { it.id }
+                                            if (songs.isNotEmpty()) onPlayLocal(LocalPlaylist(FOLDER_PREFIX + entry.name, entry.name, songs))
+                                        },
+                                    )
+                                    is ListsEntry.Playlist -> PlaylistTileDesktop(
+                                        playlist = entry.list,
+                                        accent = palette.primary,
+                                        onClick = { onOpenLocal(entry.list.id) },
+                                        onPlayDirect = { onPlayLocal(entry.list) },
+                                    )
+                                }
+                            }
+                        }
+                        if (pair.size == 1) {
+                            Spacer(Modifier.weight(1f))
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/** Una entrada de «Todas tus listas»: una carpeta o una lista suelta. */
+private sealed interface ListsEntry {
+    data class Folder(val name: String, val lists: List<LocalPlaylist>) : ListsEntry
+    data class Playlist(val list: LocalPlaylist) : ListsEntry
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -2130,6 +2406,107 @@ private fun PlaylistTileDesktop(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun FolderTileDesktop(
+    name: String,
+    lists: List<LocalPlaylist>,
+    accent: Color,
+    onClick: () -> Unit,
+    onPlayDirect: () -> Unit,
+) {
+    var isHovered by remember { mutableStateOf(false) }
+    val songs = remember(lists) { lists.flatMap { it.songs }.distinctBy { it.id } }
+    val firstArt = songs.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork
+    var coverBmp by remember(firstArt) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(firstArt) {
+        if (!firstArt.isNullOrBlank()) coverBmp = ArtworkLoader.load(firstArt).first
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(68.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (isHovered) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.045f))
+            .border(
+                1.dp,
+                if (isHovered) accent.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.07f),
+                RoundedCornerShape(14.dp),
+            )
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
+            .clickable(onClick = onClick)
+            .padding(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Brush.linearGradient(listOf(Color(0xFF231D33), Color(0xFF161221)))),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (coverBmp != null) {
+                Image(coverBmp!!, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
+            }
+            Icon(
+                imageVector = Icons.Rounded.Folder,
+                contentDescription = null,
+                tint = if (coverBmp != null) Color.White.copy(alpha = 0.92f) else accent,
+                modifier = Modifier.size(26.dp),
+            )
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = name,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFF3EEFF),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = folderSubtitle(lists),
+                fontSize = 12.sp,
+                color = Color.White.copy(alpha = 0.56f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (isHovered && songs.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .padding(end = 6.dp)
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(accent)
+                    .clickable(onClick = onPlayDirect),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.PlayArrow,
+                    contentDescription = "Reproducir carpeta",
+                    tint = Color(0xFF101214),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
+
+private fun folderSubtitle(lists: List<LocalPlaylist>): String {
+    val songs = lists.sumOf { it.songs.size }
+    val folderCount = when (lists.size) {
+        1 -> "1 lista"
+        else -> "${lists.size} listas"
+    }
+    return "Carpeta · $folderCount · $songs canciones"
+}
+
 @Composable
 private fun SortRow(newest: Boolean, onFlip: () -> Unit) {
     val turn by animateFloatAsState(
@@ -2166,6 +2543,365 @@ private fun SortRow(newest: Boolean, onFlip: () -> Unit) {
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
+private fun FolderDetailPane(
+    name: String,
+    lists: List<LocalPlaylist>,
+    allPlaylists: List<LocalPlaylist>,
+    palette: ArtworkPalette,
+    currentMediaId: String?,
+    onBack: () -> Unit,
+    onOpenLocal: (String) -> Unit,
+    onPlayFolder: (List<Heard>) -> Unit,
+    onToggleInside: (LocalPlaylist, Boolean) -> Unit,
+    onRename: (String) -> Unit,
+    onUngroup: () -> Unit,
+) {
+    var showMenu by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
+    var filling by remember { mutableStateOf(false) }
+    var nameInput by remember(name) { mutableStateOf(name) }
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(editing) {
+        if (editing) {
+            kotlinx.coroutines.delay(120L)
+            focusRequester.requestFocus()
+        }
+    }
+
+    val songs = remember(lists) { lists.flatMap { it.songs }.distinctBy { it.id } }
+    val cover = songs.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork
+    var coverBmp by remember(cover) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(cover) {
+        if (!cover.isNullOrBlank()) coverBmp = ArtworkLoader.load(cover).first
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+        contentPadding = PaddingValues(bottom = 28.dp),
+    ) {
+        item(key = "head") {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable(onClick = onBack),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "Volver",
+                        tint = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(92.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Brush.linearGradient(listOf(Color(0xFF2A2238), Color(0xFF17131F))))
+                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(18.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (coverBmp != null) {
+                        Image(coverBmp!!, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)))
+                    }
+                    Icon(
+                        imageVector = Icons.Rounded.Folder,
+                        contentDescription = null,
+                        tint = if (coverBmp != null) Color.White.copy(alpha = 0.95f) else palette.primary,
+                        modifier = Modifier.size(40.dp),
+                    )
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = name,
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = (-0.5).sp,
+                        color = Color(0xFFF3EEFF),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = folderSubtitle(lists),
+                        fontSize = 13.sp,
+                        color = Color.White.copy(alpha = 0.60f),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (songs.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier
+                                    .height(44.dp)
+                                    .clip(CircleShape)
+                                    .background(palette.primary)
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                                    .clickable { onPlayFolder(songs) }
+                                    .padding(horizontal = 22.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Icon(Icons.Rounded.PlayArrow, null, tint = Color(0xFF101214), modifier = Modifier.size(20.dp))
+                                Text("Reproducir", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF101214))
+                            }
+                        }
+                        Box {
+                            SheetCircleIconButton(
+                                icon = Icons.Rounded.MoreVert,
+                                tooltip = "Opciones de carpeta",
+                                active = showMenu,
+                                accent = palette.primary,
+                                onClick = { showMenu = true },
+                            )
+                            DropdownMenu(
+                                expanded = showMenu,
+                                onDismissRequest = { showMenu = false },
+                                modifier = Modifier
+                                    .background(Color(0xFF1B1726))
+                                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Añadir o quitar listas", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                    leadingIcon = { Icon(Icons.Rounded.FolderOpen, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
+                                    onClick = {
+                                        showMenu = false
+                                        editing = false
+                                        filling = !filling
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Cambiar el nombre", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                    leadingIcon = { Icon(Icons.Rounded.Edit, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
+                                    onClick = {
+                                        showMenu = false
+                                        filling = false
+                                        nameInput = name
+                                        editing = true
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Deshacer la carpeta", color = Color(0xFFFF6E6E), fontSize = 13.sp) },
+                                    leadingIcon = { Icon(Icons.Rounded.Folder, null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
+                                    onClick = {
+                                        showMenu = false
+                                        onUngroup()
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (editing) {
+            item(key = "rename") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.07f))
+                        .border(1.dp, palette.primary.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    BasicTextField(
+                        value = nameInput,
+                        onValueChange = { nameInput = it },
+                        singleLine = true,
+                        textStyle = TextStyle(fontFamily = OtoFontFamily, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                        cursorBrush = SolidColor(palette.primary),
+                        decorationBox = { innerTextField ->
+                            if (nameInput.isBlank()) {
+                                Text("Nombre de la carpeta…", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+                            }
+                            innerTextField()
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(focusRequester)
+                            .onPreviewKeyEvent { ev ->
+                                if (ev.type == KeyEventType.KeyDown && ev.key == Key.Enter && nameInput.isNotBlank()) {
+                                    onRename(nameInput.trim())
+                                    editing = false
+                                    true
+                                } else false
+                            },
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(palette.primary)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable {
+                                if (nameInput.isNotBlank()) {
+                                    onRename(nameInput.trim())
+                                    editing = false
+                                }
+                            }
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                    ) {
+                        Text("Guardar", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF101214))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.08f))
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { editing = false; nameInput = name }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text("Cancelar", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.70f))
+                    }
+                }
+            }
+        }
+
+        if (filling) {
+            item(key = "fill") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White.copy(alpha = 0.055f))
+                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(16.dp))
+                        .padding(vertical = 10.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "Marca las listas que van dentro",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White.copy(alpha = 0.72f),
+                        )
+                        MenuTabPill("Listo", selected = false, accent = palette.primary) { filling = false }
+                    }
+                    if (allPlaylists.isEmpty()) {
+                        Text(
+                            "Aún no tienes listas.",
+                            fontSize = 13.sp,
+                            color = Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        )
+                    }
+                    allPlaylists.forEach { pl ->
+                        val inside = pl.folder == name
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable { onToggleInside(pl, !inside) }
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (inside) palette.primary else Color.White.copy(alpha = 0.10f))
+                                    .border(1.dp, if (inside) palette.primary else Color.White.copy(alpha = 0.18f), RoundedCornerShape(6.dp)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (inside) {
+                                    Icon(Icons.Rounded.Check, null, tint = Color(0xFF101214), modifier = Modifier.size(14.dp))
+                                }
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text(pl.name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    text = pl.folder?.takeIf { !inside }?.let { "En «$it»" } ?: "${pl.songs.size} canciones",
+                                    fontSize = 12.sp,
+                                    color = Color.White.copy(alpha = 0.55f),
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (lists.isEmpty()) {
+            item(key = "empty") {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 46.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(Icons.Rounded.FolderOpen, null, Modifier.size(40.dp), tint = Color.White.copy(alpha = 0.32f))
+                    Text("Está vacía", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
+                    Text(
+                        "Añade listas con el botón de arriba, o desde el menú (···) de cada lista.",
+                        fontSize = 13.sp,
+                        color = Color.White.copy(alpha = 0.5f),
+                    )
+                }
+            }
+        } else {
+            items(lists, key = { it.id }) { pl ->
+                val first = pl.songs.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork
+                var bmp by remember(first) { mutableStateOf<ImageBitmap?>(null) }
+                LaunchedEffect(first) {
+                    if (!first.isNullOrBlank()) bmp = ArtworkLoader.load(first).first
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable { onOpenLocal(pl.id) }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF191622)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (bmp != null) {
+                            Image(bmp!!, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                        } else {
+                            Icon(Icons.AutoMirrored.Rounded.QueueMusic, null, Modifier.size(22.dp), tint = palette.primary)
+                        }
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(pl.name, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${pl.songs.size} canciones", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.56f), maxLines = 1)
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.35f),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
 private fun LocalPlaylistDetailPane(
     list: LocalPlaylist,
     palette: ArtworkPalette,
@@ -2178,8 +2914,13 @@ private fun LocalPlaylistDetailPane(
     prefs: Prefs? = null,
     downloads: DesktopDownloads? = null,
     downloadLists: Set<String> = emptySet(),
+    folders: Set<String> = emptySet(),
+    onMoveToFolder: ((String?) -> Unit)? = null,
+    onCreateFolderAndMove: ((String) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
+    var showMovePanel by remember { mutableStateOf(false) }
+    var moveNewFolder by remember { mutableStateOf("") }
     val sortFlipped by prefs?.sortFlipped?.collectAsState(initial = emptySet()) ?: remember { mutableStateOf(emptySet()) }
     val requestedSongs by (prefs?.downloadSongs?.collectAsState(initial = emptyList())
         ?: remember { mutableStateOf(emptyList()) })
@@ -2323,7 +3064,7 @@ private fun LocalPlaylistDetailPane(
                         onClick = { onPlayIndex(null, newest) },
                     )
 
-                    if (onDeletePlaylist != null || downloads != null) {
+                    if (onDeletePlaylist != null || downloads != null || onMoveToFolder != null) {
                         var showPlaylistMenu by remember { mutableStateOf(false) }
                         Box {
                             SheetCircleIconButton(
@@ -2358,6 +3099,17 @@ private fun LocalPlaylistDetailPane(
                                         },
                                     )
                                 }
+                                if (onMoveToFolder != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Mover a carpeta…", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                        leadingIcon = { Icon(Icons.Rounded.Folder, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
+                                        onClick = {
+                                            showPlaylistMenu = false
+                                            moveNewFolder = ""
+                                            showMovePanel = !showMovePanel
+                                        },
+                                    )
+                                }
                                 if (onDeletePlaylist != null) {
                                     DropdownMenuItem(
                                         text = { Text("Eliminar playlist", color = Color(0xFFFF6E6E), fontWeight = FontWeight.Bold, fontSize = 13.sp) },
@@ -2369,6 +3121,89 @@ private fun LocalPlaylistDetailPane(
                                     )
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showMovePanel && onMoveToFolder != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.White.copy(alpha = 0.055f))
+                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(16.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (list.folder == null) "Elige en qué carpeta va" else "Ahora en «${list.folder}»",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White.copy(alpha = 0.72f),
+                    )
+                    MenuTabPill("Listo", selected = false, accent = palette.primary) { showMovePanel = false }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    MenuTabPill(
+                        label = "Sin carpeta",
+                        selected = list.folder == null,
+                        accent = palette.primary,
+                    ) { onMoveToFolder(null) }
+                    folders.sorted().forEach { folder ->
+                        MenuTabPill(
+                            label = folder,
+                            selected = list.folder == folder,
+                            accent = palette.primary,
+                        ) { onMoveToFolder(folder) }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    BasicTextField(
+                        value = moveNewFolder,
+                        onValueChange = { moveNewFolder = it },
+                        singleLine = true,
+                        textStyle = TextStyle(fontFamily = OtoFontFamily, color = Color.White, fontSize = 13.5.sp),
+                        cursorBrush = SolidColor(palette.primary),
+                        decorationBox = { innerTextField ->
+                            if (moveNewFolder.isBlank()) {
+                                Text("Nueva carpeta…", color = Color.White.copy(alpha = 0.40f), fontSize = 13.5.sp)
+                            }
+                            innerTextField()
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.06f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .onPreviewKeyEvent { ev ->
+                                if (ev.type == KeyEventType.KeyDown && ev.key == Key.Enter && moveNewFolder.isNotBlank()) {
+                                    onCreateFolderAndMove?.invoke(moveNewFolder.trim())
+                                    moveNewFolder = ""
+                                    showMovePanel = false
+                                    true
+                                } else false
+                            },
+                    )
+                    MenuTabPill("Crear y mover", selected = false, accent = palette.primary) {
+                        if (moveNewFolder.isNotBlank()) {
+                            onCreateFolderAndMove?.invoke(moveNewFolder.trim())
+                            moveNewFolder = ""
+                            showMovePanel = false
                         }
                     }
                 }
