@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpServer
 import io.github.iaguito22.oto.OtoDirs
 import io.github.iaguito22.oto.account.Account
 import io.github.iaguito22.oto.account.Session
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -105,8 +106,13 @@ class BrowserLogin(private val account: Account, private val scope: CoroutineSco
         }
         _state.value = LoginState.Waiting(automated = true)
         chromeJob = scope.launch(Dispatchers.IO) {
-            runCatching { runChrome(chromePath) }
-                .onFailure { fail(it.message ?: "No se pudo abrir Chrome") }
+            try {
+                runChrome(chromePath)
+            } catch (t: CancellationException) {
+                throw t
+            } catch (t: Throwable) {
+                fail(t.message ?: "No se pudo abrir Chrome")
+            }
         }
     }
 
@@ -310,10 +316,21 @@ class BrowserLogin(private val account: Account, private val scope: CoroutineSco
         chrome = null
         if (process != null) {
             runCatching { process.destroy() }
+            runCatching { process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) }
             if (process.isAlive) runCatching { process.destroyForcibly() }
+            runCatching { process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) }
         }
-        chromeProfile?.let { dir -> runCatching { dir.deleteRecursively() } }
+        val dir = chromeProfile
         chromeProfile = null
+        if (dir != null && !dir.deleteRecursively()) {
+            // Chrome tarda un momento en soltar los archivos del perfil.
+            scope.launch(Dispatchers.IO) {
+                repeat(10) {
+                    delay(300)
+                    if (!dir.exists() || dir.deleteRecursively()) return@launch
+                }
+            }
+        }
     }
 
     /** Copia la extensión a una carpeta normal y la abre, para cargarla en el navegador (una sola vez). */
