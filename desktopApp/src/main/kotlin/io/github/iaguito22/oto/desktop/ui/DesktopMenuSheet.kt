@@ -1,9 +1,17 @@
 package io.github.iaguito22.oto.desktop.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -17,6 +25,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -29,6 +38,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -90,6 +101,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -160,6 +172,8 @@ private enum class MenuSubView { None, Settings, Queue }
 fun DesktopMenuSheet(
     open: Boolean,
     isIdle: Boolean = false,
+    isPlaying: Boolean = false,
+    onTextInputFocusChange: (Boolean) -> Unit = {},
     onToggleOpen: (Boolean) -> Unit,
     menu: MenuController,
     prefs: Prefs,
@@ -200,22 +214,59 @@ fun DesktopMenuSheet(
     var subView by remember { mutableStateOf(MenuSubView.None) }
     var showAllLists by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
+    var pillHovered by remember { mutableStateOf(false) }
 
     LaunchedEffect(open) {
         if (!open) {
             subView = MenuSubView.None
             showAllLists = false
+            onTextInputFocusChange(false)
         }
     }
 
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-        // Cajón desplegado desde abajo con el Fondo 4 · Lente de Agua (fondos-menu.html:265-282),
-        // sin píldora inferior de asomo cuando está cerrado (se abre con rueda abajo o Ctrl+K).
-        AnimatedVisibility(
-            visible = open,
-            enter = fadeIn() + slideInVertically(spring(dampingRatio = 0.84f, stiffness = 320f)) { it / 3 },
-            exit = fadeOut() + slideOutVertically { it / 3 },
-        ) {
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        val openTargetW = (maxWidth - 36.dp).coerceAtMost(1040.dp).coerceAtLeast(320.dp)
+        val openTargetH = ((maxHeight - 32.dp) * 0.84f).coerceAtLeast(280.dp)
+        val closedPillW = if (isPlaying) 108.dp else 82.dp
+        val closedPillH = 26.dp
+
+        val morphSpec = spring<androidx.compose.ui.unit.Dp>(
+            dampingRatio = 0.82f,
+            stiffness = 380f,
+        )
+        val currentWidth by animateDpAsState(
+            targetValue = if (open) openTargetW else closedPillW,
+            animationSpec = morphSpec,
+            label = "islandWidth",
+        )
+        val currentHeight by animateDpAsState(
+            targetValue = if (open) openTargetH else closedPillH,
+            animationSpec = morphSpec,
+            label = "islandHeight",
+        )
+        val currentCorner by animateDpAsState(
+            targetValue = if (open) 30.dp else 13.dp,
+            animationSpec = morphSpec,
+            label = "islandCorner",
+        )
+        val idleAlpha by animateFloatAsState(
+            targetValue = if (!open && isIdle) 0f else 1f,
+            animationSpec = tween(260, easing = FastOutSlowInEasing),
+            label = "pillIdleAlpha",
+        )
+        val idleTranslateY by animateFloatAsState(
+            targetValue = if (!open && isIdle) 12f else 0f,
+            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+            label = "pillIdleY",
+        )
+        val pillHoverScale by animateFloatAsState(
+            targetValue = if (!open && pillHovered) 1.05f else 1f,
+            animationSpec = spring(dampingRatio = 0.7f, stiffness = 420f),
+            label = "pillHoverScale",
+        )
+
+        // Capa exterior para cerrar al hacer clic o rueda arriba fuera de la isla cuando está abierta
+        if (open) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -230,113 +281,172 @@ fun DesktopMenuSheet(
                             onToggleOpen(false)
                         }
                     },
-                contentAlignment = Alignment.BottomCenter,
-            ) {
-                val sheetShape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp)
-                Box(
-                    modifier = Modifier
-                        .widthIn(max = 1040.dp)
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
-                        .fillMaxHeight(0.84f)
-                        .shadow(
-                            elevation = 42.dp,
-                            shape = sheetShape,
-                            ambientColor = Color.Black.copy(alpha = 0.62f),
-                            spotColor = Color.Black,
-                        )
-                        .clip(sheetShape)
-                        .background(
-                            Brush.verticalGradient(
-                                0.00f to Color.White.copy(alpha = 0.14f),
-                                0.28f to Color(0x82101218),
-                                1.00f to Color(0x9E0C0D12),
-                            ),
-                        )
-                        .border(
-                            1.dp,
-                            Brush.verticalGradient(
-                                0.00f to Color.White.copy(alpha = 0.42f),
-                                0.35f to Color.White.copy(alpha = 0.30f),
-                                1.00f to palette.primary.copy(alpha = 0.24f),
-                            ),
-                            sheetShape,
-                        )
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
-                ) {
-                    // Refracción de Lente de Agua (Opción 4):
-                    // - Brillo blanco cristalino en el labio superior (inset 0 2px 3px rgba(255,255,255,0.6))
-                    // - Velo de agua ultratransparente arriba que deja pasar la luz del escenario desenfocado
-                    // - Resplandor interior inferior con el color --accent (inset 0 -16px 40px var(--accent))
-                    Canvas(Modifier.fillMaxSize()) {
-                        val w = size.width
-                        val h = size.height
-                        // Luz blanca suave en el tercio superior (efecto lente de agua)
-                        drawRect(
-                            brush = Brush.verticalGradient(
-                                0.00f to Color.White.copy(alpha = 0.09f),
-                                0.22f to Color.Transparent,
-                            ),
-                        )
-                        // Refracción cromática inferior (inset 0 -16px 40px color-mix(in srgb, var(--accent) 18%, transparent))
-                        drawRect(
-                            brush = Brush.radialGradient(
-                                colors = listOf(palette.primary.copy(alpha = 0.22f), Color.Transparent),
-                                center = Offset(w * 0.50f, h * 1.02f),
-                                radius = w * 0.68f,
-                            ),
-                        )
-                        // Refracción sutil secundaria en la esquina superior izquierda
-                        drawRect(
-                            brush = Brush.radialGradient(
-                                colors = listOf(palette.primary.copy(alpha = 0.14f), Color.Transparent),
-                                center = Offset(w * 0.24f, h * 0.06f),
-                                radius = w * 0.50f,
-                            ),
-                        )
-                        // Labio especular blanco de 2.5px en el borde superior (inset 0 2px 3px rgba(255, 255, 255, 0.6))
-                        drawLine(
-                            brush = Brush.horizontalGradient(
-                                listOf(
-                                    Color.White.copy(alpha = 0.18f),
-                                    Color.White.copy(alpha = 0.62f),
-                                    Color.White.copy(alpha = 0.62f),
-                                    Color.White.copy(alpha = 0.18f),
-                                ),
-                            ),
-                            start = Offset(w * 0.03f, 1.5f),
-                            end = Offset(w * 0.97f, 1.5f),
-                            strokeWidth = 2.5f,
-                        )
-                    }
+            )
+        }
 
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        // Tirador superior (.sheet-grab en core.css:712-725)
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .onPointerEvent(PointerEventType.Scroll) { ev ->
-                                    val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
-                                    if (dy < -0.5f) {
-                                        onToggleOpen(false)
-                                    }
+        // Contenedor único de cristal (Fondo 4 · Lente de Agua + Isla Flotante):
+        // En reposo es la píldora inferior sin textos; al abrir, crece físicamente desde ella sin fadeIn.
+        val sheetShape = RoundedCornerShape(currentCorner)
+        val isExpanded = open || currentHeight > 54.dp
+
+        Box(
+            modifier = Modifier
+                .padding(bottom = 16.dp)
+                .graphicsLayer {
+                    alpha = if (open) 1f else idleAlpha
+                    translationY = if (open) 0f else idleTranslateY
+                    scaleX = if (open) 1f else pillHoverScale
+                    scaleY = if (open) 1f else pillHoverScale
+                }
+                .size(width = currentWidth, height = currentHeight)
+                .shadow(
+                    elevation = if (open) 42.dp else 18.dp,
+                    shape = sheetShape,
+                    ambientColor = Color.Black.copy(alpha = 0.62f),
+                    spotColor = Color.Black,
+                )
+                .clip(sheetShape)
+                .background(
+                    Brush.verticalGradient(
+                        0.00f to Color.White.copy(alpha = if (open) 0.14f else 0.16f),
+                        0.28f to Color(0x82101218),
+                        1.00f to Color(0x9E0C0D12),
+                    ),
+                )
+                .border(
+                    1.dp,
+                    Brush.verticalGradient(
+                        0.00f to Color.White.copy(alpha = if (!open && pillHovered) 0.56f else 0.42f),
+                        0.35f to Color.White.copy(alpha = 0.30f),
+                        1.00f to palette.primary.copy(alpha = 0.26f),
+                    ),
+                    sheetShape,
+                )
+                .onPointerEvent(PointerEventType.Enter) { pillHovered = true }
+                .onPointerEvent(PointerEventType.Exit) { pillHovered = false }
+                .onPointerEvent(PointerEventType.Scroll) { ev ->
+                    val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                    if (!open && dy > 0.3f) {
+                        onToggleOpen(true)
+                    } else if (open && dy < -0.5f && !isExpanded) {
+                        onToggleOpen(false)
+                    }
+                }
+                .then(
+                    if (!open) {
+                        Modifier
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) { onToggleOpen(true) }
+                    } else {
+                        Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) {}
+                    },
+                ),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            // Refracción de Lente de Agua (Opción 4):
+            // - Brillo blanco cristalino en el labio superior (inset 0 2px 3px rgba(255,255,255,0.6))
+            // - Velo de agua ultratransparente arriba que deja pasar la luz del escenario desenfocado
+            // - Resplandor interior inferior con el color --accent (inset 0 -16px 40px var(--accent))
+            Canvas(Modifier.fillMaxSize()) {
+                val w = size.width
+                val h = size.height
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0.00f to Color.White.copy(alpha = 0.09f),
+                        0.22f to Color.Transparent,
+                    ),
+                )
+                drawRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(palette.primary.copy(alpha = 0.22f), Color.Transparent),
+                        center = Offset(w * 0.50f, h * 1.02f),
+                        radius = w * 0.68f,
+                    ),
+                )
+                drawRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(palette.primary.copy(alpha = 0.14f), Color.Transparent),
+                        center = Offset(w * 0.24f, h * 0.06f),
+                        radius = w * 0.50f,
+                    ),
+                )
+                drawLine(
+                    brush = Brush.horizontalGradient(
+                        listOf(
+                            Color.White.copy(alpha = 0.18f),
+                            Color.White.copy(alpha = 0.62f),
+                            Color.White.copy(alpha = 0.62f),
+                            Color.White.copy(alpha = 0.18f),
+                        ),
+                    ),
+                    start = Offset(w * 0.03f, 1.5f),
+                    end = Offset(w * 0.97f, 1.5f),
+                    strokeWidth = 2.5f,
+                )
+            }
+
+            if (!isExpanded) {
+                // Píldora cerrada sin textos: solo barra tirador + 3 barritas mini-ecualizador animadas en --accent
+                Row(
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Box(
+                        Modifier
+                            .size(width = 36.dp, height = 4.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = if (pillHovered) 0.52f else 0.30f)),
+                    )
+                    if (isPlaying) {
+                        Spacer(Modifier.width(10.dp))
+                        MiniEqualizerBars(accent = palette.primary)
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .requiredWidth(openTargetW)
+                        .requiredHeight(openTargetH),
+                ) {
+                    // Tirador superior (.sheet-grab en core.css:712-725)
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .onPointerEvent(PointerEventType.Scroll) { ev ->
+                                val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                                if (dy < -0.5f) {
+                                    onToggleOpen(false)
                                 }
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                ) { onToggleOpen(false) }
-                                .padding(top = 10.dp, bottom = 6.dp),
-                            contentAlignment = Alignment.Center,
+                            }
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) { onToggleOpen(false) }
+                            .padding(top = 10.dp, bottom = 6.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             Box(
                                 Modifier
                                     .size(width = 42.dp, height = 4.dp)
                                     .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.24f)),
+                                    .background(Color.White.copy(alpha = 0.26f)),
                             )
+                            if (isPlaying) {
+                                MiniEqualizerBars(accent = palette.primary)
+                            }
                         }
+                    }
 
                         // Cabecera (.sheet-top-bar en core.css:728-853):
                         // Píldora segmentada [Tu música | Explorar] siempre visible + Buscador central + Iconos circulares
@@ -436,12 +546,16 @@ fun DesktopMenuSheet(
                                         },
                                         singleLine = true,
                                         textStyle = TextStyle(
+                                            fontFamily = OtoFontFamily,
                                             color = Color.White,
                                             fontSize = 14.sp,
                                             fontWeight = FontWeight.Medium,
                                         ),
                                         cursorBrush = SolidColor(palette.primary),
-                                        modifier = Modifier.fillMaxWidth().focusRequester(searchFocusRequester),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .focusRequester(searchFocusRequester)
+                                            .onFocusChanged { onTextInputFocusChange(it.isFocused) },
                                     )
                                 }
                                 if (menuState.query.isNotEmpty()) {
@@ -661,6 +775,53 @@ fun DesktopMenuSheet(
                     }
                 }
             }
+        }
+}
+
+@Composable
+private fun MiniEqualizerBars(accent: Color) {
+    val transition = rememberInfiniteTransition(label = "miniEq")
+    val bar1 by transition.animateFloat(
+        initialValue = 0.30f,
+        targetValue = 1.00f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "eqBar1",
+    )
+    val bar2 by transition.animateFloat(
+        initialValue = 0.95f,
+        targetValue = 0.25f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 340, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "eqBar2",
+    )
+    val bar3 by transition.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 0.92f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 510, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "eqBar3",
+    )
+
+    Row(
+        modifier = Modifier.height(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (frac in listOf(bar1, bar2, bar3)) {
+            Box(
+                modifier = Modifier
+                    .width(2.5.dp)
+                    .fillMaxHeight(frac.coerceIn(0.22f, 1f))
+                    .clip(CircleShape)
+                    .background(accent),
+            )
         }
     }
 }
@@ -937,7 +1098,7 @@ private fun YourMusicPane(
                         value = newListName,
                         onValueChange = { newListName = it },
                         singleLine = true,
-                        textStyle = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                        textStyle = TextStyle(fontFamily = OtoFontFamily, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                         cursorBrush = SolidColor(palette.primary),
                         decorationBox = { innerTextField ->
                             if (newListName.isBlank()) {
@@ -3209,7 +3370,7 @@ fun SaveToModal(
                         value = newListName,
                         onValueChange = { newListName = it },
                         singleLine = true,
-                        textStyle = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium),
+                        textStyle = TextStyle(fontFamily = OtoFontFamily, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium),
                         cursorBrush = SolidColor(accent),
                         decorationBox = { inner ->
                             if (newListName.isBlank()) {

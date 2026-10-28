@@ -60,7 +60,12 @@ import io.github.iaguito22.oto.desktop.ui.ArtworkLoader
 import io.github.iaguito22.oto.desktop.ui.ArtworkPalette
 import io.github.iaguito22.oto.desktop.ui.DesktopMenuSheet
 import io.github.iaguito22.oto.desktop.ui.DesktopStage
+import io.github.iaguito22.oto.desktop.ui.OtoFontFamily
+import io.github.iaguito22.oto.desktop.ui.OtoTypography
 import io.github.iaguito22.oto.desktop.ui.SaveToModal
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.ui.text.TextStyle
 import io.github.iaguito22.oto.dj.Plays
 import io.github.iaguito22.oto.dj.YouTubeCatalog
 import io.github.iaguito22.oto.importer.Importer
@@ -140,6 +145,7 @@ fun main() {
 
         var menuOpen by remember { mutableStateOf(false) }
         var menuTab by remember { mutableIntStateOf(0) } // 0 = Tu música, 1 = Explorar
+        var menuTextInputFocused by remember { mutableStateOf(false) }
         var savingTrack by remember { mutableStateOf<Heard?>(null) }
         var lastWheelToggleMs by remember { mutableLongStateOf(0L) }
         var lastActivityMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -204,7 +210,7 @@ fun main() {
                             menuTab = (menuTab + 1) % 2
                             true
                         }
-                        (ev.key == Key.Spacebar && !menuOpen) || ev.key == Key.MediaPlayPause -> {
+                        (ev.key == Key.Spacebar && (!menuOpen || !menuTextInputFocused) && savingTrack == null) || ev.key == Key.MediaPlayPause -> {
                             val willPlay = !player.state.value.playing
                             player.toggle()
                             cue = if (willPlay) CueInfo(Icons.Rounded.PlayArrow, "Reanudado") else CueInfo(Icons.Rounded.Pause, "Pausado")
@@ -306,9 +312,11 @@ fun main() {
 
             val isLiked = nowPlaying.id != null && nowPlaying.id in likedIds
 
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
+            MaterialTheme(typography = OtoTypography) {
+                ProvideTextStyle(TextStyle(fontFamily = OtoFontFamily)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
                     .onPointerEvent(PointerEventType.Move) {
                         lastActivityMs = System.currentTimeMillis()
                     }
@@ -395,6 +403,8 @@ fun main() {
                 DesktopMenuSheet(
                     open = menuOpen,
                     isIdle = isIdle,
+                    isPlaying = nowPlaying.playing,
+                    onTextInputFocusChange = { menuTextInputFocused = it },
                     onToggleOpen = { menuOpen = it },
                     menu = menu,
                     prefs = prefs,
@@ -448,6 +458,8 @@ fun main() {
                         },
                         onDismiss = { savingTrack = null },
                     )
+                }
+            }
                 }
             }
         }

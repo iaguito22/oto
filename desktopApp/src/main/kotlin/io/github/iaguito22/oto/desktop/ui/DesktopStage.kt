@@ -68,7 +68,9 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Typography
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.platform.Font
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -125,6 +127,34 @@ import io.github.iaguito22.oto.playback.Source
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+
+val OtoFontFamily = FontFamily(
+    Font(resource = "fonts/PlusJakartaSans-400.ttf", weight = FontWeight.Normal),
+    Font(resource = "fonts/PlusJakartaSans-500.ttf", weight = FontWeight.Medium),
+    Font(resource = "fonts/PlusJakartaSans-600.ttf", weight = FontWeight.SemiBold),
+    Font(resource = "fonts/PlusJakartaSans-700.ttf", weight = FontWeight.Bold),
+    Font(resource = "fonts/PlusJakartaSans-800.ttf", weight = FontWeight.ExtraBold),
+)
+
+val OtoTypography = Typography().let { base ->
+    Typography(
+        displayLarge = base.displayLarge.copy(fontFamily = OtoFontFamily),
+        displayMedium = base.displayMedium.copy(fontFamily = OtoFontFamily),
+        displaySmall = base.displaySmall.copy(fontFamily = OtoFontFamily),
+        headlineLarge = base.headlineLarge.copy(fontFamily = OtoFontFamily),
+        headlineMedium = base.headlineMedium.copy(fontFamily = OtoFontFamily),
+        headlineSmall = base.headlineSmall.copy(fontFamily = OtoFontFamily),
+        titleLarge = base.titleLarge.copy(fontFamily = OtoFontFamily),
+        titleMedium = base.titleMedium.copy(fontFamily = OtoFontFamily),
+        titleSmall = base.titleSmall.copy(fontFamily = OtoFontFamily),
+        bodyLarge = base.bodyLarge.copy(fontFamily = OtoFontFamily),
+        bodyMedium = base.bodyMedium.copy(fontFamily = OtoFontFamily),
+        bodySmall = base.bodySmall.copy(fontFamily = OtoFontFamily),
+        labelLarge = base.labelLarge.copy(fontFamily = OtoFontFamily),
+        labelMedium = base.labelMedium.copy(fontFamily = OtoFontFamily),
+        labelSmall = base.labelSmall.copy(fontFamily = OtoFontFamily),
+    )
+}
 
 /**
  * Escenario principal a ventana completa de Oto Desktop (Linux / Windows),
@@ -1352,17 +1382,21 @@ private fun SyncedLyricRow(
 
             Text(
                 text = annotated,
-                fontSize = 39.sp,
-                fontWeight = FontWeight.Bold,
+                fontFamily = OtoFontFamily,
+                fontSize = 38.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-0.5).sp,
                 lineHeight = 50.sp,
             )
         } else {
             Text(
                 text = rawText,
-                fontSize = 32.sp,
+                fontFamily = OtoFontFamily,
+                fontSize = 31.sp,
                 fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.3).sp,
                 color = Color.White,
-                lineHeight = 43.sp,
+                lineHeight = 42.sp,
             )
         }
     }
