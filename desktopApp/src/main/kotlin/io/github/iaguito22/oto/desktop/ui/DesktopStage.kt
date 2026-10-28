@@ -6,9 +6,11 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -109,6 +111,7 @@ import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -129,11 +132,11 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 val OtoFontFamily = FontFamily(
-    Font(resource = "fonts/PlusJakartaSans-400.ttf", weight = FontWeight.Normal),
-    Font(resource = "fonts/PlusJakartaSans-500.ttf", weight = FontWeight.Medium),
-    Font(resource = "fonts/PlusJakartaSans-600.ttf", weight = FontWeight.SemiBold),
-    Font(resource = "fonts/PlusJakartaSans-700.ttf", weight = FontWeight.Bold),
-    Font(resource = "fonts/PlusJakartaSans-800.ttf", weight = FontWeight.ExtraBold),
+    Font(resource = "fonts/rubik.ttf", weight = FontWeight.Normal),
+    Font(resource = "fonts/rubik.ttf", weight = FontWeight.Medium),
+    Font(resource = "fonts/rubik.ttf", weight = FontWeight.SemiBold),
+    Font(resource = "fonts/rubik.ttf", weight = FontWeight.Bold),
+    Font(resource = "fonts/rubik.ttf", weight = FontWeight.ExtraBold),
 )
 
 val OtoTypography = Typography().let { base ->
@@ -191,6 +194,11 @@ fun DesktopStage(
     isIdle: Boolean = false,
     menuOpen: Boolean = false,
     headerStyle: Int = 0,
+    showRemaining: Boolean = false,
+    onToggleShowRemaining: () -> Unit = {},
+    coverBeat: Boolean = true,
+    nextArtwork: String? = null,
+    prevArtwork: String? = null,
     onTogglePlay: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
@@ -214,16 +222,19 @@ fun DesktopStage(
     // Dirección de salto para animar la transición de canción en la carátula y el título.
     var skipDir by remember { mutableIntStateOf(1) }
 
-    // Control de visibilidad del overlay flotante de volumen al modificarlo
-    var lastVolumeChangeMs by remember { mutableLongStateOf(0L) }
-    var prevVol by remember { mutableFloatStateOf(volume) }
-    LaunchedEffect(volume) {
-        if (abs(volume - prevVol) > 0.001f) {
-            lastVolumeChangeMs = System.currentTimeMillis()
-            prevVol = volume
-        }
-    }
-    val showVolume = (System.currentTimeMillis() - lastVolumeChangeMs) < 1600L
+    var isVolHovered by remember { mutableStateOf(false) }
+    var preMuteVol by remember { mutableFloatStateOf(1f) }
+    var isPointerOverLyrics by remember { mutableStateOf(false) }
+    val volAlpha by animateFloatAsState(
+        targetValue = when {
+            isVolHovered -> 1f
+            menuOpen -> 0.15f
+            isIdle -> 0.40f
+            else -> 0.85f
+        },
+        animationSpec = tween(220),
+        label = "volAlpha",
+    )
 
     Box(
         modifier = Modifier
@@ -231,7 +242,7 @@ fun DesktopStage(
             .background(animPal.deep)
             .onPointerEvent(PointerEventType.Scroll) { ev ->
                 val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
-                if (dy > 0.5f) {
+                if (dy > 0.5f && !isPointerOverLyrics) {
                     onOpenMenu()
                 }
             },
@@ -361,90 +372,152 @@ fun DesktopStage(
                     )
                 }
 
-                // Escenario de 2 columnas (estilo Spotify Caelestia + fusion.html):
-                // Izquierda: Carátula cuadrada redondeada con controles hover + Título + Artista + Barra minimal
-                // Derecha: Letras sincronizadas palabra por palabra con máscara de fundido vertical
-                Row(
+                // Escenario reactivo (si caben juntos >= 820dp: carátula + letra; si no caben < 820dp: solo carátula centrada)
+                BoxWithConstraints(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
                         .padding(bottom = 18.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(68.dp),
                 ) {
-                    Box(
-                        modifier = Modifier.weight(0.44f).fillMaxHeight(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        SpotifyPlayerColumn(
-                            nowPlaying = nowPlaying,
-                            positionMs = positionMs,
-                            quality = quality,
-                            artwork = artwork,
-                            palette = animPal,
-                            liked = liked,
-                            skipDir = skipDir,
-                            onTogglePlay = onTogglePlay,
-                            onPrev = { skipDir = -1; onPrev() },
-                            onNext = { skipDir = 1; onNext() },
-                            onSeek = onSeek,
-                            onToggleLike = onToggleLike,
-                            onSaveTo = onSaveTo,
-                            onOpenArtist = onOpenArtist,
-                            onAdjustVolume = onAdjustVolume,
-                        )
-                    }
+                    val showLyrics = maxWidth >= 820.dp
+                    if (showLyrics) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(68.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier.weight(0.44f).fillMaxHeight(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                SpotifyPlayerColumn(
+                                    nowPlaying = nowPlaying,
+                                    positionMs = positionMs,
+                                    quality = quality,
+                                    artwork = artwork,
+                                    palette = animPal,
+                                    liked = liked,
+                                    skipDir = skipDir,
+                                    showRemaining = showRemaining,
+                                    onToggleShowRemaining = onToggleShowRemaining,
+                                    coverBeat = coverBeat,
+                                    nextArtwork = nextArtwork,
+                                    prevArtwork = prevArtwork,
+                                    onTogglePlay = onTogglePlay,
+                                    onPrev = { skipDir = -1; onPrev() },
+                                    onNext = { skipDir = 1; onNext() },
+                                    onSeek = onSeek,
+                                    onToggleLike = onToggleLike,
+                                    onSaveTo = onSaveTo,
+                                    onOpenArtist = onOpenArtist,
+                                    onAdjustVolume = onAdjustVolume,
+                                )
+                            }
 
-                    // Columna de letra a pantalla completa con difuminado suave arriba/abajo
-                    Box(
-                        modifier = Modifier.weight(0.56f).fillMaxHeight(),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        LyricsStageColumn(
-                            lyrics = lyrics,
-                            loading = lyricsLoading,
-                            positionMs = positionMs,
-                            palette = animPal,
-                            onSeek = onSeek,
-                        )
+                            // Columna de letra a pantalla completa con difuminado suave arriba/abajo
+                            Box(
+                                modifier = Modifier
+                                    .weight(0.56f)
+                                    .fillMaxHeight()
+                                    .onPointerEvent(PointerEventType.Enter) { isPointerOverLyrics = true }
+                                    .onPointerEvent(PointerEventType.Exit) { isPointerOverLyrics = false },
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                LyricsStageColumn(
+                                    lyrics = lyrics,
+                                    loading = lyricsLoading,
+                                    positionMs = positionMs,
+                                    palette = animPal,
+                                    onSeek = onSeek,
+                                )
+                            }
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            SpotifyPlayerColumn(
+                                nowPlaying = nowPlaying,
+                                positionMs = positionMs,
+                                quality = quality,
+                                artwork = artwork,
+                                palette = animPal,
+                                liked = liked,
+                                skipDir = skipDir,
+                                showRemaining = showRemaining,
+                                onToggleShowRemaining = onToggleShowRemaining,
+                                coverBeat = coverBeat,
+                                nextArtwork = nextArtwork,
+                                prevArtwork = prevArtwork,
+                                onTogglePlay = onTogglePlay,
+                                onPrev = { skipDir = -1; onPrev() },
+                                onNext = { skipDir = 1; onNext() },
+                                onSeek = onSeek,
+                                onToggleLike = onToggleLike,
+                                onSaveTo = onSaveTo,
+                                onOpenArtist = onOpenArtist,
+                                onAdjustVolume = onAdjustVolume,
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // Píldora flotante animada de volumen estilo liquid glass (arriba a la derecha)
-        AnimatedVisibility(
-            visible = showVolume,
-            enter = fadeIn(tween(180)) + scaleIn(spring(dampingRatio = 0.8f, stiffness = 500f), initialScale = 0.88f),
-            exit = fadeOut(tween(240)),
-            modifier = Modifier.align(Alignment.TopEnd).padding(top = 28.dp, end = 36.dp),
+        // Píldora interactiva permanente de volumen estilo liquid glass (arriba a la derecha)
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 26.dp, end = 32.dp)
+                .graphicsLayer { alpha = volAlpha }
+                .shadow(20.dp, CircleShape, ambientColor = animPal.primary.copy(alpha = 0.35f), spotColor = Color.Black)
+                .clip(CircleShape)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0xE61B152A),
+                            Color(0xF0120D1F),
+                        ),
+                    ),
+                )
+                .border(
+                    1.dp,
+                    Brush.horizontalGradient(
+                        listOf(
+                            Color.White.copy(alpha = if (isVolHovered) 0.50f else 0.25f),
+                            animPal.primary.copy(alpha = 0.40f),
+                            Color.White.copy(alpha = 0.15f),
+                        ),
+                    ),
+                    CircleShape,
+                )
+                .pointerHoverIcon(PointerIcon.Default)
+                .onPointerEvent(PointerEventType.Enter) { isVolHovered = true }
+                .onPointerEvent(PointerEventType.Exit) { isVolHovered = false }
+                .onPointerEvent(PointerEventType.Scroll) { ev ->
+                    val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                    if (dy < -0.1f) onAdjustVolume(0.04f)
+                    else if (dy > 0.1f) onAdjustVolume(-0.04f)
+                }
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(
+            Box(
                 modifier = Modifier
-                    .shadow(20.dp, CircleShape, ambientColor = animPal.primary.copy(alpha = 0.40f), spotColor = Color.Black)
+                    .size(24.dp)
                     .clip(CircleShape)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color(0xE61B152A),
-                                Color(0xF0120D1F),
-                            ),
-                        ),
-                    )
-                    .border(
-                        1.dp,
-                        Brush.horizontalGradient(
-                            listOf(
-                                Color.White.copy(alpha = 0.45f),
-                                animPal.primary.copy(alpha = 0.40f),
-                                Color.White.copy(alpha = 0.15f),
-                            ),
-                        ),
-                        CircleShape,
-                    )
-                    .padding(horizontal = 16.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable {
+                        if (volume > 0.001f) {
+                            preMuteVol = volume
+                            onAdjustVolume(-volume)
+                        } else {
+                            onAdjustVolume(if (preMuteVol > 0.05f) preMuteVol else 0.7f)
+                        }
+                    },
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = when {
@@ -452,16 +525,37 @@ fun DesktopStage(
                         volume < 0.5f -> Icons.AutoMirrored.Rounded.VolumeDown
                         else -> Icons.AutoMirrored.Rounded.VolumeUp
                     },
-                    contentDescription = "Volumen",
+                    contentDescription = if (volume <= 0.001f) "Desmutear" else "Silenciar",
                     tint = animPal.primary,
                     modifier = Modifier.size(19.dp),
                 )
+            }
+            Box(
+                modifier = Modifier
+                    .width(84.dp)
+                    .height(18.dp)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .pointerInput(Unit) {
+                        detectTapGestures { offset ->
+                            val ratio = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                            onAdjustVolume(ratio - volume)
+                        }
+                    }
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            val delta = dragAmount.x / 84f
+                            onAdjustVolume(delta)
+                        }
+                    },
+                contentAlignment = Alignment.CenterStart,
+            ) {
                 Box(
                     modifier = Modifier
-                        .width(72.dp)
+                        .fillMaxWidth()
                         .height(5.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.15f)),
+                        .background(Color.White.copy(alpha = 0.18f)),
                 ) {
                     Box(
                         modifier = Modifier
@@ -471,13 +565,14 @@ fun DesktopStage(
                             .background(animPal.primary),
                     )
                 }
-                Text(
-                    text = "${(volume * 100f).roundToInt()}%",
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                )
             }
+            Text(
+                text = "${(volume * 100f).roundToInt()}%",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                modifier = Modifier.width(36.dp),
+            )
         }
 
         // Píldora OSD animada de acciones rápidas (arriba al centro, estilo Caelestia)
@@ -591,6 +686,11 @@ private fun SpotifyPlayerColumn(
     palette: ArtworkPalette,
     liked: Boolean,
     skipDir: Int,
+    showRemaining: Boolean = false,
+    onToggleShowRemaining: () -> Unit = {},
+    coverBeat: Boolean = true,
+    nextArtwork: String? = null,
+    prevArtwork: String? = null,
     onTogglePlay: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
@@ -605,6 +705,46 @@ private fun SpotifyPlayerColumn(
     var manualHover by remember { mutableStateOf(false) }
     val isCoverActive = isHovered || manualHover
     var burstTrigger by remember { mutableLongStateOf(0L) }
+
+    // Latido de la carátula al reproducir
+    val beatInf = rememberInfiniteTransition(label = "coverBeat")
+    val beatPulse by beatInf.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = keyframes {
+                durationMillis = 1150
+                0.0f at 0
+                1.0f at 130 using FastOutSlowInEasing
+                0.18f at 340 using FastOutSlowInEasing
+                0.55f at 480 using FastOutSlowInEasing
+                0.0f at 820 using LinearEasing
+                0.0f at 1150
+            },
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "beatPulse",
+    )
+    val activePulse = if (coverBeat && nowPlaying.playing) beatPulse else 0f
+    val beatScale = 1f + 0.026f * activePulse
+
+    // Asomo (peek) de carátula de siguiente / anterior en hover
+    var hoverPrev by remember { mutableStateOf(false) }
+    var hoverNext by remember { mutableStateOf(false) }
+
+    var prevThumbBmp by remember(prevArtwork) { mutableStateOf<ImageBitmap?>(null) }
+    var nextThumbBmp by remember(nextArtwork) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(prevArtwork) {
+        if (!prevArtwork.isNullOrBlank()) prevThumbBmp = ArtworkLoader.load(prevArtwork).first
+    }
+    LaunchedEffect(nextArtwork) {
+        if (!nextArtwork.isNullOrBlank()) nextThumbBmp = ArtworkLoader.load(nextArtwork).first
+    }
+
+    val prevPeekOffset by animateDpAsState(if (hoverPrev && prevThumbBmp != null) (-42).dp else 0.dp, spring(dampingRatio = 0.72f, stiffness = 380f))
+    val prevPeekAlpha by animateFloatAsState(if (hoverPrev && prevThumbBmp != null) 0.88f else 0f, tween(200))
+    val nextPeekOffset by animateDpAsState(if (hoverNext && nextThumbBmp != null) 42.dp else 0.dp, spring(dampingRatio = 0.72f, stiffness = 380f))
+    val nextPeekAlpha by animateFloatAsState(if (hoverNext && nextThumbBmp != null) 0.88f else 0f, tween(200))
 
     // Inclinación 3D suave y reflejo especular al mover el ratón sobre la carátula (como en fusion.html)
     var tiltX by remember { mutableFloatStateOf(0f) }
@@ -647,60 +787,120 @@ private fun SpotifyPlayerColumn(
             horizontalAlignment = Alignment.Start,
             verticalArrangement = Arrangement.Center,
         ) {
-        // 1. Carátula cuadrada con bordes redondeados + 3D tilt + controles limpios en hover
+        // 1. Carátula cuadrada con bordes redondeados + 3D tilt + controles limpios en hover + asomo (peek)
         Box(
-            modifier = Modifier
-                .size(coverSize)
-                .hoverable(coverInteraction)
-                .onPointerEvent(PointerEventType.Enter) { manualHover = true }
-                .onPointerEvent(PointerEventType.Move) { ev ->
-                    manualHover = true
-                    val pos = ev.changes.firstOrNull()?.position
-                    if (pos != null) {
-                        val nx = (pos.x / 500f).coerceIn(0f, 1f)
-                        val ny = (pos.y / 500f).coerceIn(0f, 1f)
-                        sheenX = nx
-                        sheenY = ny
-                        tiltY = (nx - 0.5f) * 8f
-                        tiltX = (0.5f - ny) * 8f
-                    }
-                }
-                .onPointerEvent(PointerEventType.Exit) {
-                    manualHover = false
-                    tiltX = 0f
-                    tiltY = 0f
-                }
-                .onPointerEvent(PointerEventType.Scroll) { ev ->
-                    val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
-                    if (dy < -0.1f) onAdjustVolume(0.04f)
-                    else if (dy > 0.1f) onAdjustVolume(-0.04f)
-                }
-                .graphicsLayer {
-                    rotationX = animTiltX
-                    rotationY = animTiltY
-                    cameraDistance = 16f * density
-                }
-                .shadow(
-                    elevation = 28.dp,
-                    shape = RoundedCornerShape(20.dp),
-                    ambientColor = Color.Black.copy(alpha = 0.6f),
-                    spotColor = Color.Black.copy(alpha = 0.85f),
-                )
-                .clip(RoundedCornerShape(20.dp))
-                .background(Color(0xFF14121A))
-                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp))
-                .pointerInput(nowPlaying.id) {
-                    detectTapGestures(
-                        onDoubleTap = {
-                            onToggleLike()
-                            burstTrigger = System.currentTimeMillis()
-                        },
-                        onLongPress = { onSaveTo() },
-                        onTap = { onTogglePlay() },
-                    )
-                },
+            modifier = Modifier.size(coverSize),
             contentAlignment = Alignment.Center,
         ) {
+            // Asomo de la anterior por la izquierda
+            if (prevThumbBmp != null && prevPeekAlpha > 0.01f) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .size(coverSize * 0.86f)
+                        .graphicsLayer {
+                            translationX = prevPeekOffset.toPx()
+                            alpha = prevPeekAlpha
+                            scaleX = 0.88f
+                            scaleY = 0.88f
+                            rotationZ = -3.5f
+                        }
+                        .shadow(18.dp, RoundedCornerShape(18.dp))
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color(0xFF14121A))
+                        .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(18.dp)),
+                ) {
+                    Image(
+                        bitmap = prevThumbBmp!!,
+                        contentDescription = "Anterior",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+
+            // Asomo de la siguiente por la derecha
+            if (nextThumbBmp != null && nextPeekAlpha > 0.01f) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .size(coverSize * 0.86f)
+                        .graphicsLayer {
+                            translationX = nextPeekOffset.toPx()
+                            alpha = nextPeekAlpha
+                            scaleX = 0.88f
+                            scaleY = 0.88f
+                            rotationZ = 3.5f
+                        }
+                        .shadow(18.dp, RoundedCornerShape(18.dp))
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color(0xFF14121A))
+                        .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(18.dp)),
+                ) {
+                    Image(
+                        bitmap = nextThumbBmp!!,
+                        contentDescription = "Siguiente",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(coverSize)
+                    .hoverable(coverInteraction)
+                    .onPointerEvent(PointerEventType.Enter) { manualHover = true }
+                    .onPointerEvent(PointerEventType.Move) { ev ->
+                        manualHover = true
+                        val pos = ev.changes.firstOrNull()?.position
+                        if (pos != null) {
+                            val nx = (pos.x / 500f).coerceIn(0f, 1f)
+                            val ny = (pos.y / 500f).coerceIn(0f, 1f)
+                            sheenX = nx
+                            sheenY = ny
+                            tiltY = (nx - 0.5f) * 8f
+                            tiltX = (0.5f - ny) * 8f
+                        }
+                    }
+                    .onPointerEvent(PointerEventType.Exit) {
+                        manualHover = false
+                        tiltX = 0f
+                        tiltY = 0f
+                    }
+                    .onPointerEvent(PointerEventType.Scroll) { ev ->
+                        val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                        if (dy < -0.1f) onAdjustVolume(0.04f)
+                        else if (dy > 0.1f) onAdjustVolume(-0.04f)
+                    }
+                    .graphicsLayer {
+                        rotationX = animTiltX
+                        rotationY = animTiltY
+                        cameraDistance = 16f * density
+                        scaleX = beatScale
+                        scaleY = beatScale
+                    }
+                    .shadow(
+                        elevation = 28.dp,
+                        shape = RoundedCornerShape(20.dp),
+                        ambientColor = Color.Black.copy(alpha = 0.6f),
+                        spotColor = Color.Black.copy(alpha = 0.85f),
+                    )
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xFF14121A))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp))
+                    .pointerInput(nowPlaying.id) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                onToggleLike()
+                                burstTrigger = System.currentTimeMillis()
+                            },
+                            onLongPress = { onSaveTo() },
+                            onTap = { onTogglePlay() },
+                        )
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
             // Imagen animada al cambiar de canción
             AnimatedContent(
                 targetState = nowPlaying.id to artwork,
@@ -772,6 +972,9 @@ private fun SpotifyPlayerColumn(
                             size = 48.dp,
                             isPrimary = false,
                             accent = palette.primary,
+                            modifier = Modifier
+                                .onPointerEvent(PointerEventType.Enter) { hoverPrev = true }
+                                .onPointerEvent(PointerEventType.Exit) { hoverPrev = false },
                             onClick = onPrev,
                         ) {
                             Icon(
@@ -800,6 +1003,9 @@ private fun SpotifyPlayerColumn(
                             size = 48.dp,
                             isPrimary = false,
                             accent = palette.primary,
+                            modifier = Modifier
+                                .onPointerEvent(PointerEventType.Enter) { hoverNext = true }
+                                .onPointerEvent(PointerEventType.Exit) { hoverNext = false },
                             onClick = onNext,
                         ) {
                             Icon(
@@ -903,6 +1109,7 @@ private fun SpotifyPlayerColumn(
                 }
             }
         }
+        }
 
         Spacer(Modifier.height(18.dp))
 
@@ -995,6 +1202,8 @@ private fun SpotifyPlayerColumn(
             durationMs = duration,
             quality = quality,
             accent = palette.primary,
+            showRemaining = showRemaining,
+            onToggleShowRemaining = onToggleShowRemaining,
             onSeek = onSeek,
         )
         }
@@ -1009,6 +1218,8 @@ private fun MinimalProgressBar(
     durationMs: Long,
     quality: Quality?,
     accent: Color,
+    showRemaining: Boolean = false,
+    onToggleShowRemaining: () -> Unit = {},
     onSeek: (Long) -> Unit,
 ) {
     var barHovered by remember { mutableStateOf(false) }
@@ -1113,12 +1324,25 @@ private fun MinimalProgressBar(
                 fontWeight = FontWeight.Normal,
                 color = Color.White.copy(alpha = 0.38f),
             )
+            val durationText = if (showRemaining && durationMs > 0L) {
+                val rem = (durationMs - positionMs).coerceAtLeast(0L)
+                "-${formatTimeMs(rem)}"
+            } else {
+                formatTimeMs(durationMs)
+            }
             Text(
-                text = formatTimeMs(durationMs),
+                text = durationText,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
                 color = Color.White.copy(alpha = 0.52f),
+                modifier = Modifier
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onToggleShowRemaining,
+                    ),
             )
         }
     }
@@ -1130,6 +1354,7 @@ private fun CoverControlButton(
     size: androidx.compose.ui.unit.Dp,
     isPrimary: Boolean,
     accent: Color,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
     content: @Composable () -> Unit,
 ) {
@@ -1140,7 +1365,7 @@ private fun CoverControlButton(
         label = "coverBtnScale",
     )
     Box(
-        modifier = Modifier
+        modifier = modifier
             .size(size)
             .graphicsLayer {
                 scaleX = scale
@@ -1202,7 +1427,16 @@ private fun LyricsStageColumn(
             },
     ) {
         val boxHeightPx = constraints.maxHeight.toFloat()
-        val anchorOffset = (boxHeightPx * 0.34f).toInt()
+        val anchorOffset = (boxHeightPx * 0.35f).toInt()
+        val topPad = with(LocalDensity.current) { (boxHeightPx * 0.35f).toDp() }
+        val bottomPad = with(LocalDensity.current) { (boxHeightPx * 0.65f).toDp() }
+
+        var userScrolledAt by remember { mutableLongStateOf(0L) }
+        LaunchedEffect(listState.isScrollInProgress) {
+            if (listState.isScrollInProgress) {
+                userScrolledAt = System.currentTimeMillis()
+            }
+        }
 
         when {
             loading -> {
@@ -1220,7 +1454,11 @@ private fun LyricsStageColumn(
                 val activeIdx = remember(lines, positionMs) {
                     lines.indexOfLast { it.start <= positionMs + 120L }.coerceAtLeast(0)
                 }
-                LaunchedEffect(activeIdx) {
+                LaunchedEffect(activeIdx, userScrolledAt) {
+                    val elapsed = System.currentTimeMillis() - userScrolledAt
+                    if (elapsed < 2500L) {
+                        kotlinx.coroutines.delay(2500L - elapsed)
+                    }
                     runCatching {
                         listState.animateScrollToItem(activeIdx, scrollOffset = -anchorOffset)
                     }
@@ -1228,7 +1466,7 @@ private fun LyricsStageColumn(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = 110.dp, bottom = 140.dp),
+                    contentPadding = PaddingValues(top = topPad, bottom = bottomPad),
                     verticalArrangement = Arrangement.spacedBy(22.dp),
                 ) {
                     itemsIndexed(lines, key = { idx, l -> "${l.start}-$idx" }) { idx, line ->
@@ -1248,7 +1486,7 @@ private fun LyricsStageColumn(
             lyrics is Lyrics.Plain && lyrics.lines.isNotEmpty() -> {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = 110.dp, bottom = 140.dp),
+                    contentPadding = PaddingValues(top = topPad, bottom = bottomPad),
                     verticalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
                     itemsIndexed(lyrics.lines) { _, line: String ->
