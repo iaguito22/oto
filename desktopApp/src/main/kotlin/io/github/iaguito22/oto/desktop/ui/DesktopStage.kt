@@ -271,12 +271,12 @@ fun DesktopStage(
             label = "stageTransY",
         )
         val stageAlpha by animateFloatAsState(
-            targetValue = if (menuOpen) 0.65f else 1f,
+            targetValue = if (menuOpen) 0.85f else 1f,
             animationSpec = tween(320, easing = FastOutSlowInEasing),
             label = "stageAlpha",
         )
         val stageBlur by animateFloatAsState(
-            targetValue = if (menuOpen) 22f else 0f,
+            targetValue = if (menuOpen) 14f else 0f,
             animationSpec = tween(320, easing = FastOutSlowInEasing),
             label = "stageBlur",
         )
@@ -605,13 +605,18 @@ private fun SpotifyPlayerColumn(
 
     val duration = nowPlaying.durationMs.coerceAtLeast(1L)
     val progress = (positionMs.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-    val coverSize = 500.dp
 
-    Column(
-        modifier = Modifier.width(coverSize),
-        horizontalAlignment = Alignment.Start,
-        verticalArrangement = Arrangement.Center,
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
     ) {
+        val coverSize = minOf(maxWidth, maxHeight - 135.dp).coerceIn(200.dp, 500.dp)
+
+        Column(
+            modifier = Modifier.width(coverSize),
+            horizontalAlignment = Alignment.Start,
+            verticalArrangement = Arrangement.Center,
+        ) {
         // 1. Carátula cuadrada con bordes redondeados + 3D tilt + controles limpios en hover
         Box(
             modifier = Modifier
@@ -962,6 +967,7 @@ private fun SpotifyPlayerColumn(
             accent = palette.primary,
             onSeek = onSeek,
         )
+        }
     }
 }
 
@@ -1305,7 +1311,6 @@ private fun SyncedLyricRow(
                 this.alpha = if (isActive) 1f else alpha
             }
             .blur(blurRadius)
-            .clip(RoundedCornerShape(12.dp))
             .pointerHoverIcon(PointerIcon.Hand)
             .hoverable(interactionSource)
             .clickable(
@@ -1317,7 +1322,7 @@ private fun SyncedLyricRow(
     ) {
         if (isActive) {
             // Karaoke palabra por palabra (como en Spotify Caelestia y core.js:388-401):
-            // Las palabras ya cantadas brillan en blanco puro con halo; las que faltan de la línea van al 44%.
+            // Las palabras ya cantadas brillan en blanco puro; las que faltan de la línea van al 48%, sin caja de sombra Skia.
             val words = remember(rawText) { rawText.trim().split(Regex("\\s+")).filter { it.isNotEmpty() } }
             val spanDur = (nextLineStart - line.start).coerceAtLeast(600L)
             val lineProg = ((positionMs - line.start).toFloat() / spanDur.toFloat()).coerceIn(0f, 1f)
@@ -1330,26 +1335,14 @@ private fun SyncedLyricRow(
                 words.forEachIndexed { idx, w ->
                     if (idx > 0) append(" ")
                     val wordAlpha = when {
-                        isBeforeFirstLine -> 0.94f
+                        isBeforeFirstLine -> 0.96f
                         idx < currentWordIdx -> 1f
                         idx == currentWordIdx -> 0.92f + 0.08f * wordSubProg
                         else -> 0.48f
                     }
-                    val glowAlpha = when {
-                        isBeforeFirstLine -> 0.35f
-                        idx < currentWordIdx -> 0.60f
-                        idx == currentWordIdx -> 0.35f + 0.25f * wordSubProg
-                        else -> 0f
-                    }
                     withStyle(
                         SpanStyle(
                             color = Color.White.copy(alpha = wordAlpha),
-                            shadow = if (glowAlpha > 0.02f) {
-                                Shadow(
-                                    color = Color.White.copy(alpha = glowAlpha),
-                                    blurRadius = 28f,
-                                )
-                            } else null,
                         ),
                     ) {
                         append(w)

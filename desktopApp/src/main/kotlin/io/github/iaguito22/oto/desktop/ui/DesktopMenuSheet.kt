@@ -208,85 +208,9 @@ fun DesktopMenuSheet(
         }
     }
 
-    val peekAlpha by animateFloatAsState(
-        targetValue = if (!open && !isIdle) 1f else 0f,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "peekAlpha",
-    )
-    val peekTransY by animateFloatAsState(
-        targetValue = if (!open && !isIdle) 0f else 12f,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "peekTransY",
-    )
-
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-        // Píldora inferior de asomo (.oto-peek-pill en core.css:650-673): se oculta sola en modo reposo (isIdle)
-        AnimatedVisibility(
-            visible = !open,
-            enter = fadeIn() + slideInVertically { it / 2 },
-            exit = fadeOut() + slideOutVertically { it / 2 },
-            modifier = Modifier
-                .padding(bottom = 14.dp)
-                .graphicsLayer {
-                    alpha = peekAlpha
-                    translationY = peekTransY
-                },
-        ) {
-            var peekHovered by remember { mutableStateOf(false) }
-            Column(
-                modifier = Modifier
-                    .widthIn(min = 340.dp, max = 480.dp)
-                    .height(46.dp)
-                    .shadow(24.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.55f), spotColor = Color.Black)
-                    .clip(CircleShape)
-                    .background(if (peekHovered) Color(0xE01C1826) else Color(0xBF14121C))
-                    .border(
-                        1.dp,
-                        if (peekHovered) Color.White.copy(alpha = 0.20f) else Color.White.copy(alpha = 0.11f),
-                        CircleShape,
-                    )
-                    .pointerHoverIcon(PointerIcon.Hand)
-                    .onPointerEvent(PointerEventType.Enter) { peekHovered = true }
-                    .onPointerEvent(PointerEventType.Exit) { peekHovered = false }
-                    .clickable { onToggleOpen(true) }
-                    .onPointerEvent(PointerEventType.Scroll) { ev ->
-                        val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
-                        if (dy > 0.5f) {
-                            onToggleOpen(true)
-                        }
-                    },
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Box(
-                    Modifier
-                        .size(width = 36.dp, height = 4.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.28f)),
-                )
-                Spacer(Modifier.height(5.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.KeyboardArrowUp,
-                        contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.72f),
-                        modifier = Modifier.size(15.dp),
-                    )
-                    Text(
-                        text = "Tu música · Explorar · Buscar",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 0.3.sp,
-                        color = Color.White.copy(alpha = 0.72f),
-                    )
-                }
-            }
-        }
-
-        // Cajón desplegado desde abajo (.oto-sheet en core.css:675-710, Opción 1 · Cristal Caelestia)
+        // Cajón desplegado desde abajo con el Fondo 4 · Lente de Agua (fondos-menu.html:265-282),
+        // sin píldora inferior de asomo cuando está cerrado (se abre con rueda abajo o Ctrl+K).
         AnimatedVisibility(
             visible = open,
             enter = fadeIn() + slideInVertically(spring(dampingRatio = 0.84f, stiffness = 320f)) { it / 3 },
@@ -295,7 +219,7 @@ fun DesktopMenuSheet(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.38f))
+                    .background(Color.Black.copy(alpha = 0.16f))
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -308,6 +232,7 @@ fun DesktopMenuSheet(
                     },
                 contentAlignment = Alignment.BottomCenter,
             ) {
+                val sheetShape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp)
                 Box(
                     modifier = Modifier
                         .widthIn(max = 1040.dp)
@@ -315,56 +240,73 @@ fun DesktopMenuSheet(
                         .padding(horizontal = 20.dp)
                         .fillMaxHeight(0.84f)
                         .shadow(
-                            elevation = 48.dp,
-                            shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
-                            ambientColor = Color.Black.copy(alpha = 0.75f),
+                            elevation = 42.dp,
+                            shape = sheetShape,
+                            ambientColor = Color.Black.copy(alpha = 0.62f),
                             spotColor = Color.Black,
                         )
-                        .clip(RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp))
+                        .clip(sheetShape)
                         .background(
                             Brush.verticalGradient(
-                                listOf(
-                                    Color(0xEB15121D),
-                                    Color(0xF50E0C14),
-                                ),
+                                0.00f to Color.White.copy(alpha = 0.14f),
+                                0.28f to Color(0x82101218),
+                                1.00f to Color(0x9E0C0D12),
                             ),
                         )
                         .border(
                             1.dp,
                             Brush.verticalGradient(
-                                listOf(
-                                    Color.White.copy(alpha = 0.16f),
-                                    Color.White.copy(alpha = 0.06f),
-                                ),
+                                0.00f to Color.White.copy(alpha = 0.42f),
+                                0.35f to Color.White.copy(alpha = 0.30f),
+                                1.00f to palette.primary.copy(alpha = 0.24f),
                             ),
-                            RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
+                            sheetShape,
                         )
                         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
                 ) {
-                    // Halo radial superior con el color de acento de la portada (idéntico a core.css:685)
+                    // Refracción de Lente de Agua (Opción 4):
+                    // - Brillo blanco cristalino en el labio superior (inset 0 2px 3px rgba(255,255,255,0.6))
+                    // - Velo de agua ultratransparente arriba que deja pasar la luz del escenario desenfocado
+                    // - Resplandor interior inferior con el color --accent (inset 0 -16px 40px var(--accent))
                     Canvas(Modifier.fillMaxSize()) {
                         val w = size.width
                         val h = size.height
+                        // Luz blanca suave en el tercio superior (efecto lente de agua)
                         drawRect(
-                            brush = Brush.radialGradient(
-                                colors = listOf(palette.primary.copy(alpha = 0.20f), Color.Transparent),
-                                center = Offset(w * 0.50f, 0f),
-                                radius = w * 0.65f,
+                            brush = Brush.verticalGradient(
+                                0.00f to Color.White.copy(alpha = 0.09f),
+                                0.22f to Color.Transparent,
                             ),
                         )
+                        // Refracción cromática inferior (inset 0 -16px 40px color-mix(in srgb, var(--accent) 18%, transparent))
+                        drawRect(
+                            brush = Brush.radialGradient(
+                                colors = listOf(palette.primary.copy(alpha = 0.22f), Color.Transparent),
+                                center = Offset(w * 0.50f, h * 1.02f),
+                                radius = w * 0.68f,
+                            ),
+                        )
+                        // Refracción sutil secundaria en la esquina superior izquierda
+                        drawRect(
+                            brush = Brush.radialGradient(
+                                colors = listOf(palette.primary.copy(alpha = 0.14f), Color.Transparent),
+                                center = Offset(w * 0.24f, h * 0.06f),
+                                radius = w * 0.50f,
+                            ),
+                        )
+                        // Labio especular blanco de 2.5px en el borde superior (inset 0 2px 3px rgba(255, 255, 255, 0.6))
                         drawLine(
                             brush = Brush.horizontalGradient(
                                 listOf(
-                                    Color.Transparent,
-                                    Color.White.copy(alpha = 0.22f),
-                                    palette.primary.copy(alpha = 0.35f),
-                                    Color.White.copy(alpha = 0.22f),
-                                    Color.Transparent,
+                                    Color.White.copy(alpha = 0.18f),
+                                    Color.White.copy(alpha = 0.62f),
+                                    Color.White.copy(alpha = 0.62f),
+                                    Color.White.copy(alpha = 0.18f),
                                 ),
                             ),
-                            start = Offset(w * 0.08f, 1f),
-                            end = Offset(w * 0.92f, 1f),
-                            strokeWidth = 1.5f,
+                            start = Offset(w * 0.03f, 1.5f),
+                            end = Offset(w * 0.97f, 1.5f),
+                            strokeWidth = 2.5f,
                         )
                     }
 
