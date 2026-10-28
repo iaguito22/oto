@@ -56,19 +56,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.VolumeDown
-import androidx.compose.material.icons.automirrored.rounded.VolumeMute
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
-import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.GraphicEq
-import androidx.compose.material.icons.rounded.MusicNote
-import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
-import androidx.compose.material.icons.rounded.SkipNext
-import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Typography
 import androidx.compose.material3.Text
@@ -127,6 +114,7 @@ import io.github.iaguito22.oto.playback.Quality
 import io.github.iaguito22.oto.lyrics.Lyrics
 import io.github.iaguito22.oto.playback.NowPlaying
 import io.github.iaguito22.oto.playback.Source
+import io.github.iaguito22.oto.desktop.ui.MobileIcons
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -501,13 +489,9 @@ fun DesktopStage(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = when {
-                        volume <= 0.001f -> Icons.AutoMirrored.Rounded.VolumeMute
-                        volume < 0.5f -> Icons.AutoMirrored.Rounded.VolumeDown
-                        else -> Icons.AutoMirrored.Rounded.VolumeUp
-                    },
+                    imageVector = MobileIcons.speaker,
                     contentDescription = if (volume <= 0.001f) "Desmutear" else "Silenciar",
-                    tint = animPal.primary,
+                    tint = if (volume <= 0.001f) Color.White.copy(alpha = 0.36f) else animPal.primary,
                     modifier = Modifier.size(19.dp),
                 )
             }
@@ -905,7 +889,7 @@ private fun SpotifyPlayerColumn(
                         )
                     } else {
                         Icon(
-                            imageVector = Icons.Rounded.MusicNote,
+                            imageVector = MobileIcons.libraryMusic,
                             contentDescription = null,
                             tint = palette.primary.copy(alpha = 0.55f),
                             modifier = Modifier.size(80.dp),
@@ -959,7 +943,7 @@ private fun SpotifyPlayerColumn(
                             onClick = onPrev,
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.SkipPrevious,
+                                imageVector = MobileIcons.skipPrevious,
                                 contentDescription = "Anterior",
                                 tint = Color(0xFFFFFFFF),
                                 modifier = Modifier.size(28.dp),
@@ -973,7 +957,7 @@ private fun SpotifyPlayerColumn(
                             onClick = onTogglePlay,
                         ) {
                             Icon(
-                                imageVector = if (nowPlaying.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                imageVector = if (nowPlaying.playing) MobileIcons.pause else MobileIcons.play,
                                 contentDescription = if (nowPlaying.playing) "Pausar" else "Reproducir",
                                 tint = Color(0xFF151515),
                                 modifier = Modifier.size(34.dp),
@@ -990,7 +974,7 @@ private fun SpotifyPlayerColumn(
                             onClick = onNext,
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.SkipNext,
+                                imageVector = MobileIcons.skipNext,
                                 contentDescription = "Siguiente",
                                 tint = Color(0xFFFFFFFF),
                                 modifier = Modifier.size(28.dp),
@@ -1020,7 +1004,7 @@ private fun SpotifyPlayerColumn(
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                imageVector = MobileIcons.favorite,
                                 contentDescription = if (liked) "Quitar de Me gusta" else "Añadir a Me gusta",
                                 tint = if (liked) palette.primary else Color.White.copy(alpha = 0.85f),
                                 modifier = Modifier.size(17.dp),
@@ -1035,7 +1019,7 @@ private fun SpotifyPlayerColumn(
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.PlaylistAdd,
+                                imageVector = MobileIcons.playlistAdd,
                                 contentDescription = "Guardar en lista",
                                 tint = Color.White.copy(alpha = 0.85f),
                                 modifier = Modifier.size(18.dp),
@@ -1059,7 +1043,7 @@ private fun SpotifyPlayerColumn(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Favorite,
+                        imageVector = MobileIcons.favorite,
                         contentDescription = "Guardado en Me gusta",
                         tint = palette.primary,
                         modifier = Modifier.size(15.dp),
@@ -1082,7 +1066,7 @@ private fun SpotifyPlayerColumn(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Favorite,
+                        imageVector = MobileIcons.favorite,
                         contentDescription = null,
                         tint = palette.primary,
                         modifier = Modifier.size(96.dp),

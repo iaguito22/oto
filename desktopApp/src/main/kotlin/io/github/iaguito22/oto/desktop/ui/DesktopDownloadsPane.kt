@@ -20,15 +20,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.DownloadDone
-import androidx.compose.material.icons.rounded.DownloadForOffline
-import androidx.compose.material.icons.rounded.LibraryMusic
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -60,6 +51,7 @@ import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.desktop.playback.DesktopDownloads
 import io.github.iaguito22.oto.desktop.playback.DOWNLOADS_ID
 import io.github.iaguito22.oto.toSong
+import io.github.iaguito22.oto.desktop.ui.MobileIcons
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -116,7 +108,7 @@ internal fun DownloadsPane(
         item(key = "head") {
             Column(Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    RoundButton(Icons.AutoMirrored.Rounded.ArrowBack, "Volver", onBack)
+                    RoundButton(MobileIcons.arrowBack, "Volver", onBack)
                     Spacer(Modifier.width(10.dp))
                     Text("Descargas", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFFFFFFF))
                 }
@@ -153,7 +145,7 @@ internal fun DownloadsPane(
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Icon(Icons.Rounded.DownloadForOffline, null, Modifier.size(44.dp), tint = Color.White.copy(alpha = 0.35f))
+                    Icon(MobileIcons.downloadOffline, null, Modifier.size(44.dp), tint = Color.White.copy(alpha = 0.35f))
                     Spacer(Modifier.height(10.dp))
                     Text("Nada descargado", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
                     Text(
@@ -290,7 +282,7 @@ private fun ListRow(
             if (bmp != null) {
                 Image(bmp!!, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             } else {
-                Icon(Icons.Rounded.LibraryMusic, null, Modifier.size(20.dp), tint = accent)
+                Icon(MobileIcons.libraryMusic, null, Modifier.size(20.dp), tint = accent)
             }
         }
         Spacer(Modifier.width(12.dp))
@@ -299,9 +291,9 @@ private fun ListRow(
             Text(status, fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.58f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (total > 0 && done < total) {
-            Icon(Icons.Rounded.Download, null, Modifier.size(18.dp), tint = Color.White.copy(alpha = 0.5f))
+            Icon(MobileIcons.download, null, Modifier.size(18.dp), tint = Color.White.copy(alpha = 0.5f))
         } else if (total > 0) {
-            Icon(Icons.Rounded.DownloadDone, null, Modifier.size(18.dp), tint = accent)
+            Icon(MobileIcons.downloadDone, null, Modifier.size(18.dp), tint = accent)
         }
         RemoveButton(onRemove)
     }
@@ -347,7 +339,7 @@ private fun SongDownloadRow(
             if (bmp != null) {
                 Image(bmp!!, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             } else {
-                Icon(Icons.Rounded.PlayArrow, null, Modifier.size(20.dp), tint = Color.White.copy(alpha = 0.45f))
+                Icon(MobileIcons.play, null, Modifier.size(20.dp), tint = Color.White.copy(alpha = 0.45f))
             }
         }
         Spacer(Modifier.width(12.dp))
@@ -376,7 +368,7 @@ private fun RemoveButton(onClick: () -> Unit) {
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(Icons.Rounded.Close, "Quitar la descarga", Modifier.size(17.dp), tint = Color.White.copy(alpha = 0.5f))
+        Icon(MobileIcons.close, "Quitar la descarga", Modifier.size(17.dp), tint = Color.White.copy(alpha = 0.5f))
     }
 }
 

@@ -38,18 +38,10 @@ import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.account.Account
 import io.github.iaguito22.oto.account.Cloud
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.VolumeMute
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.material.icons.rounded.FastRewind
-import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
-import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.SkipNext
-import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.window.WindowPlacement
 import io.github.iaguito22.oto.desktop.ui.CueInfo
@@ -74,6 +66,7 @@ import io.github.iaguito22.oto.importer.Importer
 import io.github.iaguito22.oto.lyrics.LyricsStore
 import io.github.iaguito22.oto.playback.InnerTubeXPlayer
 import io.github.iaguito22.oto.ui.menu.MenuController
+import io.github.iaguito22.oto.desktop.ui.MobileIcons
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -225,17 +218,17 @@ fun main() {
                         (ev.key == Key.Spacebar && (!menuOpen || !menuTextInputFocused) && savingTrack == null) || ev.key == Key.MediaPlayPause -> {
                             val willPlay = !player.state.value.playing
                             player.toggle()
-                            cue = if (willPlay) CueInfo(Icons.Rounded.PlayArrow, "Reanudado") else CueInfo(Icons.Rounded.Pause, "Pausado")
+                            cue = if (willPlay) CueInfo(MobileIcons.play, "Reanudado") else CueInfo(MobileIcons.pause, "Pausado")
                             true
                         }
                         (!menuOpen && !ev.isCtrlPressed && ev.key == Key.N) || (!menuOpen && ev.isCtrlPressed && ev.key == Key.DirectionRight) -> {
                             player.next()
-                            cue = CueInfo(Icons.Rounded.SkipNext, "Siguiente")
+                            cue = CueInfo(MobileIcons.skipNext, "Siguiente")
                             true
                         }
                         (!menuOpen && !ev.isCtrlPressed && ev.key == Key.P) || (!menuOpen && ev.isCtrlPressed && ev.key == Key.DirectionLeft) -> {
                             player.previous()
-                            cue = CueInfo(Icons.Rounded.SkipPrevious, "Anterior")
+                            cue = CueInfo(MobileIcons.skipPrevious, "Anterior")
                             true
                         }
                         !menuOpen && !ev.isCtrlPressed && ev.key == Key.DirectionRight -> {
@@ -260,11 +253,11 @@ fun main() {
                             if (player.volume.value > 0.001f) {
                                 lastNonZeroVolume = player.volume.value
                                 player.setVolume(0f)
-                                cue = CueInfo(Icons.AutoMirrored.Rounded.VolumeMute, "Silenciado")
+                                cue = CueInfo(MobileIcons.speaker, "Silenciado")
                             } else {
                                 val restoreVol = if (lastNonZeroVolume > 0.05f) lastNonZeroVolume else 0.8f
                                 player.setVolume(restoreVol)
-                                cue = CueInfo(Icons.AutoMirrored.Rounded.VolumeUp, "Sonido activo")
+                                cue = CueInfo(MobileIcons.speaker, "Sonido activo")
                             }
                             true
                         }
@@ -277,9 +270,9 @@ fun main() {
                                     val wasLiked = prefs.likedIds.firstOrNull()?.contains(sid) ?: false
                                     prefs.setLiked(h, !wasLiked)
                                     cue = if (wasLiked) {
-                                        CueInfo(Icons.Rounded.FavoriteBorder, "Retirado de Me gusta")
+                                        CueInfo(MobileIcons.favorite, "Retirado de Me gusta")
                                     } else {
-                                        CueInfo(Icons.Rounded.Favorite, "Guardado en Me gusta")
+                                        CueInfo(MobileIcons.favorite, "Guardado en Me gusta")
                                     }
                                 }
                             }
@@ -377,15 +370,15 @@ fun main() {
                     onTogglePlay = {
                         val willPlay = !player.state.value.playing
                         player.toggle()
-                        cue = if (willPlay) CueInfo(Icons.Rounded.PlayArrow, "Reanudado") else CueInfo(Icons.Rounded.Pause, "Pausado")
+                        cue = if (willPlay) CueInfo(MobileIcons.play, "Reanudado") else CueInfo(MobileIcons.pause, "Pausado")
                     },
                     onPrev = {
                         player.previous()
-                        cue = CueInfo(Icons.Rounded.SkipPrevious, "Anterior")
+                        cue = CueInfo(MobileIcons.skipPrevious, "Anterior")
                     },
                     onNext = {
                         player.next()
-                        cue = CueInfo(Icons.Rounded.SkipNext, "Siguiente")
+                        cue = CueInfo(MobileIcons.skipNext, "Siguiente")
                     },
                     onSeek = player::seekTo,
                     onAdjustVolume = player::adjustVolume,
@@ -407,7 +400,7 @@ fun main() {
                         val willBeLiked = !isLiked
                         uiScope.launch {
                             prefs.setLiked(heard, willBeLiked)
-                            cue = if (willBeLiked) CueInfo(Icons.Rounded.Favorite, "Guardado en Me gusta") else CueInfo(Icons.Rounded.FavoriteBorder, "Retirado de Me gusta")
+                            cue = if (willBeLiked) CueInfo(MobileIcons.favorite, "Guardado en Me gusta") else CueInfo(MobileIcons.favorite, "Retirado de Me gusta")
                         }
                     },
                     onOpenSource = {
@@ -467,15 +460,15 @@ fun main() {
                     onTogglePlay = {
                         val willPlay = !player.state.value.playing
                         player.toggle()
-                        cue = if (willPlay) CueInfo(Icons.Rounded.PlayArrow, "Reanudado") else CueInfo(Icons.Rounded.Pause, "Pausado")
+                        cue = if (willPlay) CueInfo(MobileIcons.play, "Reanudado") else CueInfo(MobileIcons.pause, "Pausado")
                     },
                     onPrev = {
                         player.previous()
-                        cue = CueInfo(Icons.Rounded.SkipPrevious, "Anterior")
+                        cue = CueInfo(MobileIcons.skipPrevious, "Anterior")
                     },
                     onNext = {
                         player.next()
-                        cue = CueInfo(Icons.Rounded.SkipNext, "Siguiente")
+                        cue = CueInfo(MobileIcons.skipNext, "Siguiente")
                     },
                     onToggleLike = {
                         val id = nowPlaying.id ?: return@DesktopMenuSheet
@@ -483,7 +476,7 @@ fun main() {
                         val willBeLiked = !isLiked
                         uiScope.launch {
                             prefs.setLiked(heard, willBeLiked)
-                            cue = if (willBeLiked) CueInfo(Icons.Rounded.Favorite, "Guardado en Me gusta") else CueInfo(Icons.Rounded.FavoriteBorder, "Retirado de Me gusta")
+                            cue = if (willBeLiked) CueInfo(MobileIcons.favorite, "Guardado en Me gusta") else CueInfo(MobileIcons.favorite, "Retirado de Me gusta")
                         }
                     },
                 )

@@ -56,60 +56,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.rounded.VolumeDown
-import androidx.compose.material.icons.automirrored.rounded.VolumeMute
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
-import androidx.compose.material.icons.rounded.Shuffle
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.QueueMusic
-import androidx.compose.material.icons.automirrored.rounded.Sort
 import kotlin.math.roundToInt
 import androidx.compose.material.icons.rounded.Album
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.CloudDone
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.DownloadDone
-import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.ui.zIndex
-import androidx.compose.material.icons.rounded.CreateNewFolder
-import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.FileUpload
-import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.FolderOpen
-import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
-import androidx.compose.material.icons.rounded.LibraryMusic
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.MusicNote
-import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.PushPin
-import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
-import androidx.compose.material.icons.rounded.ContentCopy
-import androidx.compose.material.icons.rounded.Repeat
-import androidx.compose.material.icons.rounded.Translate
-import androidx.compose.material.icons.rounded.Timer
-import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.OpenInNew
-import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.DragHandle
-import androidx.compose.material.icons.rounded.SkipPrevious
-import androidx.compose.material.icons.rounded.SkipNext
-import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import io.github.iaguito22.oto.importer.SourceList
@@ -196,6 +152,7 @@ import io.github.iaguito22.oto.toSong
 import io.github.iaguito22.oto.ui.menu.Filter
 import io.github.iaguito22.oto.ui.menu.MenuController
 import io.github.iaguito22.oto.ui.menu.Page
+import io.github.iaguito22.oto.desktop.ui.MobileIcons
 import kotlinx.coroutines.launch
 import java.awt.FileDialog
 import java.awt.Frame
@@ -586,7 +543,7 @@ fun DesktopMenuSheet(
                                         .clickable(onClick = onPrev),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    Icon(Icons.Rounded.SkipPrevious, contentDescription = "Anterior", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp))
+                                    Icon(MobileIcons.skipPrevious, contentDescription = "Anterior", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp))
                                 }
                                 Box(
                                     modifier = Modifier
@@ -598,7 +555,7 @@ fun DesktopMenuSheet(
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Icon(
-                                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                        imageVector = if (isPlaying) MobileIcons.pause else MobileIcons.play,
                                         contentDescription = if (isPlaying) "Pausar" else "Reproducir",
                                         tint = Color(0xFF101010),
                                         modifier = Modifier.size(18.dp),
@@ -612,7 +569,7 @@ fun DesktopMenuSheet(
                                         .clickable(onClick = onNext),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    Icon(Icons.Rounded.SkipNext, contentDescription = "Siguiente", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp))
+                                    Icon(MobileIcons.skipNext, contentDescription = "Siguiente", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp))
                                 }
                                 Box(
                                     modifier = Modifier
@@ -623,7 +580,7 @@ fun DesktopMenuSheet(
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Icon(
-                                        imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                        imageVector = MobileIcons.favorite,
                                         contentDescription = "Me gusta",
                                         tint = if (liked) palette.primary else Color.White.copy(alpha = 0.75f),
                                         modifier = Modifier.size(16.dp),
@@ -667,11 +624,7 @@ fun DesktopMenuSheet(
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Icon(
-                                        imageVector = when {
-                                            volume <= 0.001f -> Icons.AutoMirrored.Rounded.VolumeMute
-                                            volume < 0.5f -> Icons.AutoMirrored.Rounded.VolumeDown
-                                            else -> Icons.AutoMirrored.Rounded.VolumeUp
-                                        },
+                                        imageVector = MobileIcons.speaker,
                                         contentDescription = if (volume <= 0.001f) "Desmutear" else "Silenciar",
                                         tint = Color.White.copy(alpha = 0.82f),
                                         modifier = Modifier.size(16.dp),
@@ -776,7 +729,7 @@ fun DesktopMenuSheet(
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Icon(
-                                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                        imageVector = MobileIcons.arrowBack,
                                         contentDescription = "Volver",
                                         tint = Color.White.copy(alpha = 0.85f),
                                         modifier = Modifier.size(22.dp),
@@ -805,7 +758,7 @@ fun DesktopMenuSheet(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 SheetCircleIconButton(
-                                    icon = Icons.Rounded.Download,
+                                    icon = MobileIcons.download,
                                     tooltip = "Descargas",
                                     active = subView == MenuSubView.Downloads,
                                     accent = palette.primary,
@@ -815,7 +768,7 @@ fun DesktopMenuSheet(
                                     },
                                 )
                                 SheetCircleIconButton(
-                                    icon = Icons.AutoMirrored.Rounded.QueueMusic,
+                                    icon = MobileIcons.queueMusic,
                                     tooltip = "Cola de reproducción",
                                     active = false,
                                     accent = palette.primary,
@@ -823,7 +776,7 @@ fun DesktopMenuSheet(
                                     onClick = onOpenQueue,
                                 )
                                 SheetCircleIconButton(
-                                    icon = Icons.Rounded.Settings,
+                                    icon = MobileIcons.settings,
                                     tooltip = "Ajustes y cuenta",
                                     active = subView == MenuSubView.Settings,
                                     accent = palette.primary,
@@ -832,7 +785,7 @@ fun DesktopMenuSheet(
                                     },
                                 )
                                 SheetCircleIconButton(
-                                    icon = Icons.Rounded.Close,
+                                    icon = MobileIcons.close,
                                     tooltip = "Cerrar (Esc)",
                                     active = false,
                                     accent = palette.primary,
@@ -1212,7 +1165,7 @@ private fun MenuSearchBar(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Icon(
-            imageVector = Icons.Rounded.Search,
+            imageVector = MobileIcons.search,
             contentDescription = null,
             tint = Color.White.copy(alpha = 0.56f),
             modifier = Modifier.size(16.dp),
@@ -1246,7 +1199,7 @@ private fun MenuSearchBar(
         }
         if (query.isNotEmpty()) {
             Icon(
-                imageVector = Icons.Rounded.Close,
+                imageVector = MobileIcons.close,
                 contentDescription = "Limpiar búsqueda",
                 tint = Color.White.copy(alpha = 0.65f),
                 modifier = Modifier
@@ -1585,7 +1538,7 @@ private fun YourMusicPane(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Icon(Icons.Rounded.Add, null, tint = Color(0xFFFFFFFF), modifier = Modifier.size(15.dp))
+                        Icon(MobileIcons.add, null, tint = Color(0xFFFFFFFF), modifier = Modifier.size(15.dp))
                         Text("Nueva", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFFFFF))
                     }
                     var folderHovered by remember { mutableStateOf(false) }
@@ -1603,7 +1556,7 @@ private fun YourMusicPane(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Icon(Icons.Rounded.CreateNewFolder, null, tint = Color(0xFFFFFFFF), modifier = Modifier.size(15.dp))
+                        Icon(MobileIcons.createNewFolder, null, tint = Color(0xFFFFFFFF), modifier = Modifier.size(15.dp))
                         Text("Carpeta", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFFFFF))
                     }
                 }
@@ -1905,7 +1858,7 @@ private fun YourMusicPane(
                         color = Color.White.copy(alpha = 0.62f),
                     )
                     Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        imageVector = MobileIcons.chevronRight,
                         contentDescription = null,
                         tint = Color.White.copy(alpha = 0.62f),
                         modifier = Modifier.size(18.dp),
@@ -1993,7 +1946,7 @@ private fun AllListsSubPane(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                    imageVector = MobileIcons.arrowBack,
                     contentDescription = "Volver",
                     tint = Color.White.copy(alpha = 0.85f),
                     modifier = Modifier.size(22.dp),
@@ -2281,7 +2234,7 @@ private fun MeGustaShelfCard(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.Rounded.Favorite,
+                imageVector = MobileIcons.favorite,
                 contentDescription = null,
                 tint = Color(0xFF101010).copy(alpha = 0.90f),
                 modifier = Modifier.size(64.dp),
@@ -2299,7 +2252,7 @@ private fun MeGustaShelfCard(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
+                        imageVector = MobileIcons.play,
                         contentDescription = "Reproducir Me gusta",
                         tint = accent,
                         modifier = Modifier.size(22.dp),
@@ -2376,7 +2329,7 @@ private fun FolderShelfCard(
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
             }
             Icon(
-                imageVector = Icons.Rounded.Folder,
+                imageVector = MobileIcons.folder,
                 contentDescription = null,
                 tint = if (coverBmp != null) Color.White.copy(alpha = 0.92f) else accent.copy(alpha = 0.85f),
                 modifier = Modifier.size(56.dp),
@@ -2393,7 +2346,7 @@ private fun FolderShelfCard(
                         .clickable(onClick = onPlayDirect),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Rounded.PlayArrow, "Reproducir carpeta", tint = Color(0xFF101010), modifier = Modifier.size(22.dp))
+                    Icon(MobileIcons.play, "Reproducir carpeta", tint = Color(0xFF101010), modifier = Modifier.size(22.dp))
                 }
             }
         }
@@ -2468,7 +2421,7 @@ private fun PlaylistShelfCard(
                 )
             } else {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                    imageVector = MobileIcons.queueMusic,
                     contentDescription = null,
                     tint = accent.copy(alpha = 0.75f),
                     modifier = Modifier.size(48.dp),
@@ -2487,7 +2440,7 @@ private fun PlaylistShelfCard(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
+                        imageVector = MobileIcons.play,
                         contentDescription = "Reproducir",
                         tint = Color(0xFF101010),
                         modifier = Modifier.size(22.dp),
@@ -2565,7 +2518,7 @@ private fun PlaylistTileDesktop(
             when {
                 playlist.id == LIKED_ID -> {
                     Icon(
-                        imageVector = Icons.Rounded.Favorite,
+                        imageVector = MobileIcons.favorite,
                         contentDescription = null,
                         tint = Color(0xFF101010),
                         modifier = Modifier.size(26.dp),
@@ -2581,7 +2534,7 @@ private fun PlaylistTileDesktop(
                 }
                 else -> {
                     Icon(
-                        imageVector = Icons.Rounded.LibraryMusic,
+                        imageVector = MobileIcons.libraryMusic,
                         contentDescription = null,
                         tint = accent,
                         modifier = Modifier.size(24.dp),
@@ -2617,7 +2570,7 @@ private fun PlaylistTileDesktop(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.PlayArrow,
+                    imageVector = MobileIcons.play,
                     contentDescription = "Reproducir lista",
                     tint = Color(0xFF101010),
                     modifier = Modifier.size(18.dp),
@@ -2675,7 +2628,7 @@ private fun FolderTileDesktop(
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
             }
             Icon(
-                imageVector = Icons.Rounded.Folder,
+                imageVector = MobileIcons.folder,
                 contentDescription = null,
                 tint = if (coverBmp != null) Color.White.copy(alpha = 0.92f) else accent,
                 modifier = Modifier.size(26.dp),
@@ -2709,7 +2662,7 @@ private fun FolderTileDesktop(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.PlayArrow,
+                    imageVector = MobileIcons.play,
                     contentDescription = "Reproducir carpeta",
                     tint = Color(0xFF101010),
                     modifier = Modifier.size(18.dp),
@@ -2746,7 +2699,7 @@ private fun SortRow(newest: Boolean, onFlip: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Icon(
-            imageVector = Icons.AutoMirrored.Rounded.Sort,
+            imageVector = MobileIcons.swapVert,
             contentDescription = null,
             tint = Color.White.copy(alpha = 0.65f),
             modifier = Modifier.size(18.dp).graphicsLayer { rotationX = turn },
@@ -2818,7 +2771,7 @@ private fun FolderDetailPane(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                        imageVector = MobileIcons.arrowBack,
                         contentDescription = "Volver",
                         tint = Color.White.copy(alpha = 0.85f),
                         modifier = Modifier.size(24.dp),
@@ -2837,7 +2790,7 @@ private fun FolderDetailPane(
                         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)))
                     }
                     Icon(
-                        imageVector = Icons.Rounded.Folder,
+                        imageVector = MobileIcons.folder,
                         contentDescription = null,
                         tint = if (coverBmp != null) Color.White.copy(alpha = 0.95f) else palette.primary,
                         modifier = Modifier.size(40.dp),
@@ -2873,13 +2826,13 @@ private fun FolderDetailPane(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Icon(Icons.Rounded.PlayArrow, null, tint = Color(0xFF101010), modifier = Modifier.size(20.dp))
+                                Icon(MobileIcons.play, null, tint = Color(0xFF101010), modifier = Modifier.size(20.dp))
                                 Text("Reproducir", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF101010))
                             }
                         }
                         Box {
                             SheetCircleIconButton(
-                                icon = Icons.Rounded.MoreVert,
+                                icon = MobileIcons.moreHoriz,
                                 tooltip = "Opciones de carpeta",
                                 active = showMenu,
                                 accent = palette.primary,
@@ -2895,7 +2848,7 @@ private fun FolderDetailPane(
                                 if (onTogglePin != null) {
                                     DropdownMenuItem(
                                         text = { Text(if (pinned) "Quitar de arriba" else "Fijar arriba", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
-                                        leadingIcon = { Icon(Icons.Rounded.PushPin, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
+                                        leadingIcon = { Icon(MobileIcons.keep, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
                                         onClick = {
                                             showMenu = false
                                             onTogglePin()
@@ -2904,7 +2857,7 @@ private fun FolderDetailPane(
                                 }
                                 DropdownMenuItem(
                                     text = { Text("Añadir o quitar listas", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
-                                    leadingIcon = { Icon(Icons.Rounded.FolderOpen, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
+                                    leadingIcon = { Icon(MobileIcons.folder, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
                                     onClick = {
                                         showMenu = false
                                         editing = false
@@ -2913,7 +2866,7 @@ private fun FolderDetailPane(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Cambiar el nombre", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
-                                    leadingIcon = { Icon(Icons.Rounded.Edit, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
+                                    leadingIcon = { Icon(MobileIcons.edit, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
                                     onClick = {
                                         showMenu = false
                                         filling = false
@@ -2923,7 +2876,7 @@ private fun FolderDetailPane(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Deshacer la carpeta", color = Color(0xFFFF6E6E), fontSize = 13.sp) },
-                                    leadingIcon = { Icon(Icons.Rounded.Folder, null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
+                                    leadingIcon = { Icon(MobileIcons.folder, null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
                                     onClick = {
                                         showMenu = false
                                         onUngroup()
@@ -3051,7 +3004,7 @@ private fun FolderDetailPane(
                                 contentAlignment = Alignment.Center,
                             ) {
                                 if (inside) {
-                                    Icon(Icons.Rounded.Check, null, tint = Color(0xFF101010), modifier = Modifier.size(14.dp))
+                                    Icon(MobileIcons.check, null, tint = Color(0xFF101010), modifier = Modifier.size(14.dp))
                                 }
                             }
                             Column(Modifier.weight(1f)) {
@@ -3076,7 +3029,7 @@ private fun FolderDetailPane(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Icon(Icons.Rounded.FolderOpen, null, Modifier.size(40.dp), tint = Color.White.copy(alpha = 0.32f))
+                    Icon(MobileIcons.folder, null, Modifier.size(40.dp), tint = Color.White.copy(alpha = 0.32f))
                     Text("Está vacía", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
                     Text(
                         "Añade listas con el botón de arriba, o desde el menú (···) de cada lista.",
@@ -3112,7 +3065,7 @@ private fun FolderDetailPane(
                         if (bmp != null) {
                             Image(bmp!!, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                         } else {
-                            Icon(Icons.AutoMirrored.Rounded.QueueMusic, null, Modifier.size(22.dp), tint = palette.primary)
+                            Icon(MobileIcons.queueMusic, null, Modifier.size(22.dp), tint = palette.primary)
                         }
                     }
                     Column(Modifier.weight(1f)) {
@@ -3120,7 +3073,7 @@ private fun FolderDetailPane(
                         Text("${pl.songs.size} canciones", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.56f), maxLines = 1)
                     }
                     Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        imageVector = MobileIcons.chevronRight,
                         contentDescription = null,
                         tint = Color.White.copy(alpha = 0.35f),
                         modifier = Modifier.size(18.dp),
@@ -3196,7 +3149,7 @@ private fun LocalPlaylistDetailPane(
                 when {
                     list.id == LIKED_ID -> {
                         Icon(
-                            imageVector = Icons.Rounded.Favorite,
+                            imageVector = MobileIcons.favorite,
                             contentDescription = null,
                             tint = Color(0xFF101010),
                             modifier = Modifier.size(54.dp),
@@ -3212,7 +3165,7 @@ private fun LocalPlaylistDetailPane(
                     }
                     else -> {
                         Icon(
-                            imageVector = Icons.Rounded.LibraryMusic,
+                            imageVector = MobileIcons.libraryMusic,
                             contentDescription = null,
                             tint = palette.primary,
                             modifier = Modifier.size(48.dp),
@@ -3245,7 +3198,7 @@ private fun LocalPlaylistDetailPane(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                            imageVector = MobileIcons.arrowBack,
                             contentDescription = "Volver",
                             tint = Color.White.copy(alpha = 0.85f),
                             modifier = Modifier.size(24.dp),
@@ -3274,7 +3227,7 @@ private fun LocalPlaylistDetailPane(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.PlayArrow,
+                            imageVector = MobileIcons.play,
                             contentDescription = null,
                             tint = Color(0xFF101010),
                             modifier = Modifier.size(20.dp),
@@ -3288,7 +3241,7 @@ private fun LocalPlaylistDetailPane(
                     }
 
                     SheetCircleIconButton(
-                        icon = Icons.Rounded.Shuffle,
+                        icon = MobileIcons.shuffle,
                         tooltip = "Aleatorio",
                         active = false,
                         accent = palette.primary,
@@ -3299,7 +3252,7 @@ private fun LocalPlaylistDetailPane(
                         var showPlaylistMenu by remember { mutableStateOf(false) }
                         Box {
                             SheetCircleIconButton(
-                                icon = Icons.Rounded.MoreVert,
+                                icon = MobileIcons.moreHoriz,
                                 tooltip = "Opciones de lista",
                                 active = showPlaylistMenu,
                                 accent = palette.primary,
@@ -3318,7 +3271,7 @@ private fun LocalPlaylistDetailPane(
                                         text = { Text(if (isDownloaded) "Quitar descarga" else "Descargar lista", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
                                         leadingIcon = {
                                             Icon(
-                                                imageVector = if (isDownloaded) Icons.Rounded.DownloadDone else Icons.Rounded.Download,
+                                                imageVector = if (isDownloaded) MobileIcons.downloadDone else MobileIcons.download,
                                                 contentDescription = null,
                                                 tint = Color.White.copy(alpha = 0.8f),
                                                 modifier = Modifier.size(18.dp),
@@ -3333,7 +3286,7 @@ private fun LocalPlaylistDetailPane(
                                 if (onTogglePin != null) {
                                     DropdownMenuItem(
                                         text = { Text(if (pinned) "Quitar de arriba" else "Fijar arriba", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
-                                        leadingIcon = { Icon(Icons.Rounded.PushPin, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
+                                        leadingIcon = { Icon(MobileIcons.keep, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
                                         onClick = {
                                             showPlaylistMenu = false
                                             onTogglePin()
@@ -3343,7 +3296,7 @@ private fun LocalPlaylistDetailPane(
                                 if (onMoveToFolder != null) {
                                     DropdownMenuItem(
                                         text = { Text("Mover a carpeta…", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
-                                        leadingIcon = { Icon(Icons.Rounded.Folder, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
+                                        leadingIcon = { Icon(MobileIcons.folder, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
                                         onClick = {
                                             showPlaylistMenu = false
                                             moveNewFolder = ""
@@ -3354,7 +3307,7 @@ private fun LocalPlaylistDetailPane(
                                 if (onDeletePlaylist != null) {
                                     DropdownMenuItem(
                                         text = { Text("Eliminar playlist", color = Color(0xFFFF6E6E), fontWeight = FontWeight.Bold, fontSize = 13.sp) },
-                                        leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
+                                        leadingIcon = { Icon(MobileIcons.delete, contentDescription = null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
                                         onClick = {
                                             showPlaylistMenu = false
                                             onDeletePlaylist()
@@ -3494,7 +3447,7 @@ private fun LocalPlaylistDetailPane(
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Rounded.MoreVert,
+                                        imageVector = MobileIcons.moreHoriz,
                                         contentDescription = "Opciones",
                                         tint = Color.White.copy(alpha = 0.65f),
                                         modifier = Modifier.size(16.dp),
@@ -3509,7 +3462,7 @@ private fun LocalPlaylistDetailPane(
                                 ) {
                                     DropdownMenuItem(
                                         text = { Text("Guardar en otra lista…", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
-                                        leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
+                                        leadingIcon = { Icon(MobileIcons.playlistAdd, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
                                         onClick = {
                                             showSongMenu = false
                                             onSaveTo(s)
@@ -3521,7 +3474,7 @@ private fun LocalPlaylistDetailPane(
                                             text = { Text(if (isDownloaded) "Quitar descarga" else "Descargar", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
                                             leadingIcon = {
                                                 Icon(
-                                                    imageVector = if (isDownloaded) Icons.Rounded.DownloadDone else Icons.Rounded.Download,
+                                                    imageVector = if (isDownloaded) MobileIcons.downloadDone else MobileIcons.download,
                                                     contentDescription = null,
                                                     tint = Color.White.copy(alpha = 0.8f),
                                                     modifier = Modifier.size(18.dp),
@@ -3536,7 +3489,7 @@ private fun LocalPlaylistDetailPane(
                                     if (onRemoveSong != null) {
                                         DropdownMenuItem(
                                             text = { Text("Quitar de esta lista", color = Color(0xFFFF6E6E), fontSize = 13.sp) },
-                                            leadingIcon = { Icon(Icons.Rounded.DeleteOutline, contentDescription = null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
+                                            leadingIcon = { Icon(MobileIcons.delete, contentDescription = null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
                                             onClick = {
                                                 showSongMenu = false
                                                 onRemoveSong(s.id)
@@ -3603,7 +3556,7 @@ private fun RemoteDetailPane(
                     )
                 } else {
                     Icon(
-                        imageVector = if (isArtist) Icons.Rounded.Person else Icons.Rounded.Album,
+                        imageVector = if (isArtist) MobileIcons.person else Icons.Rounded.Album,
                         contentDescription = null,
                         tint = palette.primary,
                         modifier = Modifier.size(if (isArtist) 54.dp else 48.dp),
@@ -3628,7 +3581,7 @@ private fun RemoteDetailPane(
                             horizontalArrangement = Arrangement.spacedBy(5.dp),
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.Person,
+                                imageVector = MobileIcons.person,
                                 contentDescription = null,
                                 tint = palette.primary,
                                 modifier = Modifier.size(12.dp),
@@ -3654,7 +3607,7 @@ private fun RemoteDetailPane(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                            imageVector = MobileIcons.arrowBack,
                             contentDescription = "Volver",
                             tint = Color.White.copy(alpha = 0.85f),
                             modifier = Modifier.size(24.dp),
@@ -3691,7 +3644,7 @@ private fun RemoteDetailPane(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.PlayArrow,
+                                imageVector = MobileIcons.play,
                                 contentDescription = null,
                                 tint = Color(0xFF101010),
                                 modifier = Modifier.size(20.dp),
@@ -3704,7 +3657,7 @@ private fun RemoteDetailPane(
                             )
                         }
                         SheetCircleIconButton(
-                            icon = Icons.Rounded.Shuffle,
+                            icon = MobileIcons.shuffle,
                             tooltip = "Aleatorio",
                             active = false,
                             accent = palette.primary,
@@ -3965,7 +3918,7 @@ private fun ExploreShelfCard(
                 )
             } else {
                 Icon(
-                    imageVector = if (isArtist) Icons.Rounded.Person else Icons.Rounded.Album,
+                    imageVector = if (isArtist) MobileIcons.person else Icons.Rounded.Album,
                     contentDescription = null,
                     tint = Color.White.copy(alpha = 0.40f),
                     modifier = Modifier.size(48.dp),
@@ -3984,7 +3937,7 @@ private fun ExploreShelfCard(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
+                        imageVector = MobileIcons.play,
                         contentDescription = "Reproducir",
                         tint = Color(0xFF101010),
                         modifier = Modifier.size(22.dp),
@@ -4181,7 +4134,7 @@ private fun TopResultCard(
                 )
             } else {
                 Icon(
-                    imageVector = Icons.Rounded.MusicNote,
+                    imageVector = MobileIcons.libraryMusic,
                     contentDescription = null,
                     tint = accent,
                     modifier = Modifier.size(36.dp),
@@ -4215,7 +4168,7 @@ private fun TopResultCard(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.Rounded.PlayArrow,
+                imageVector = MobileIcons.play,
                 contentDescription = "Reproducir",
                 tint = Color(0xFF101010),
                 modifier = Modifier.size(26.dp),
@@ -4267,14 +4220,14 @@ internal fun QueuePane(
                     )
                 }
                 SheetCircleIconButton(
-                    icon = Icons.Rounded.Shuffle,
+                    icon = MobileIcons.shuffle,
                     tooltip = if (shuffle) "Aleatorio activo" else "Activar aleatorio",
                     active = shuffle,
                     accent = palette.primary,
                     onClick = onToggleShuffle,
                 )
                 SheetCircleIconButton(
-                    icon = Icons.Rounded.Repeat,
+                    icon = MobileIcons.repeat,
                     tooltip = if (loop) "Bucle activo" else "Activar bucle",
                     active = loop,
                     accent = palette.primary,
@@ -4282,7 +4235,7 @@ internal fun QueuePane(
                 )
                 if (onClose != null) {
                     SheetCircleIconButton(
-                        icon = Icons.Rounded.Close,
+                        icon = MobileIcons.close,
                         tooltip = "Cerrar (Esc)",
                         active = false,
                         accent = palette.primary,
@@ -4298,7 +4251,7 @@ internal fun QueuePane(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                        imageVector = MobileIcons.queueMusic,
                         contentDescription = null,
                         tint = Color.White.copy(alpha = 0.30f),
                         modifier = Modifier.size(38.dp),
@@ -4400,7 +4353,7 @@ private fun QueueRowDesktop(
     ) {
         if (isCurrent) {
             Icon(
-                imageVector = Icons.Rounded.GraphicEq,
+                imageVector = MobileIcons.graphicEq,
                 contentDescription = "Sonando",
                 tint = accent,
                 modifier = Modifier.size(18.dp),
@@ -4430,7 +4383,7 @@ private fun QueueRowDesktop(
                 )
             } else {
                 Icon(
-                    imageVector = Icons.Rounded.MusicNote,
+                    imageVector = MobileIcons.libraryMusic,
                     contentDescription = null,
                     tint = Color.White.copy(alpha = 0.40f),
                     modifier = Modifier.size(16.dp),
@@ -4522,7 +4475,7 @@ private fun QueueRowDesktop(
                     .clickable(onClick = onRemove),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Rounded.Close, "Quitar", tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
+                Icon(MobileIcons.close, "Quitar", tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
             }
         }
     }
@@ -4585,7 +4538,7 @@ private fun SettingsAndAccountPane(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Icon(Icons.Rounded.CloudDone, null, tint = palette.primary)
+                    Icon(MobileIcons.accountCircle, null, tint = palette.primary)
                     Text("Cuenta de YouTube Music", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
 
@@ -4606,7 +4559,7 @@ private fun SettingsAndAccountPane(
                                 .background(palette.primary.copy(alpha = 0.2f)),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(Icons.Rounded.Person, null, tint = palette.primary, modifier = Modifier.size(24.dp))
+                            Icon(MobileIcons.person, null, tint = palette.primary, modifier = Modifier.size(24.dp))
                         }
                         Column(Modifier.weight(1f)) {
                             Text(session.name.ifBlank { "Conectado" }, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
@@ -4770,7 +4723,7 @@ private fun SettingsAndAccountPane(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Icon(Icons.Rounded.FileUpload, null, tint = palette.secondary)
+                    Icon(MobileIcons.libraryMusic, null, tint = palette.secondary)
                     Text("Importar de Spotify", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
                 Text(
@@ -4907,7 +4860,7 @@ private fun SettingsAndAccountPane(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Icon(Icons.Rounded.DeleteOutline, null, tint = palette.primary)
+                    Icon(MobileIcons.downloadOffline, null, tint = palette.primary)
                     Text("Almacenamiento y caché", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
                 Row(
@@ -5036,7 +4989,7 @@ private fun SpaceRowDesktop(palette: ArtworkPalette) {
     )
     Column(Modifier.fillMaxWidth().padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Rounded.FolderOpen, null, tint = palette.primary, modifier = Modifier.size(18.dp))
+            Icon(MobileIcons.folder, null, tint = palette.primary, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text("Espacio en el disco", style = OtoType.rowTitle, color = Color.White)
         }
@@ -5291,7 +5244,7 @@ private fun ImportPane(
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     if (isChecked) {
-                                        Icon(Icons.Rounded.Check, null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                                        Icon(MobileIcons.check, null, tint = Color.Black, modifier = Modifier.size(16.dp))
                                     }
                                 }
 
@@ -5566,7 +5519,7 @@ private fun SongRowDesktop(
                     )
                 } else {
                     Icon(
-                        imageVector = Icons.Rounded.MusicNote,
+                        imageVector = MobileIcons.libraryMusic,
                         contentDescription = null,
                         tint = Color.White.copy(alpha = 0.45f),
                         modifier = Modifier.size(20.dp),
@@ -5580,7 +5533,7 @@ private fun SongRowDesktop(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = if (isCurrent && !isHovered) Icons.Rounded.GraphicEq else Icons.Rounded.PlayArrow,
+                            imageVector = if (isCurrent && !isHovered) MobileIcons.graphicEq else MobileIcons.play,
                             contentDescription = "Reproducir",
                             tint = if (isCurrent) accent else Color.White,
                             modifier = Modifier.size(20.dp),
@@ -5620,7 +5573,7 @@ private fun SongRowDesktop(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.MoreVert,
+                        imageVector = MobileIcons.moreHoriz,
                         contentDescription = "Guardar en lista",
                         tint = if (isHovered) Color.White else Color.White.copy(alpha = 0.36f),
                         modifier = Modifier.size(17.dp),
@@ -5729,7 +5682,7 @@ fun SaveToModal(
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {
-                        Icon(Icons.Rounded.MusicNote, null, tint = accent, modifier = Modifier.size(24.dp))
+                        Icon(MobileIcons.libraryMusic, null, tint = accent, modifier = Modifier.size(24.dp))
                     }
                 }
                 Column(Modifier.weight(1f)) {
@@ -5757,7 +5710,7 @@ fun SaveToModal(
                         .clickable(onClick = onDismiss),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Rounded.Close, "Cerrar", tint = Color.White, modifier = Modifier.size(16.dp))
+                    Icon(MobileIcons.close, "Cerrar", tint = Color.White, modifier = Modifier.size(16.dp))
                 }
             }
 
@@ -5786,7 +5739,7 @@ fun SaveToModal(
                     SaveToDestinationRow(
                         title = "Me gusta",
                         subtitle = "${likedList.songs.size} canciones",
-                        icon = Icons.Rounded.Favorite,
+                        icon = MobileIcons.favorite,
                         iconTint = if (isLiked) accent else Color.White.copy(alpha = 0.50f),
                         checked = isLiked,
                         accent = accent,
@@ -5800,7 +5753,7 @@ fun SaveToModal(
                     SaveToDestinationRow(
                         title = pl.name,
                         subtitle = "${pl.songs.size} canciones",
-                        icon = Icons.Rounded.LibraryMusic,
+                        icon = MobileIcons.libraryMusic,
                         iconTint = if (inThis) accent else Color.White.copy(alpha = 0.50f),
                         checked = inThis,
                         accent = accent,
@@ -5821,7 +5774,7 @@ fun SaveToModal(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Icon(Icons.Rounded.Add, null, tint = accent, modifier = Modifier.size(18.dp))
+                    Icon(MobileIcons.add, null, tint = accent, modifier = Modifier.size(18.dp))
                     Text("Nueva lista y añadir aquí…", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
                 }
             } else {
@@ -5926,7 +5879,7 @@ private fun SaveToDestinationRow(
             contentAlignment = Alignment.Center,
         ) {
             if (checked) {
-                Icon(Icons.Rounded.Check, null, tint = Color(0xFF101010), modifier = Modifier.size(14.dp))
+                Icon(MobileIcons.check, null, tint = Color(0xFF101010), modifier = Modifier.size(14.dp))
             }
         }
     }

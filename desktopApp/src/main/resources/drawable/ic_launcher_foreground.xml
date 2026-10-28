@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- La gota de Oto como la dibuja el tema de Nothing: anillo y núcleo de luz desplazado, en blanco sobre gris. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFF1F1F1"
+        android:fillType="evenOdd"
+        android:pathData="M54,28a26,26 0,1 1,0 52a26,26 0,1 1,0 -52zM54,33a21,21 0,1 0,0 42a21,21 0,1 0,0 -42z" />
+    <path
+        android:fillColor="#FFF1F1F1"
+        android:pathData="M50,38a10,10 0,1 1,0 20a10,10 0,1 1,0 -20z" />
+</vector>

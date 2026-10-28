@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Icono de la notificación (Media3 lo busca por este nombre): la gota del icono temático, a 24 dp. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M12,2a10,10 0,1 1,0 20a10,10 0,1 1,0 -20zM12,4a8,8 0,1 0,0 16a8,8 0,1 0,0 -16z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M10.5,6.5a4,4 0,1 1,0 8a4,4 0,1 1,0 -8z" />
+</vector>
