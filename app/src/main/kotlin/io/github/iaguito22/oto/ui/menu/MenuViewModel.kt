@@ -77,7 +77,6 @@ class MenuViewModel : ViewModel() {
     @Volatile var taste = Taste()
 
     init {
-        loadHome()
         viewModelScope.launch {
             // Cambiar de filtro busca al momento; escribir, al parar un poco.
             _state.map { it.query.trim() to it.filter }

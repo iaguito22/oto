@@ -168,9 +168,6 @@ fun Drop(
                     last = withFrameNanos { it }
                     continue
                 }
-                // Quieta y en pausa solo respira, a menos de medio píxel por fotograma: a 30 por segundo se ve igual
-                // que a 120 y cuesta la cuarta parte. Tocarla la despierta sin esperar.
-                if (!isPlaying && state.resting) withTimeoutOrNull(IDLE_FRAME_MS) { state.poke.receive() }
                 withFrameNanos { now ->
                     state.step((now - last) / 1e9f, isPlaying, AudioLevels.now())
                     last = now

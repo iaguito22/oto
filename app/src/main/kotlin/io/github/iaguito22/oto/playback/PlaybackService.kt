@@ -173,6 +173,7 @@ class PlaybackService : MediaLibraryService() {
 
         connectivity.registerDefaultNetworkCallback(networkCallback)
         scope.launch(Dispatchers.IO) {
+            delay(2500)
             runCatching { InnerTubeXPlayer.prewarm() }.onFailure { Timber.w(it, "prewarm") }
         }
     }
