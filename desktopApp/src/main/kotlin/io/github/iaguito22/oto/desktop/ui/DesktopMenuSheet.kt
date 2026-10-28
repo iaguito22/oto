@@ -227,17 +227,11 @@ fun DesktopMenuSheet(
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         val openTargetW = (maxWidth - 36.dp).coerceAtMost(1040.dp).coerceAtLeast(320.dp)
         val openTargetH = ((maxHeight - 32.dp) * 0.84f).coerceAtLeast(280.dp)
-        val closedPillW = if (isPlaying) 108.dp else 82.dp
-        val closedPillH = 26.dp
+        val closedPillH = if (!open && pillHovered) 28.dp else 24.dp
 
         val morphSpec = spring<androidx.compose.ui.unit.Dp>(
             dampingRatio = 0.82f,
             stiffness = 380f,
-        )
-        val currentWidth by animateDpAsState(
-            targetValue = if (open) openTargetW else closedPillW,
-            animationSpec = morphSpec,
-            label = "islandWidth",
         )
         val currentHeight by animateDpAsState(
             targetValue = if (open) openTargetH else closedPillH,
@@ -245,7 +239,7 @@ fun DesktopMenuSheet(
             label = "islandHeight",
         )
         val currentCorner by animateDpAsState(
-            targetValue = if (open) 30.dp else 13.dp,
+            targetValue = if (open) 30.dp else 12.dp,
             animationSpec = morphSpec,
             label = "islandCorner",
         )
@@ -258,11 +252,6 @@ fun DesktopMenuSheet(
             targetValue = if (!open && isIdle) 12f else 0f,
             animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
             label = "pillIdleY",
-        )
-        val pillHoverScale by animateFloatAsState(
-            targetValue = if (!open && pillHovered) 1.05f else 1f,
-            animationSpec = spring(dampingRatio = 0.7f, stiffness = 420f),
-            label = "pillHoverScale",
         )
 
         // Capa exterior para cerrar al hacer clic o rueda arriba fuera de la isla cuando está abierta
@@ -285,7 +274,7 @@ fun DesktopMenuSheet(
         }
 
         // Contenedor único de cristal (Fondo 4 · Lente de Agua + Isla Flotante):
-        // En reposo es la píldora inferior sin textos; al abrir, crece físicamente desde ella sin fadeIn.
+        // En reposo es la píldora inferior del mismo ancho del menú y sin textos; al abrir, sube desde ella sin fadeIn.
         val sheetShape = RoundedCornerShape(currentCorner)
         val isExpanded = open || currentHeight > 54.dp
 
@@ -295,10 +284,8 @@ fun DesktopMenuSheet(
                 .graphicsLayer {
                     alpha = if (open) 1f else idleAlpha
                     translationY = if (open) 0f else idleTranslateY
-                    scaleX = if (open) 1f else pillHoverScale
-                    scaleY = if (open) 1f else pillHoverScale
                 }
-                .size(width = currentWidth, height = currentHeight)
+                .size(width = openTargetW, height = currentHeight)
                 .shadow(
                     elevation = if (open) 42.dp else 18.dp,
                     shape = sheetShape,
