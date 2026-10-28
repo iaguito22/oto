@@ -78,6 +78,9 @@ internal fun DownloadsPane(
     onOpenLocal: (String) -> Unit,
     onPlayLocal: (LocalPlaylist) -> Unit,
     onPlaySong: (SongItem) -> Unit,
+    onRemoveList: ((LocalPlaylist) -> Unit)? = null,
+    onRemoveSong: ((Heard) -> Unit)? = null,
+    onClearAll: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val entries by downloads.entries.collectAsState()
@@ -180,7 +183,10 @@ internal fun DownloadsPane(
                     artwork = list.songs.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork,
                     accent = palette.primary,
                     onClick = { onOpenLocal(list.id) },
-                    onRemove = { scope.launch { prefs.setDownloadList(list.id, false) } },
+                    onRemove = {
+                        if (onRemoveList != null) onRemoveList(list)
+                        else scope.launch { prefs.setDownloadList(list.id, false) }
+                    },
                 )
             }
         }
@@ -195,7 +201,10 @@ internal fun DownloadsPane(
                     isCurrent = heard.id == currentMediaId,
                     accent = palette.primary,
                     onClick = { onPlaySong(heard.toSong()) },
-                    onRemove = { scope.launch { prefs.setDownloadSong(heard, false) } },
+                    onRemove = {
+                        if (onRemoveSong != null) onRemoveSong(heard)
+                        else scope.launch { prefs.setDownloadSong(heard, false) }
+                    },
                 )
             }
         }
@@ -210,7 +219,7 @@ internal fun DownloadsPane(
                     ) {
                         if (confirmClear) {
                             confirmClear = false
-                            scope.launch { downloads.clear() }
+                            if (onClearAll != null) onClearAll() else scope.launch { downloads.clear() }
                         } else {
                             confirmClear = true
                         }

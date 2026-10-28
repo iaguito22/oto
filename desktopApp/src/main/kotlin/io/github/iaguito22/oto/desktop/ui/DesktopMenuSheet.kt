@@ -122,6 +122,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -131,6 +132,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -274,6 +276,33 @@ fun DesktopMenuSheet(
     var showAllLists by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
     var pillHovered by remember { mutableStateOf(false) }
+
+    // Avisos con deshacer, como en el móvil: lo que quitas se oculta al instante y se borra de verdad cuando el
+    // aviso se va. Deshacer lo devuelve a su sitio sin haberlo tocado.
+    var notice by remember { mutableStateOf<DesktopNotice?>(null) }
+    var gone by remember { mutableStateOf(emptySet<String>()) }
+    fun settleNotice(n: DesktopNotice?) { n?.commit?.invoke() }
+    fun postNotice(n: DesktopNotice) { settleNotice(notice); notice = n }
+    fun say(text: String) = postNotice(DesktopNotice(text))
+    fun undoNotice(text: String, undo: () -> Unit) = postNotice(DesktopNotice(text, undo = undo))
+    fun later(key: String, text: String, commit: () -> Unit) {
+        gone = gone + key
+        postNotice(DesktopNotice(text, undo = { gone = gone - key }, commit = commit))
+    }
+    LaunchedEffect(notice) {
+        val n = notice ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(if (n.undo != null) 5200L else 2600L)
+        if (notice === n) {
+            notice = null
+            settleNotice(n)
+        }
+    }
+    val pendingNotice by rememberUpdatedState(notice)
+    DisposableEffect(Unit) { onDispose { settleNotice(pendingNotice) } }
+
+    // Lo quitado y aún sin borrar ya no se ve en ningún sitio.
+    val visiblePlaylists = playlists.filter { "l:${it.id}" !in gone }
+    val visibleFolders = folders.filter { "d:$it" !in gone }.toSet()
 
     LaunchedEffect(open) {
         if (!open) {
@@ -755,77 +784,7 @@ fun DesktopMenuSheet(
                                 }
                             }
 
-                            // Buscador central en píldora (.sheet-search en core.css:782-826)
-                            Row(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(42.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (menuState.query.isNotBlank()) Color.White.copy(alpha = 0.09f)
-                                        else Color.White.copy(alpha = 0.06f),
-                                    )
-                                    .border(
-                                        1.dp,
-                                        if (menuState.query.isNotBlank()) palette.primary.copy(alpha = 0.48f)
-                                        else Color.White.copy(alpha = 0.09f),
-                                        CircleShape,
-                                    )
-                                    .clickable { searchFocusRequester.requestFocus() }
-                                    .padding(horizontal = 16.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Search,
-                                    contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.56f),
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                                    if (menuState.query.isEmpty()) {
-                                        Text(
-                                            text = "Canciones, artistas, listas…",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = Color.White.copy(alpha = 0.42f),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                                    BasicTextField(
-                                        value = menuState.query,
-                                        onValueChange = {
-                                            subView = MenuSubView.None
-                                            showAllLists = false
-                                            menu.onQuery(it)
-                                        },
-                                        singleLine = true,
-                                        textStyle = TextStyle(
-                                            fontFamily = OtoFontFamily,
-                                            color = Color.White,
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Medium,
-                                        ),
-                                        cursorBrush = SolidColor(palette.primary),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .focusRequester(searchFocusRequester)
-                                            .onFocusChanged { onTextInputFocusChange(it.isFocused) },
-                                    )
-                                }
-                                if (menuState.query.isNotEmpty()) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Close,
-                                        contentDescription = "Limpiar búsqueda",
-                                        tint = Color.White.copy(alpha = 0.65f),
-                                        modifier = Modifier
-                                            .size(16.dp)
-                                            .pointerHoverIcon(PointerIcon.Hand)
-                                            .clickable { menu.onQuery("") },
-                                    )
-                                }
-                            }
+                            Spacer(Modifier.weight(1f))
 
                             // Botones circulares de acción (.sheet-icon-btn en core.css:828-852)
                             Row(
@@ -923,14 +882,30 @@ fun DesktopMenuSheet(
                                         },
                                         onPlayLocal = { list -> onPlayLocal(list, null, false); onToggleOpen(false) },
                                         onPlaySong = { song -> onPlaySong(song); onToggleOpen(false) },
+                                        onRemoveList = { list ->
+                                            scope.launch { prefs.setDownloadList(list.id, false) }
+                                            undoNotice("«${list.name}» ya no está descargada") {
+                                                scope.launch { prefs.setDownloadList(list.id, true) }
+                                            }
+                                        },
+                                        onRemoveSong = { heard ->
+                                            scope.launch { prefs.setDownloadSong(heard, false) }
+                                            undoNotice("«${heard.title}» ya no está descargada") {
+                                                scope.launch { prefs.setDownloadSong(heard, true) }
+                                            }
+                                        },
+                                        onClearAll = {
+                                            scope.launch { downloads.clear() }
+                                            say("Descargas borradas")
+                                        },
                                     )
                                 }
                                 topPage is Page.Folder -> {
-                                    val inside = playlists.filter { it.folder == topPage.name }
+                                    val inside = visiblePlaylists.filter { it.folder == topPage.name }
                                     FolderDetailPane(
                                         name = topPage.name,
                                         lists = inside,
-                                        allPlaylists = playlists,
+                                        allPlaylists = visiblePlaylists,
                                         palette = palette,
                                         currentMediaId = currentMediaId,
                                         onBack = menu::closeDetail,
@@ -953,9 +928,15 @@ fun DesktopMenuSheet(
                                             }
                                         },
                                         onUngroup = {
-                                            scope.launch {
-                                                prefs.ungroup(topPage.name)
-                                                menu.closeDetail()
+                                            val folderName = topPage.name
+                                            val insideIds = visiblePlaylists.filter { it.folder == folderName }.map { it.id }
+                                            menu.closeDetail()
+                                            scope.launch { prefs.ungroup(folderName) }
+                                            undoNotice("Carpeta «$folderName» deshecha") {
+                                                scope.launch {
+                                                    prefs.createFolder(folderName)
+                                                    insideIds.forEach { prefs.moveToFolder(it, folderName) }
+                                                }
                                             }
                                         },
                                         pinned = ("d:" + topPage.name) in pinned,
@@ -965,25 +946,28 @@ fun DesktopMenuSheet(
                                 topPage is Page.Local -> {
                                     val list = if (topPage.id == LIKED_ID) likedList else playlists.firstOrNull { it.id == topPage.id }
                                     if (list != null) {
+                                        // Lo que está pendiente de borrar desaparece ya de la lista (y del índice al reproducir).
+                                        val shownList = list.copy(songs = list.songs.filter { "s:${list.id}:${it.id}" !in gone })
                                         LocalPlaylistDetailPane(
-                                            list = list,
+                                            list = shownList,
                                             palette = palette,
                                             currentMediaId = currentMediaId,
                                             onBack = menu::closeDetail,
-                                            onPlayIndex = { idx, newest -> onPlayLocal(list, idx, newest); onToggleOpen(false) },
+                                            onPlayIndex = { idx, newest -> onPlayLocal(shownList, idx, newest); onToggleOpen(false) },
                                             onSaveTo = onSaveTrack,
                                             onDeletePlaylist = if (list.id != LIKED_ID) {
                                                 {
-                                                    scope.launch {
-                                                        prefs.deletePlaylist(list.id)
-                                                        menu.closeDetail()
+                                                    menu.closeDetail()
+                                                    later("l:${list.id}", "«${list.name}» borrada") {
+                                                        scope.launch { prefs.deletePlaylist(list.id) }
                                                     }
                                                 }
                                             } else null,
                                             onRemoveSong = if (list.id != LIKED_ID) {
                                                 { songId ->
-                                                    scope.launch {
-                                                        prefs.removeFromPlaylist(list.id, songId)
+                                                    val title = list.songs.firstOrNull { it.id == songId }?.title ?: "Canción"
+                                                    later("s:${list.id}:$songId", "«$title» quitada de «${list.name}»") {
+                                                        scope.launch { prefs.removeFromPlaylist(list.id, songId) }
                                                     }
                                                 }
                                             } else null,
@@ -1045,8 +1029,8 @@ fun DesktopMenuSheet(
                                 showAllLists && selectedTab == 0 -> {
                                     AllListsSubPane(
                                         likedList = likedList,
-                                        playlists = playlists,
-                                        folders = folders,
+                                        playlists = visiblePlaylists,
+                                        folders = visibleFolders,
                                         palette = palette,
                                         onBack = { showAllLists = false },
                                         onOpenFolder = { name ->
@@ -1073,8 +1057,8 @@ fun DesktopMenuSheet(
                                 selectedTab == 0 -> {
                                     YourMusicPane(
                                         likedList = likedList,
-                                        playlists = playlists,
-                                        folders = folders,
+                                        playlists = visiblePlaylists,
+                                        folders = visibleFolders,
                                         pinned = pinned,
                                         history = history,
                                         palette = palette,
@@ -1113,10 +1097,166 @@ fun DesktopMenuSheet(
                                 }
                             }
                         }
+
+                        // Aviso con deshacer, encima del buscador como en el móvil.
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 2.dp, bottom = 2.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = notice != null,
+                                enter = fadeIn(tween(Motion.EFFECTS)) + slideInVertically { it / 3 },
+                                exit = fadeOut(tween(Motion.EFFECTS_FAST)) + slideOutVertically(tween(Motion.EFFECTS_FAST)) { it / 3 },
+                            ) {
+                                notice?.let { n ->
+                                    NoticePillDesktop(n, palette.primary) {
+                                        notice = null
+                                        n.undo?.invoke()
+                                    }
+                                }
+                            }
+                        }
+
+                        // El buscador va abajo, pegado al borde, como en el móvil.
+                        MenuSearchBar(
+                            query = menuState.query,
+                            accent = palette.primary,
+                            focusRequester = searchFocusRequester,
+                            onQuery = {
+                                subView = MenuSubView.None
+                                showAllLists = false
+                                menu.onQuery(it)
+                            },
+                            onClear = { menu.onQuery("") },
+                            onFocusChange = onTextInputFocusChange,
+                        )
                     }
                 }
             }
         }
+}
+
+/** Un aviso efímero del menú; [undo] solo aparece en lo que se puede deshacer. */
+private data class DesktopNotice(
+    val text: String,
+    val undo: (() -> Unit)? = null,
+    val commit: (() -> Unit)? = null,
+)
+
+@Composable
+private fun NoticePillDesktop(n: DesktopNotice, accent: Color, onUndo: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .widthIn(max = 420.dp)
+            .height(36.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.10f))
+            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+            .padding(start = 14.dp, end = if (n.undo != null) 4.dp else 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = n.text,
+            style = OtoType.rowSub,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        if (n.undo != null) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "Deshacer",
+                style = OtoType.rowTitle,
+                color = accent,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(onClick = onUndo)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
+/** El buscador del menú: abajo, en píldora, como el del móvil. */
+@Composable
+private fun MenuSearchBar(
+    query: String,
+    accent: Color,
+    focusRequester: FocusRequester,
+    onQuery: (String) -> Unit,
+    onClear: () -> Unit,
+    onFocusChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 28.dp, end = 28.dp, top = 4.dp, bottom = 16.dp)
+            .height(42.dp)
+            .clip(CircleShape)
+            .background(
+                if (query.isNotBlank()) Color.White.copy(alpha = 0.09f)
+                else Color.White.copy(alpha = 0.06f),
+            )
+            .border(
+                1.dp,
+                if (query.isNotBlank()) accent.copy(alpha = 0.48f)
+                else Color.White.copy(alpha = 0.09f),
+                CircleShape,
+            )
+            .clickable { focusRequester.requestFocus() }
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Search,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.56f),
+            modifier = Modifier.size(16.dp),
+        )
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            if (query.isEmpty()) {
+                Text(
+                    text = "Canciones, artistas, listas…",
+                    style = OtoType.rowTitle,
+                    color = Color.White.copy(alpha = 0.42f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            BasicTextField(
+                value = query,
+                onValueChange = onQuery,
+                singleLine = true,
+                textStyle = TextStyle(
+                    fontFamily = OtoFontFamily,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+                cursorBrush = SolidColor(accent),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { onFocusChange(it.isFocused) },
+            )
+        }
+        if (query.isNotEmpty()) {
+            Icon(
+                imageVector = Icons.Rounded.Close,
+                contentDescription = "Limpiar búsqueda",
+                tint = Color.White.copy(alpha = 0.65f),
+                modifier = Modifier
+                    .size(16.dp)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(onClick = onClear),
+            )
+        }
+    }
 }
 
 @Composable
@@ -4807,6 +4947,8 @@ private fun SettingsAndAccountPane(
                         }
                     }
                 }
+                // «Espacio en el móvil» del móvil, pero con el disco del ordenador: lo descargado no se toca.
+                SpaceRowDesktop(palette = palette)
             }
         }
 
@@ -4893,6 +5035,59 @@ private fun SettingsAndAccountPane(
         }
     }
 }
+
+/** Lo que ocupa el disco del ordenador, con una barra hasta su total. */
+@Composable
+private fun SpaceRowDesktop(palette: ArtworkPalette) {
+    var used by remember { mutableStateOf<Long?>(null) }
+    var total by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val root = java.io.File(System.getProperty("user.home") ?: "/")
+            total = root.totalSpace
+            used = (root.totalSpace - root.usableSpace).coerceAtLeast(0L)
+        }
+    }
+    val fill by animateFloatAsState(
+        targetValue = if (total > 0L) ((used ?: 0L).toFloat() / total).coerceIn(0f, 1f) else 0f,
+        animationSpec = tween(Motion.SPATIAL, easing = Motion.Standard),
+        label = "diskSpace",
+    )
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.FolderOpen, null, tint = palette.primary, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Espacio en el disco", style = OtoType.rowTitle, color = Color.White)
+        }
+        Text(
+            text = when (val u = used) {
+                null -> "Midiendo…"
+                else -> "${humanBytes(u)} usados de ${humanBytes(total)}. Lo descargado no se toca."
+            },
+            style = OtoType.rowSub,
+            color = Color.White.copy(alpha = 0.62f),
+        )
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.08f)),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(fill)
+                    .fillMaxHeight()
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.62f)),
+            )
+        }
+    }
+}
+
+private fun humanBytes(n: Long): String =
+    if (n >= 1L shl 30) "%.1f GB".format(n / (1L shl 30).toDouble())
+    else "${(n + (1L shl 19)) shr 20} MB"
 
 private fun importSummary(s: ImportState): String = when (s) {
     ImportState.Idle -> "Trae tus listas públicas, privadas y «Canciones que te gustan» desde Spotify."
