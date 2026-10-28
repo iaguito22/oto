@@ -784,7 +784,20 @@ fun DesktopMenuSheet(
                                 }
                             }
 
-                            Spacer(Modifier.weight(1f))
+                            // Buscador central en píldora (.sheet-search en core.css:782-826)
+                            MenuSearchBar(
+                                query = menuState.query,
+                                accent = palette.primary,
+                                focusRequester = searchFocusRequester,
+                                onQuery = {
+                                    subView = MenuSubView.None
+                                    showAllLists = false
+                                    menu.onQuery(it)
+                                },
+                                onClear = { menu.onQuery("") },
+                                onFocusChange = onTextInputFocusChange,
+                                modifier = Modifier.weight(1f),
+                            )
 
                             // Botones circulares de acción (.sheet-icon-btn en core.css:828-852)
                             Row(
@@ -1098,11 +1111,11 @@ fun DesktopMenuSheet(
                             }
                         }
 
-                        // Aviso con deshacer, encima del buscador como en el móvil.
+                        // Aviso con deshacer, al pie de la hoja.
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 2.dp, bottom = 2.dp),
+                                .padding(top = 6.dp, bottom = 16.dp),
                             contentAlignment = Alignment.Center,
                         ) {
                             androidx.compose.animation.AnimatedVisibility(
@@ -1119,19 +1132,6 @@ fun DesktopMenuSheet(
                             }
                         }
 
-                        // El buscador va abajo, pegado al borde, como en el móvil.
-                        MenuSearchBar(
-                            query = menuState.query,
-                            accent = palette.primary,
-                            focusRequester = searchFocusRequester,
-                            onQuery = {
-                                subView = MenuSubView.None
-                                showAllLists = false
-                                menu.onQuery(it)
-                            },
-                            onClear = { menu.onQuery("") },
-                            onFocusChange = onTextInputFocusChange,
-                        )
                     }
                 }
             }
@@ -1190,11 +1190,10 @@ private fun MenuSearchBar(
     onQuery: (String) -> Unit,
     onClear: () -> Unit,
     onFocusChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 28.dp, end = 28.dp, top = 4.dp, bottom = 16.dp)
+        modifier = modifier
             .height(42.dp)
             .clip(CircleShape)
             .background(
