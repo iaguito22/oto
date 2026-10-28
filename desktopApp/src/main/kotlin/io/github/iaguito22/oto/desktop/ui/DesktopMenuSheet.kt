@@ -277,24 +277,24 @@ fun DesktopMenuSheet(
                     },
                 contentAlignment = Alignment.BottomCenter,
             ) {
-                Column(
+                Box(
                     modifier = Modifier
                         .widthIn(max = 1180.dp)
                         .fillMaxWidth()
                         .fillMaxHeight(0.85f)
                         .shadow(
-                            elevation = 40.dp,
+                            elevation = 48.dp,
                             shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
-                            ambientColor = palette.primary.copy(alpha = 0.35f),
+                            ambientColor = palette.primary.copy(alpha = 0.45f),
                             spotColor = Color.Black,
                         )
                         .clip(RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp))
                         .background(
                             Brush.verticalGradient(
                                 listOf(
-                                    Color(0x8A1B162C),
-                                    Color(0xA3120E22),
-                                    Color(0xCC090714),
+                                    Color(0x99171228),
+                                    Color(0xBE100B20),
+                                    Color(0xDE080514),
                                 ),
                             ),
                         )
@@ -302,39 +302,91 @@ fun DesktopMenuSheet(
                             1.dp,
                             Brush.verticalGradient(
                                 listOf(
-                                    Color.White.copy(alpha = 0.65f),
-                                    palette.primary.copy(alpha = 0.40f),
-                                    Color.White.copy(alpha = 0.10f),
+                                    Color.White.copy(alpha = 0.75f),
+                                    palette.primary.copy(alpha = 0.52f),
+                                    Color.White.copy(alpha = 0.14f),
                                 ),
                             ),
                             RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
                         )
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
-                        .padding(horizontal = 28.dp, vertical = 18.dp),
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
                 ) {
-                    // Tirador superior
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { onToggleOpen(false) }
-                            .onPointerEvent(PointerEventType.Scroll) { ev ->
-                                val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
-                                if (dy < -0.5f) {
-                                    onToggleOpen(false)
-                                }
-                            }
-                            .padding(vertical = 4.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Box(
-                            Modifier
-                                .size(44.dp, 4.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.28f)),
+                    // Reflejos cáusticos internos y orbes difusos de cristal líquido (Liquid Glass vivo)
+                    Canvas(Modifier.fillMaxSize()) {
+                        val w = size.width
+                        val h = size.height
+                        // Orbe difuso de acento primario
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                listOf(palette.primary.copy(alpha = 0.22f), Color.Transparent),
+                                center = Offset(w * 0.20f, h * 0.12f),
+                                radius = w * 0.46f,
+                            ),
+                            radius = w * 0.46f,
+                            center = Offset(w * 0.20f, h * 0.12f),
+                        )
+                        // Orbe secundario complementario
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                listOf(palette.secondary.copy(alpha = 0.15f), Color.Transparent),
+                                center = Offset(w * 0.82f, h * 0.26f),
+                                radius = w * 0.50f,
+                            ),
+                            radius = w * 0.50f,
+                            center = Offset(w * 0.82f, h * 0.26f),
+                        )
+                        // Destello especular de cristal en el labio superior
+                        drawLine(
+                            brush = Brush.horizontalGradient(
+                                listOf(
+                                    Color.Transparent,
+                                    Color.White.copy(alpha = 0.70f),
+                                    palette.primary.copy(alpha = 0.75f),
+                                    Color.White.copy(alpha = 0.45f),
+                                    Color.Transparent,
+                                ),
+                            ),
+                            start = Offset(w * 0.05f, 1f),
+                            end = Offset(w * 0.95f, 1f),
+                            strokeWidth = 2.5f,
                         )
                     }
 
-                    Spacer(Modifier.height(14.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 28.dp, vertical = 18.dp),
+                    ) {
+                        // Tirador superior
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .onPointerEvent(PointerEventType.Scroll) { ev ->
+                                    val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                                    if (dy < -0.5f) {
+                                        onToggleOpen(false)
+                                    }
+                                }
+                                .padding(vertical = 4.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(72.dp, 16.dp)
+                                    .clip(CircleShape)
+                                    .clickable { onToggleOpen(false) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Box(
+                                    Modifier
+                                        .size(44.dp, 4.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White.copy(alpha = 0.28f)),
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(14.dp))
 
                     // Cabecera estilo móvil / prototipo: Selector Segmentado de 2 pestañas (o Botón Atrás + Título)
                     // + Buscador YouTube Music + Botón Cola + Botón Ajustes + Botón Cerrar
@@ -631,6 +683,7 @@ fun DesktopMenuSheet(
             }
         }
     }
+}
 }
 
 @Composable

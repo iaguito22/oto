@@ -262,7 +262,7 @@ fun DesktopStage(
         ) {
             Column(
                 modifier = Modifier
-                    .widthIn(max = 1220.dp)
+                    .widthIn(max = 1520.dp)
                     .fillMaxWidth()
                     .weight(1f)
                     .padding(horizontal = 24.dp),
@@ -277,10 +277,10 @@ fun DesktopStage(
                         .fillMaxWidth()
                         .padding(bottom = 24.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(56.dp),
+                    horizontalArrangement = Arrangement.spacedBy(64.dp),
                 ) {
                     Box(
-                        modifier = Modifier.weight(0.42f).fillMaxHeight(),
+                        modifier = Modifier.weight(0.44f).fillMaxHeight(),
                         contentAlignment = Alignment.Center,
                     ) {
                         SpotifyPlayerColumn(
@@ -303,7 +303,7 @@ fun DesktopStage(
                     }
 
                     Column(
-                        modifier = Modifier.weight(0.58f).fillMaxHeight(),
+                        modifier = Modifier.weight(0.56f).fillMaxHeight(),
                         verticalArrangement = Arrangement.Top,
                     ) {
                         // Pill superior con origen de reproducción (se oculta suavemente mientras hay un aviso activo)
@@ -546,7 +546,7 @@ private fun SpotifyPlayerColumn(
 
     val duration = nowPlaying.durationMs.coerceAtLeast(1L)
     val progress = (positionMs.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-    val coverSize = 460.dp
+    val coverSize = 500.dp
 
     Column(
         modifier = Modifier.width(coverSize),
@@ -790,8 +790,8 @@ private fun SpotifyPlayerColumn(
         ) { (_, title) ->
             Text(
                 text = title,
-                fontSize = 38.sp,
-                lineHeight = 44.sp,
+                fontSize = 42.sp,
+                lineHeight = 48.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = Color(0xFFF7F4FF),
                 maxLines = 1,
@@ -799,7 +799,7 @@ private fun SpotifyPlayerColumn(
             )
         }
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(8.dp))
 
         // 3. Artista abajo del título (interactivo con enlace a artista)
         AnimatedContent(
@@ -820,7 +820,7 @@ private fun SpotifyPlayerColumn(
                         var artHover by remember { mutableStateOf(false) }
                         Text(
                             text = name,
-                            fontSize = 21.sp,
+                            fontSize = 23.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = if (artHover) Color.White else Color.White.copy(alpha = 0.65f),
                             textDecoration = if (artHover) TextDecoration.Underline else TextDecoration.None,
@@ -832,7 +832,7 @@ private fun SpotifyPlayerColumn(
                         if (i < artists.lastIndex) {
                             Text(
                                 text = "·",
-                                fontSize = 21.sp,
+                                fontSize = 23.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color.White.copy(alpha = 0.40f),
                             )
@@ -842,7 +842,7 @@ private fun SpotifyPlayerColumn(
             } else {
                 Text(
                     text = fallbackArtist.ifBlank { "Oto · YouTube Music" },
-                    fontSize = 21.sp,
+                    fontSize = 23.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = Color.White.copy(alpha = 0.65f),
                     maxLines = 1,
@@ -1078,15 +1078,15 @@ private fun LyricsStageColumn(
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(top = 90.dp, bottom = 120.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
                     itemsIndexed(lyrics.lines) { _, line: String ->
                         Text(
                             text = line,
-                            fontSize = 24.sp,
+                            fontSize = 28.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Color.White.copy(alpha = 0.78f),
-                            lineHeight = 34.sp,
+                            lineHeight = 38.sp,
                         )
                     }
                 }
@@ -1179,15 +1179,15 @@ private fun SyncedLyricRow(
     ) {
         Text(
             text = line.text.ifBlank { "♪" },
-            fontSize = if (isActive) 42.sp else 30.sp,
+            fontSize = if (isActive) 48.sp else 33.sp,
             fontWeight = if (isActive) FontWeight.Black else FontWeight.Bold,
             color = if (isActive) Color.White else Color.White.copy(alpha = alpha),
-            lineHeight = if (isActive) 54.sp else 40.sp,
+            lineHeight = if (isActive) 60.sp else 44.sp,
             style = if (isActive) {
                 TextStyle(
                     shadow = Shadow(
-                        color = Color.White.copy(alpha = 0.82f),
-                        blurRadius = 32f,
+                        color = Color.White.copy(alpha = 0.85f),
+                        blurRadius = 36f,
                     ),
                 )
             } else TextStyle.Default,
