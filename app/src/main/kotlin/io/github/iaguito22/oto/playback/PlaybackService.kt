@@ -803,6 +803,7 @@ class PlaybackService : MediaLibraryService() {
                     val found = resolve(one).map { it.withPlaybackUri() }
                     stopDj()
                     list = false
+                    player.repeatMode = Player.REPEAT_MODE_OFF
                     found.firstOrNull()?.let { startRadio(it.mediaId) }
                     MediaSession.MediaItemsWithStartPosition(found, 0, 0)
                 }

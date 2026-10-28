@@ -17,6 +17,7 @@ import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.LoopMode
+import io.github.iaguito22.oto.PlaylistMode
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.dj.Plays
 import io.github.iaguito22.oto.dj.Smart
@@ -82,8 +83,14 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     val shuffle: StateFlow<Boolean> = _shuffle.asStateFlow()
 
     private val _loop = MutableStateFlow(LoopMode.Off)
-    /** Las listas en bucle (ver [Prefs.loop]). */
+    /** El bucle de la lista que suena (ver [Prefs.playlistModes]). */
     val loop: StateFlow<LoopMode> = _loop.asStateFlow()
+
+    private val _defaultShuffle = MutableStateFlow(false)
+    val defaultShuffle: StateFlow<Boolean> = _defaultShuffle.asStateFlow()
+    private val _defaultLoop = MutableStateFlow(false)
+    private val _modes = MutableStateFlow<Map<String, PlaylistMode>>(emptyMap())
+    val modes: StateFlow<Map<String, PlaylistMode>> = _modes.asStateFlow()
 
     // Lo que el aleatorio tiene en cuenta, siempre a mano: lo que te gusta y cuándo sonó de verdad cada una.
     @Volatile private var liked = emptySet<String>()
@@ -96,10 +103,22 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
      */
     private var original: List<MediaItem>? = null
     private var ages: List<Float?> = emptyList()
+    private var currentListId: String? = null
 
     init {
-        scope.launch { prefs.shuffle.collect { _shuffle.value = it } }
-        scope.launch { prefs.loop.collect { _loop.value = it } }
+        scope.launch {
+            prefs.shuffle.collect {
+                _defaultShuffle.value = it
+                if (currentListId == null) _shuffle.value = it
+            }
+        }
+        scope.launch {
+            prefs.loop.collect {
+                _defaultLoop.value = it
+                if (currentListId == null && original != null) _loop.value = if (it) LoopMode.All else LoopMode.Off
+            }
+        }
+        scope.launch { prefs.playlistModes.collect { _modes.value = it } }
         scope.launch { prefs.likedIds.collect { liked = it } }
         // El historial cambia con cada canción: es cuando el diario de escuchas tiene algo nuevo.
         scope.launch {
@@ -136,9 +155,11 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     fun play(song: SongItem) = withController {
         // Una lista que aún se estaba barajando ya no tiene que ponerse.
         shuffling?.cancel()
+        currentListId = null
         _source.value = Source("Radio", song.title)
         original = null
-        it.repeatMode = repeatModeOf(_loop.value)
+        _loop.value = LoopMode.Off
+        it.repeatMode = Player.REPEAT_MODE_OFF
         it.setMediaItem(song.toMediaItem())
         it.prepare()
         it.play()
@@ -147,7 +168,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     /** Suena la lista entera (un álbum, una playlist), sin radio: desde [start] o, si es null, desde el principio. */
     fun playAll(songs: List<SongItem>, start: Int?, from: YTItem? = null) {
         _source.value = from?.let { f -> Source(when (f) { is AlbumItem -> "Álbum"; is ArtistItem -> "Artista"; else -> "Lista" }, f.title, f) }
-        playList(songs.map(SongItem::toMediaItem), List(songs.size) { null }, start)
+        playList(from?.id, songs.map(SongItem::toMediaItem), List(songs.size) { null }, start)
     }
 
     /** Una lista tuya, tal y como se ve ([newestFirst]: lo último que entró, arriba). */
@@ -161,14 +182,19 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         )
         val n = list.songs.size
         val age = { i: Int -> if (n == 1) 0f else (if (newestFirst) i else n - 1 - i) / (n - 1f) }
-        playList(list.songs.map { h -> h.toSong().toMediaItem() }, List(n) { age(it) }, start)
+        playList(list.id, list.songs.map { h -> h.toSong().toMediaItem() }, List(n) { age(it) }, start)
     }
 
     /**
      * Con el aleatorio puesto, la tocada ([start]) suena la primera y el resto barajado; «Reproducir», todo barajado.
      * Barajar una lista de miles lleva unos milisegundos: se hace fuera del hilo de la interfaz.
      */
-    private fun playList(items: List<MediaItem>, itemAges: List<Float?>, start: Int?) {
+    private fun playList(listId: String?, items: List<MediaItem>, itemAges: List<Float?>, start: Int?) {
+        currentListId = listId
+        val mode = listId?.let { _modes.value[it] } ?: PlaylistMode(_defaultShuffle.value, defaultLoopMode())
+        _shuffle.value = mode.shuffle
+        _loop.value = mode.loop
+        if (listId != null && listId !in _modes.value) saveMode(listId, mode)
         original = items
         ages = itemAges
         shuffling?.cancel()
@@ -189,12 +215,18 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     }
 
     /**
-     * Pone o quita el aleatorio; si suena una lista, se rehace lo que queda detrás de la actual. Al ponerlo, lo que ya
-     * sonó de la lista en esta vuelta se queda para el final, y la siguiente no es del mismo artista que la actual.
+     * Pone o quita el aleatorio de [listId] (o de la lista que suena); si es la que suena, se rehace lo que queda
+     * detrás de la actual. Al ponerlo, lo que ya sonó de la lista en esta vuelta se queda para el final, y la
+     * siguiente no es del mismo artista que la actual.
      */
-    fun setShuffle(on: Boolean) {
+    fun setShuffle(on: Boolean, listId: String? = null) {
+        val id = listId ?: currentListId
+        if (id != null) {
+            val loop = if (id == currentListId) _loop.value else _modes.value[id]?.loop ?: defaultLoopMode()
+            saveMode(id, PlaylistMode(on, loop))
+        }
+        if (listId != null && listId != currentListId) return
         _shuffle.value = on
-        scope.launch { prefs.setShuffle(on) }
         val items = original ?: return
         shuffling?.cancel()
         withController { c ->
@@ -228,11 +260,21 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         setLoop(next)
     }
 
-    /** Pone el bucle en el modo indicado; vale ya para lo que suena y para lo que venga después. */
+    /** Pone el bucle de la lista que suena en el modo indicado y lo recuerda para esa lista. */
     fun setLoop(mode: LoopMode) {
         _loop.value = mode
-        scope.launch { prefs.setLoop(mode) }
-        withController { it.repeatMode = repeatModeOf(mode) }
+        currentListId?.let { id ->
+            val shuffle = _modes.value[id]?.shuffle ?: _shuffle.value
+            saveMode(id, PlaylistMode(shuffle, mode))
+        }
+        if (original != null) withController { it.repeatMode = repeatModeOf(mode) }
+    }
+
+    private fun defaultLoopMode() = if (_defaultLoop.value) LoopMode.All else LoopMode.Off
+
+    private fun saveMode(id: String, mode: PlaylistMode) {
+        _modes.value = _modes.value + (id to mode)
+        scope.launch { prefs.setPlaylistMode(id, mode) }
     }
 
     private fun repeatModeOf(mode: LoopMode) = when (mode) {
@@ -253,12 +295,16 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     fun playDj(onFail: () -> Unit) = withController { c ->
         shuffling?.cancel()
         val before = _source.value
+        val beforeId = currentListId
+        currentListId = null
         _source.value = Source("DJ", "Mezcla para ti")
         original = null
+        _loop.value = LoopMode.Off
         c.repeatMode = Player.REPEAT_MODE_OFF
         val result = c.sendCustomCommand(SessionCommand(DJ_COMMAND, Bundle.EMPTY), Bundle.EMPTY)
         result.addListener({
             if (runCatching { result.get().resultCode }.getOrNull() != SessionResult.RESULT_SUCCESS) {
+                currentListId = beforeId
                 _source.value = before
                 onFail()
             }

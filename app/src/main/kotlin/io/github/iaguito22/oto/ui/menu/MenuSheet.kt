@@ -877,7 +877,7 @@ private fun SmartView(list: LocalPlaylist, currentId: String?, onBack: () -> Uni
         item(key = "head") {
             PageHeader(onBack, { Mosaic(list.songs, 112.dp) }, list.name, count(list.songs.size) + " · hecha con lo tuyo") {
                 Pill("Reproducir", { onPlay(null) }, icon = R.drawable.ic_play_arrow)
-                ShuffleButton()
+                ShuffleButton(list.id)
                 RoundAction(R.drawable.ic_add, "Guardar", onClick = onSave)
             }
         }
@@ -1043,12 +1043,15 @@ fun RoundAction(icon: Int, description: String, on: Boolean = false, onClick: ()
     }
 }
 
-/** Aleatorio sí o no, como el de Spotify: vale para lo que se ponga y, si suena una lista, la rebaraja ya. */
+/** Aleatorio de [listId] (o de la lista que suena): recuerda el estado por lista y rebaraja si está sonando. */
 @Composable
-fun ShuffleButton() {
+fun ShuffleButton(listId: String? = null) {
     val connection = (LocalContext.current.applicationContext as OtoApp).player
-    val on by connection.shuffle.collectAsStateWithLifecycle()
-    RoundAction(R.drawable.ic_shuffle, "Aleatorio", on) { connection.setShuffle(!on) }
+    val current by connection.shuffle.collectAsStateWithLifecycle()
+    val modes by connection.modes.collectAsStateWithLifecycle()
+    val defaultShuffle by connection.defaultShuffle.collectAsStateWithLifecycle()
+    val on = if (listId != null) modes[listId]?.shuffle ?: defaultShuffle else current
+    RoundAction(R.drawable.ic_shuffle, "Aleatorio", on) { connection.setShuffle(!on, listId) }
 }
 
 /** Bucle apagado, toda la lista o una canción. Tocarlo pasa al siguiente estado. */
@@ -1121,7 +1124,7 @@ private fun DetailView(
             PageHeader(onBack, { Art(d.item.thumbnail, 112.dp, Radius.md) }, d.item.title, sub, onMenu = { shareItem(context, d.item) }, menuIcon = R.drawable.ic_share) {
                 if (!songs.isNullOrEmpty()) {
                     Pill("Reproducir", { onPlay(songs, null) }, icon = R.drawable.ic_play_arrow)
-                    ShuffleButton()
+                    ShuffleButton(d.item.id)
                     // El álbum entero a Me gusta o a una lista tuya (o a una nueva con su nombre). Redondo: al lado
                     // de «Reproducir» no cabe otra píldora con texto.
                     RoundAction(R.drawable.ic_add, "Guardar") { onSave(songs) }
@@ -1170,7 +1173,7 @@ private fun ArtistView(
                         Spacer(Modifier.height(Space.md))
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
                             Pill("Reproducir", { onPlay(songs, null) }, icon = R.drawable.ic_play_arrow)
-                            ShuffleButton()
+                            ShuffleButton(d.item.id)
                         }
                     }
                 }
@@ -1247,7 +1250,7 @@ private fun LocalView(
             PageHeader(onBack, art, list.name, sub, onMenu = { onMenu(list) }) {
                 if (list.songs.isNotEmpty()) {
                     Pill("Reproducir", { onPlay(shown, null, newest) }, icon = R.drawable.ic_play_arrow)
-                    ShuffleButton()
+                    ShuffleButton(list.id)
                 }
             }
         }
@@ -1293,30 +1296,22 @@ private fun SortRow(newest: Boolean, onFlip: () -> Unit) {
     }
 }
 
-/** Aleatorio y bucle: los mismos que los botones de las listas; valen ya para lo que suene. */
+/** Aleatorio y bucle por defecto para las listas nuevas (las ya usadas recuerdan cómo las dejaste). */
 @Composable
-private fun PlaybackSettings(app: OtoApp) {
-    val shuffle by app.player.shuffle.collectAsStateWithLifecycle()
-    val loop by app.player.loop.collectAsStateWithLifecycle()
-    ToggleRow(R.drawable.ic_shuffle, "Aleatorio", "Lo que pongas suena mezclado. También con el botón junto a «Reproducir».", shuffle) {
-        app.player.setShuffle(!shuffle)
+private fun PlaybackSettings(prefs: Prefs) {
+    val scope = rememberCoroutineScope()
+    val shuffle by prefs.shuffle.collectAsStateWithLifecycle(initialValue = null)
+    val loop by prefs.loop.collectAsStateWithLifecycle(initialValue = null)
+    val s = shuffle ?: return
+    ToggleRow(R.drawable.ic_shuffle, "Aleatorio", "Las listas nuevas empiezan mezcladas. Cada una recuerda cómo la dejaste.", s) {
+        scope.launch { prefs.setShuffle(!s) }
     }
-    val loopIcon = when (loop) {
-        LoopMode.One -> R.drawable.ic_repeat_one
-        else -> R.drawable.ic_repeat
-    }
-    val loopTitle = when (loop) {
-        LoopMode.One -> "Repetir una canción"
-        else -> "Repetir la lista"
-    }
-    val loopSub = when (loop) {
-        LoopMode.Off -> "Al acabar la lista, siguen canciones parecidas."
-        LoopMode.All -> "Al acabar, la lista vuelve a empezar."
-        LoopMode.One -> "La misma canción suena una y otra vez."
-    }
+    val l = loop ?: return
     ToggleRow(
-        loopIcon, loopTitle, loopSub, loop != LoopMode.Off,
-    ) { app.player.cycleLoop() }
+        R.drawable.ic_repeat, "Repetir la lista",
+        if (l) "Al acabar una lista nueva, vuelve a empezar." else "Al acabar una lista nueva, siguen canciones parecidas.",
+        l,
+    ) { scope.launch { prefs.setLoop(!l) } }
 }
 
 /** Cómo se ve la pantalla de lo que suena: la gota, el tiempo y la letra. */
@@ -1445,7 +1440,7 @@ private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () ->
             SettingRow(R.drawable.ic_playlist_add, "Importar de Spotify", importSummary(state), onImport)
             AudioSettings(app.prefs)
             CrossfadeRow(app.prefs)
-            PlaybackSettings(app)
+            PlaybackSettings(app.prefs)
             ScreenSettings(app.prefs)
             SpaceRow(app)
             SettingRow(R.drawable.ic_swipe_up, "Ver los gestos otra vez", "El tutorial del principio", onTutorial)
@@ -2214,7 +2209,7 @@ private fun FolderView(
             PageHeader(onBack, { FolderArt(lists, 112.dp) }, name, folderCount(lists.size), onMenu = onMenu) {
                 if (lists.any { it.songs.isNotEmpty() }) {
                     Pill("Reproducir", { onPlay(lists) }, icon = R.drawable.ic_play_arrow)
-                    ShuffleButton()
+                    ShuffleButton(FOLDER_PREFIX + name)
                 } else Pill("Añadir listas", onAdd, icon = R.drawable.ic_add)
             }
         }
