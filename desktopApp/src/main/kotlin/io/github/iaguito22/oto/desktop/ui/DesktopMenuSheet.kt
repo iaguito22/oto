@@ -93,6 +93,7 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
@@ -262,6 +263,7 @@ fun DesktopMenuSheet(
     val downloadEntries by downloads.entries.collectAsState()
     val downloadLists by prefs.downloadLists.collectAsState(initial = emptySet())
     val folders by prefs.folders.collectAsState(initial = emptySet())
+    val pinned by prefs.pinned.collectAsState(initial = emptySet())
     val session by account.session.collectAsState()
     val cloudState by cloud.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -972,6 +974,8 @@ fun DesktopMenuSheet(
                                                 menu.closeDetail()
                                             }
                                         },
+                                        pinned = ("d:" + topPage.name) in pinned,
+                                        onTogglePin = { scope.launch { prefs.togglePin("d:" + topPage.name) } },
                                     )
                                 }
                                 topPage is Page.Local -> {
@@ -1003,6 +1007,8 @@ fun DesktopMenuSheet(
                                             downloads = downloads,
                                             downloadLists = downloadLists,
                                             folders = folders,
+                                            pinned = list.id in pinned,
+                                            onTogglePin = { scope.launch { prefs.togglePin(list.id) } },
                                             onMoveToFolder = { folder -> scope.launch { prefs.moveToFolder(list.id, folder) } },
                                             onCreateFolderAndMove = { name ->
                                                 scope.launch {
@@ -1085,6 +1091,7 @@ fun DesktopMenuSheet(
                                         likedList = likedList,
                                         playlists = playlists,
                                         folders = folders,
+                                        pinned = pinned,
                                         history = history,
                                         palette = palette,
                                         currentMediaId = currentMediaId,
@@ -1346,6 +1353,7 @@ private fun YourMusicPane(
     likedList: LocalPlaylist,
     playlists: List<LocalPlaylist>,
     folders: Set<String>,
+    pinned: Set<String>,
     history: List<Heard>,
     palette: ArtworkPalette,
     currentMediaId: String?,
@@ -1388,28 +1396,35 @@ private fun YourMusicPane(
                 .map { (folder, lists) -> folder!! to lists }
     }
 
-    // Si el usuario tiene menos de 2 listas creadas, completamos los 2 huecos del estante fijado de 4
-    // con mezclas inteligentes derivadas de su historial/Me gusta (para mantener siempre la rejilla de 4 de core.js:823).
-    val displayLists = remember(playlists, history, likedList) {
-        if (playlists.size >= 2) {
-            playlists
-        } else {
-            val pool = (history + likedList.songs).distinctBy { it.id }
-            val fallback1 = LocalPlaylist(
-                id = "__smart_recent__",
-                name = "En bucle",
-                songs = pool.take(12),
-            )
-            val fallback2 = LocalPlaylist(
-                id = "__smart_night__",
-                name = "Nocturna",
-                songs = pool.drop(2).take(12).ifEmpty { pool.take(8) },
-            )
-            (playlists + listOf(fallback1, fallback2)).take(maxOf(playlists.size, 2))
+    // Las listas que están dentro de una carpeta no se repiten sueltas: se abren desde su carpeta.
+    val looseLists = remember(playlists) { playlists.filter { it.folder == null } }
+
+    // Estante de 4: DJ, Me gusta y dos huecos para lo fijado (o, si no hay, las primeras listas).
+    val shelfEntries = remember(looseLists, folderLists, pinned, history, likedList) {
+        val chosen = mutableListOf<ListsEntry>()
+        folderLists.filter { "d:" + it.first in pinned }.forEach { (folder, lists) ->
+            if (chosen.size < 2) chosen.add(ListsEntry.Folder(folder, lists))
         }
+        looseLists.filter { it.id in pinned }.forEach { pl ->
+            if (chosen.size < 2) chosen.add(ListsEntry.Playlist(pl))
+        }
+        val used = chosen.mapNotNull { (it as? ListsEntry.Playlist)?.list?.id }.toSet()
+        looseLists.filter { it.id !in used }.forEach { pl ->
+            if (chosen.size < 2) chosen.add(ListsEntry.Playlist(pl))
+        }
+        if (chosen.size < 2) {
+            val pool = (history + likedList.songs).distinctBy { it.id }
+            val fallbacks = listOf(
+                LocalPlaylist(id = "__smart_recent__", name = "En bucle", songs = pool.take(12)),
+                LocalPlaylist(id = "__smart_night__", name = "Nocturna", songs = pool.drop(2).take(12).ifEmpty { pool.take(8) }),
+            )
+            fallbacks.forEach { if (chosen.size < 2) chosen.add(ListsEntry.Playlist(it)) }
+        }
+        chosen
     }
-    val pinnedTwo = displayLists.take(2)
-    val tileLists = playlists.drop(2).take(6)
+    val tileLists = looseLists
+        .filter { pl -> shelfEntries.none { it is ListsEntry.Playlist && it.list.id == pl.id } }
+        .take(6)
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1672,20 +1687,32 @@ private fun YourMusicPane(
                         onPlayDirect = { onPlayLocal(likedList, null) },
                     )
                 }
-                pinnedTwo.forEach { pl ->
+                shelfEntries.forEach { entry ->
                     Box(Modifier.weight(1f)) {
-                        PlaylistShelfCard(
-                            playlist = pl,
-                            accent = palette.primary,
-                            onClick = {
-                                if (pl.id.startsWith("__smart_")) onOpenSmart(pl)
-                                else onOpenLocal(pl.id)
-                            },
-                            onPlayDirect = { onPlayLocal(pl, null) },
-                        )
+                        when (entry) {
+                            is ListsEntry.Folder -> FolderShelfCard(
+                                name = entry.name,
+                                lists = entry.lists,
+                                accent = palette.primary,
+                                onClick = { onOpenFolder(entry.name) },
+                                onPlayDirect = {
+                                    val songs = entry.lists.flatMap { it.songs }.distinctBy { it.id }
+                                    if (songs.isNotEmpty()) onPlayLocal(LocalPlaylist(FOLDER_PREFIX + entry.name, entry.name, songs), null)
+                                },
+                            )
+                            is ListsEntry.Playlist -> PlaylistShelfCard(
+                                playlist = entry.list,
+                                accent = palette.primary,
+                                onClick = {
+                                    if (entry.list.id.startsWith("__smart_")) onOpenSmart(entry.list)
+                                    else onOpenLocal(entry.list.id)
+                                },
+                                onPlayDirect = { onPlayLocal(entry.list, null) },
+                            )
+                        }
                     }
                 }
-                repeat((2 - pinnedTwo.size).coerceAtLeast(0)) {
+                repeat((2 - shelfEntries.size).coerceAtLeast(0)) {
                     Spacer(Modifier.weight(1f))
                 }
             }
@@ -1878,13 +1905,14 @@ private fun AllListsSubPane(
                 playlists.groupBy { it.folder }.filterKeys { it != null }
                     .map { (folder, lists) -> folder!! to lists }
         }
-        val allItems = remember(likedList, playlists, folderEntries, filterIdx) {
+        val looseLists = remember(playlists) { playlists.filter { it.folder == null } }
+        val allItems = remember(likedList, looseLists, folderEntries, filterIdx) {
             when (filterIdx) {
-                1 -> listOf(likedList) + playlists
+                1 -> listOf(likedList) + looseLists
                 2 -> listOf(likedList)
                 3 -> emptyList()
                 else -> folderEntries.map { ListsEntry.Folder(it.first, it.second) } +
-                    (listOf(likedList) + playlists).map { ListsEntry.Playlist(it) }
+                    (listOf(likedList) + looseLists).map { ListsEntry.Playlist(it) }
             }
         }
         val folderOnly = filterIdx == 3
@@ -2178,6 +2206,86 @@ private fun MeGustaShelfCard(
             color = Color.White.copy(alpha = 0.58f),
             maxLines = 1,
         )
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun FolderShelfCard(
+    name: String,
+    lists: List<LocalPlaylist>,
+    accent: Color,
+    onClick: () -> Unit,
+    onPlayDirect: () -> Unit,
+) {
+    var isHovered by remember { mutableStateOf(false) }
+    val songs = remember(lists) { lists.flatMap { it.songs }.distinctBy { it.id } }
+    val firstArt = songs.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork
+    var coverBmp by remember(firstArt) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(firstArt) {
+        if (!firstArt.isNullOrBlank()) coverBmp = ArtworkLoader.load(firstArt).first
+    }
+    val scale by animateFloatAsState(
+        targetValue = if (isHovered) 1.02f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "folderScale",
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false },
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .shadow(18.dp, RoundedCornerShape(16.dp), ambientColor = Color.Black.copy(alpha = 0.55f))
+                .clip(RoundedCornerShape(16.dp))
+                .background(Brush.linearGradient(listOf(Color(0xFF231D33), Color(0xFF151220))))
+                .border(1.dp, if (isHovered) accent.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (coverBmp != null) {
+                Image(coverBmp!!, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
+            }
+            Icon(
+                imageVector = Icons.Rounded.Folder,
+                contentDescription = null,
+                tint = if (coverBmp != null) Color.White.copy(alpha = 0.92f) else accent.copy(alpha = 0.85f),
+                modifier = Modifier.size(56.dp),
+            )
+            if (isHovered && songs.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(10.dp)
+                        .size(40.dp)
+                        .shadow(10.dp, CircleShape)
+                        .clip(CircleShape)
+                        .background(accent)
+                        .clickable(onClick = onPlayDirect),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.PlayArrow, "Reproducir carpeta", tint = Color(0xFF101214), modifier = Modifier.size(22.dp))
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(folderSubtitle(lists), fontSize = 12.sp, color = Color.White.copy(alpha = 0.58f), maxLines = 1)
     }
 }
 
@@ -2555,6 +2663,8 @@ private fun FolderDetailPane(
     onToggleInside: (LocalPlaylist, Boolean) -> Unit,
     onRename: (String) -> Unit,
     onUngroup: () -> Unit,
+    pinned: Boolean = false,
+    onTogglePin: (() -> Unit)? = null,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
@@ -2671,6 +2781,16 @@ private fun FolderDetailPane(
                                     .background(Color(0xFF1B1726))
                                     .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
                             ) {
+                                if (onTogglePin != null) {
+                                    DropdownMenuItem(
+                                        text = { Text(if (pinned) "Quitar de arriba" else "Fijar arriba", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                        leadingIcon = { Icon(Icons.Rounded.PushPin, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
+                                        onClick = {
+                                            showMenu = false
+                                            onTogglePin()
+                                        },
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("Añadir o quitar listas", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
                                     leadingIcon = { Icon(Icons.Rounded.FolderOpen, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
@@ -2915,6 +3035,8 @@ private fun LocalPlaylistDetailPane(
     downloads: DesktopDownloads? = null,
     downloadLists: Set<String> = emptySet(),
     folders: Set<String> = emptySet(),
+    pinned: Boolean = false,
+    onTogglePin: (() -> Unit)? = null,
     onMoveToFolder: ((String?) -> Unit)? = null,
     onCreateFolderAndMove: ((String) -> Unit)? = null,
 ) {
@@ -3064,7 +3186,7 @@ private fun LocalPlaylistDetailPane(
                         onClick = { onPlayIndex(null, newest) },
                     )
 
-                    if (onDeletePlaylist != null || downloads != null || onMoveToFolder != null) {
+                    if (onDeletePlaylist != null || downloads != null || onMoveToFolder != null || onTogglePin != null) {
                         var showPlaylistMenu by remember { mutableStateOf(false) }
                         Box {
                             SheetCircleIconButton(
@@ -3096,6 +3218,16 @@ private fun LocalPlaylistDetailPane(
                                         onClick = {
                                             showPlaylistMenu = false
                                             scope.launch { prefs?.setDownloadList(list.id, !isDownloaded) }
+                                        },
+                                    )
+                                }
+                                if (onTogglePin != null) {
+                                    DropdownMenuItem(
+                                        text = { Text(if (pinned) "Quitar de arriba" else "Fijar arriba", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                        leadingIcon = { Icon(Icons.Rounded.PushPin, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
+                                        onClick = {
+                                            showPlaylistMenu = false
+                                            onTogglePin()
                                         },
                                     )
                                 }
