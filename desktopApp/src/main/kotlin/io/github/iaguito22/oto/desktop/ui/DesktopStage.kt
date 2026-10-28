@@ -372,7 +372,7 @@ private fun SpotifyPlayerColumn(
 
     val duration = nowPlaying.durationMs.coerceAtLeast(1L)
     val progress = (positionMs.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-    val coverSize = 410.dp
+    val coverSize = 460.dp
 
     Column(
         modifier = Modifier.width(coverSize),
@@ -565,8 +565,8 @@ private fun SpotifyPlayerColumn(
         ) { (_, title) ->
             Text(
                 text = title,
-                fontSize = 33.sp,
-                lineHeight = 39.sp,
+                fontSize = 38.sp,
+                lineHeight = 44.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = Color(0xFFF7F4FF),
                 maxLines = 1,
@@ -574,7 +574,7 @@ private fun SpotifyPlayerColumn(
             )
         }
 
-        Spacer(Modifier.height(5.dp))
+        Spacer(Modifier.height(6.dp))
 
         // 3. Artista abajo del título
         AnimatedContent(
@@ -587,7 +587,7 @@ private fun SpotifyPlayerColumn(
         ) { (_, artist) ->
             Text(
                 text = artist,
-                fontSize = 18.5.sp,
+                fontSize = 21.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = Color.White.copy(alpha = 0.65f),
                 maxLines = 1,
@@ -785,8 +785,8 @@ private fun LyricsStageColumn(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = 48.dp, bottom = 80.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    contentPadding = PaddingValues(top = 90.dp, bottom = 120.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp),
                 ) {
                     itemsIndexed(lines, key = { idx, l -> "${l.start}-$idx" }) { idx, line ->
                         val dist = idx - activeIdx
@@ -803,16 +803,16 @@ private fun LyricsStageColumn(
             lyrics is Lyrics.Plain && lyrics.lines.isNotEmpty() -> {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = 48.dp, bottom = 80.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    contentPadding = PaddingValues(top = 90.dp, bottom = 120.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     itemsIndexed(lyrics.lines) { _, line: String ->
                         Text(
                             text = line,
-                            fontSize = 21.sp,
+                            fontSize = 24.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Color.White.copy(alpha = 0.78f),
-                            lineHeight = 30.sp,
+                            lineHeight = 34.sp,
                         )
                     }
                 }
@@ -836,38 +836,6 @@ private fun LyricsStageColumn(
                 }
             }
         }
-
-        // Difuminado superior suave
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(72.dp)
-                .align(Alignment.TopCenter)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            palette.deep.copy(alpha = 0.85f),
-                            Color.Transparent,
-                        ),
-                    ),
-                ),
-        )
-
-        // Difuminado inferior suave
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(110.dp)
-                .align(Alignment.BottomCenter)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            palette.deep.copy(alpha = 0.92f),
-                        ),
-                    ),
-                ),
-        )
     }
 }
 
@@ -895,9 +863,9 @@ private fun SyncedLyricRow(
         isActive -> 1f
         dist == 1 -> 0.58f
         dist == -1 -> 0.40f
-        absDist == 2 -> 0.28f
-        absDist == 3 -> 0.18f
-        else -> 0.10f
+        absDist == 2 -> 0.26f
+        absDist == 3 -> 0.16f
+        else -> 0.08f
     }
     val alpha by animateFloatAsState(
         targetValue = targetAlpha,
@@ -931,15 +899,15 @@ private fun SyncedLyricRow(
     ) {
         Text(
             text = line.text.ifBlank { "♪" },
-            fontSize = if (isActive) 36.sp else 26.sp,
+            fontSize = if (isActive) 42.sp else 30.sp,
             fontWeight = if (isActive) FontWeight.Black else FontWeight.Bold,
             color = if (isActive) Color.White else Color.White.copy(alpha = alpha),
-            lineHeight = if (isActive) 48.sp else 36.sp,
+            lineHeight = if (isActive) 54.sp else 40.sp,
             style = if (isActive) {
                 TextStyle(
                     shadow = Shadow(
-                        color = Color.White.copy(alpha = 0.75f),
-                        blurRadius = 26f,
+                        color = Color.White.copy(alpha = 0.82f),
+                        blurRadius = 32f,
                     ),
                 )
             } else TextStyle.Default,

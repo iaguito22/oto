@@ -86,6 +86,9 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.text.TextStyle
@@ -276,9 +279,9 @@ fun DesktopMenuSheet(
                         .background(
                             Brush.verticalGradient(
                                 listOf(
-                                    Color(0xC41B172E),
-                                    Color(0xD6110E20),
-                                    Color(0xF00A0814),
+                                    Color(0x8A1B162C),
+                                    Color(0xA3120E22),
+                                    Color(0xCC090714),
                                 ),
                             ),
                         )
@@ -286,9 +289,9 @@ fun DesktopMenuSheet(
                             1.dp,
                             Brush.verticalGradient(
                                 listOf(
-                                    Color.White.copy(alpha = 0.45f),
-                                    palette.primary.copy(alpha = 0.38f),
-                                    Color.White.copy(alpha = 0.08f),
+                                    Color.White.copy(alpha = 0.65f),
+                                    palette.primary.copy(alpha = 0.40f),
+                                    Color.White.copy(alpha = 0.10f),
                                 ),
                             ),
                             RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
@@ -635,6 +638,7 @@ private fun MenuTabPill(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun DesktopSegmentedTabs(
     selectedPage: Int,
@@ -643,50 +647,81 @@ private fun DesktopSegmentedTabs(
 ) {
     Row(
         modifier = Modifier
-            .height(40.dp)
+            .height(42.dp)
             .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.07f))
-            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
-            .padding(3.dp),
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.12f),
+                        Color.White.copy(alpha = 0.04f),
+                    ),
+                ),
+            )
+            .border(
+                1.dp,
+                Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.38f),
+                        Color.White.copy(alpha = 0.10f),
+                    ),
+                ),
+                CircleShape,
+            )
+            .padding(4.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .width(114.dp)
-                .fillMaxHeight()
-                .clip(CircleShape)
-                .background(if (selectedPage == 0) accent.copy(alpha = 0.25f) else Color.Transparent)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) { onSelect(0) },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "Tu música",
-                fontSize = 13.5.sp,
-                fontWeight = if (selectedPage == 0) FontWeight.Bold else FontWeight.Medium,
-                color = if (selectedPage == 0) Color.White else Color.White.copy(alpha = 0.65f),
-            )
-        }
-        Box(
-            modifier = Modifier
-                .width(114.dp)
-                .fillMaxHeight()
-                .clip(CircleShape)
-                .background(if (selectedPage == 1) accent.copy(alpha = 0.25f) else Color.Transparent)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) { onSelect(1) },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "Explorar",
-                fontSize = 13.5.sp,
-                fontWeight = if (selectedPage == 1) FontWeight.Bold else FontWeight.Medium,
-                color = if (selectedPage == 1) Color.White else Color.White.copy(alpha = 0.65f),
-            )
+        listOf("Tu música", "Explorar").forEachIndexed { idx, title ->
+            val isSelected = selectedPage == idx
+            var isHovered by remember { mutableStateOf(false) }
+            val tabBg = when {
+                isSelected -> Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.24f),
+                        accent.copy(alpha = 0.32f),
+                    ),
+                )
+                isHovered -> Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.14f),
+                        Color.White.copy(alpha = 0.06f),
+                    ),
+                )
+                else -> Brush.verticalGradient(
+                    listOf(
+                        Color.Transparent,
+                        Color.Transparent,
+                    ),
+                )
+            }
+            val tabBorder = when {
+                isSelected -> Color.White.copy(alpha = 0.40f)
+                isHovered -> Color.White.copy(alpha = 0.20f)
+                else -> Color.Transparent
+            }
+
+            Box(
+                modifier = Modifier
+                    .width(116.dp)
+                    .fillMaxHeight()
+                    .clip(CircleShape)
+                    .background(tabBg)
+                    .border(1.dp, tabBorder, CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onSelect(idx) }
+                    .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+                    .onPointerEvent(PointerEventType.Exit) { isHovered = false },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = title,
+                    fontSize = 13.5.sp,
+                    fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                    color = if (isSelected) Color.White else Color.White.copy(alpha = 0.70f),
+                )
+            }
         }
     }
 }
@@ -927,6 +962,7 @@ private fun DjShelfCard(
     onClick: () -> Unit,
 ) {
     var spinning by remember { mutableStateOf(false) }
+    var isHovered by remember { mutableStateOf(false) }
     var angle by remember { mutableFloatStateOf(-35f) }
     LaunchedEffect(spinning) {
         if (!spinning) return@LaunchedEffect
@@ -943,11 +979,15 @@ private fun DjShelfCard(
         modifier = Modifier
             .width(148.dp)
             .clip(RoundedCornerShape(18.dp))
-            .background(Color.White.copy(alpha = 0.06f))
-            .border(1.dp, accent.copy(alpha = 0.24f), RoundedCornerShape(18.dp))
+            .background(if (isHovered) Color.White.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.06f))
+            .border(
+                1.dp,
+                if (isHovered) accent.copy(alpha = 0.55f) else accent.copy(alpha = 0.24f),
+                RoundedCornerShape(18.dp),
+            )
             .clickable(onClick = onClick)
-            .onPointerEvent(PointerEventType.Enter) { spinning = true }
-            .onPointerEvent(PointerEventType.Exit) { spinning = false }
+            .onPointerEvent(PointerEventType.Enter) { spinning = true; isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { spinning = false; isHovered = false }
             .padding(12.dp),
     ) {
         Box(
@@ -1009,6 +1049,7 @@ private fun DjShelfCard(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun MeGustaShelfCard(
     count: Int,
@@ -1016,17 +1057,25 @@ private fun MeGustaShelfCard(
     onClick: () -> Unit,
     onPlayDirect: () -> Unit,
 ) {
+    var isHovered by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .width(148.dp)
             .clip(RoundedCornerShape(18.dp))
             .background(
                 Brush.verticalGradient(
-                    listOf(accent.copy(alpha = 0.28f), Color(0x33120E1F)),
+                    if (isHovered) listOf(accent.copy(alpha = 0.40f), Color(0x55120E1F))
+                    else listOf(accent.copy(alpha = 0.28f), Color(0x33120E1F)),
                 ),
             )
-            .border(1.dp, accent.copy(alpha = 0.38f), RoundedCornerShape(18.dp))
+            .border(
+                1.dp,
+                if (isHovered) accent.copy(alpha = 0.65f) else accent.copy(alpha = 0.38f),
+                RoundedCornerShape(18.dp),
+            )
             .clickable(onClick = onClick)
+            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
             .padding(12.dp),
     ) {
         Box(
@@ -1112,18 +1161,26 @@ private fun PlaylistShelfCard(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun NewPlaylistShelfCard(
     accent: Color,
     onClick: () -> Unit,
 ) {
+    var isHovered by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .width(148.dp)
             .clip(RoundedCornerShape(18.dp))
-            .background(Color.White.copy(alpha = 0.04f))
-            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp))
+            .background(if (isHovered) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.04f))
+            .border(
+                1.dp,
+                if (isHovered) accent.copy(alpha = 0.60f) else Color.White.copy(alpha = 0.12f),
+                RoundedCornerShape(18.dp),
+            )
             .clickable(onClick = onClick)
+            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
             .padding(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -1984,6 +2041,7 @@ private fun SettingsAndAccountPane(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun SongRowDesktop(
     title: String,
@@ -1995,6 +2053,7 @@ private fun SongRowDesktop(
     trailing: (@Composable () -> Unit)? = null,
 ) {
     var thumbBmp by remember(thumbnail) { mutableStateOf<ImageBitmap?>(null) }
+    var isHovered by remember { mutableStateOf(false) }
     LaunchedEffect(thumbnail) {
         if (!thumbnail.isNullOrBlank()) {
             thumbBmp = ArtworkLoader.load(thumbnail).first
@@ -2005,8 +2064,21 @@ private fun SongRowDesktop(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (isCurrent) accent.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.03f))
+            .background(
+                if (isCurrent) accent.copy(alpha = 0.22f)
+                else if (isHovered) Color.White.copy(alpha = 0.08f)
+                else Color.White.copy(alpha = 0.03f)
+            )
+            .border(
+                1.dp,
+                if (isCurrent) accent.copy(alpha = 0.45f)
+                else if (isHovered) Color.White.copy(alpha = 0.15f)
+                else Color.Transparent,
+                RoundedCornerShape(12.dp)
+            )
             .clickable(onClick = onClick)
+            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
             .padding(horizontal = 14.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
