@@ -24,8 +24,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -222,22 +225,22 @@ fun DesktopStage(
                     .padding(horizontal = 24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                // Escenario de 2 columnas:
-                // Izquierda: Tiempo + Corona 360° con controles hover + Calidad
-                // Derecha: Origen + Título + Artista/Guardar + Letras con difuminado suave arriba y abajo
+                // Escenario de 2 columnas (estilo Spotify Caelestia):
+                // Izquierda: Carátula cuadrada redondeada con controles hover + Título + Artista + Barra minimal
+                // Derecha: Origen de lista + Letras sincronizadas con difuminado suave
                 Row(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .padding(bottom = 36.dp),
+                        .padding(bottom = 24.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(52.dp),
+                    horizontalArrangement = Arrangement.spacedBy(56.dp),
                 ) {
                     Box(
-                        modifier = Modifier.weight(0.44f).fillMaxHeight(),
+                        modifier = Modifier.weight(0.42f).fillMaxHeight(),
                         contentAlignment = Alignment.Center,
                     ) {
-                        CoverCoronaColumn(
+                        SpotifyPlayerColumn(
                             nowPlaying = nowPlaying,
                             positionMs = positionMs,
                             quality = quality,
@@ -245,7 +248,6 @@ fun DesktopStage(
                             palette = animPal,
                             liked = liked,
                             skipDir = skipDir,
-                            headerStyle = headerStyle,
                             onTogglePlay = onTogglePlay,
                             onPrev = { skipDir = -1; onPrev() },
                             onNext = { skipDir = 1; onNext() },
@@ -255,37 +257,19 @@ fun DesktopStage(
                     }
 
                     Column(
-                        modifier = Modifier.weight(0.56f).fillMaxHeight(),
+                        modifier = Modifier.weight(0.58f).fillMaxHeight(),
                         verticalArrangement = Arrangement.Top,
                     ) {
-                        // Pill superior alineado al inicio de la columna de la letra
+                        // Pill superior con origen de reproducción
                         TopSourceOriginBar(
                             source = source,
                             accent = animPal.primary,
                             onOpenSource = onOpenSource,
                         )
 
-                        if (headerStyle != 2) {
-                            Spacer(Modifier.height(10.dp))
+                        Spacer(Modifier.height(16.dp))
 
-                            // Cabecera: Título arriba, Artista y botón Guardar
-                            TrackHeader(
-                                title = nowPlaying.title.ifBlank { "Elige algo para empezar" },
-                                artist = nowPlaying.artist.ifBlank { "Oto · YouTube Music" },
-                                mediaId = nowPlaying.id,
-                                accent = animPal.primary,
-                                liked = liked,
-                                onToggleLike = onToggleLike,
-                                skipDir = skipDir,
-                                style = headerStyle,
-                            )
-
-                            Spacer(Modifier.height(14.dp))
-                        } else {
-                            Spacer(Modifier.height(20.dp))
-                        }
-
-                        // Columna de letra con difuminado suave arriba y abajo
+                        // Columna de letra a pantalla completa con difuminado suave
                         Box(
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                             contentAlignment = Alignment.CenterStart,
@@ -353,182 +337,9 @@ private fun TopSourceOriginBar(
     }
 }
 
-@Composable
-private fun TrackHeader(
-    title: String,
-    artist: String,
-    mediaId: String?,
-    accent: Color,
-    liked: Boolean,
-    onToggleLike: () -> Unit,
-    skipDir: Int,
-    style: Int = 0,
-) {
-    if (style == 1) {
-        // Opción B: Lateral Editorial (Fila con Título + Botón circular flotante a su derecha, Artista debajo)
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                AnimatedContent(
-                    targetState = Pair(mediaId, title),
-                    transitionSpec = {
-                        (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
-                            (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
-                    },
-                    label = "trackTitle",
-                ) { (_, curTitle) ->
-                    Text(
-                        text = curTitle,
-                        fontSize = 34.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFFF7F4FF),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                // Botón circular limpio tipo icono editorial al lado del título
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(if (liked) accent.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
-                        .border(
-                            1.dp,
-                            if (liked) accent.copy(alpha = 0.60f) else Color.White.copy(alpha = 0.16f),
-                            CircleShape,
-                        )
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onToggleLike,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                        contentDescription = if (liked) "En Me gusta" else "Guardar en Me gusta",
-                        tint = if (liked) accent else Color.White.copy(alpha = 0.88f),
-                        modifier = Modifier.size(19.dp),
-                    )
-                }
-            }
-
-            AnimatedContent(
-                targetState = Pair(mediaId, artist),
-                transitionSpec = {
-                    (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
-                        (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
-                },
-                label = "trackArtist",
-            ) { (_, curArtist) ->
-                Text(
-                    text = curArtist,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = accent,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-    } else {
-        // Opción A: Lateral Compacta (Título arriba, fila con Artista + separador + píldora [♡ Guardar] / [♥ Guardada])
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            AnimatedContent(
-                targetState = Pair(mediaId, title),
-                transitionSpec = {
-                    (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
-                        (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
-                },
-                label = "trackTitle",
-            ) { (_, curTitle) ->
-                Text(
-                    text = curTitle,
-                    fontSize = 36.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFFF7F4FF),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                AnimatedContent(
-                    targetState = Pair(mediaId, artist),
-                    transitionSpec = {
-                        (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
-                            (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
-                    },
-                    label = "trackArtist",
-                ) { (_, curArtist) ->
-                    Text(
-                        text = curArtist,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = accent,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                Text(
-                    text = "·",
-                    fontSize = 16.sp,
-                    color = Color.White.copy(alpha = 0.40f),
-                )
-
-                // Botón Guardar / Me gusta interactivo tipo píldora
-                Row(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(if (liked) accent.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
-                        .border(
-                            1.dp,
-                            if (liked) accent.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.16f),
-                            CircleShape,
-                        )
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onToggleLike,
-                        )
-                        .padding(horizontal = 12.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(
-                        imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                        contentDescription = if (liked) "En Me gusta" else "Guardar en Me gusta",
-                        tint = if (liked) accent else Color.White.copy(alpha = 0.85f),
-                        modifier = Modifier.size(15.dp),
-                    )
-                    Text(
-                        text = if (liked) "Guardada" else "Guardar",
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (liked) accent else Color.White.copy(alpha = 0.88f),
-                    )
-                }
-            }
-        }
-    }
-}
-
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun CoverCoronaColumn(
+private fun SpotifyPlayerColumn(
     nowPlaying: NowPlaying,
     positionMs: Long,
     quality: Quality?,
@@ -536,175 +347,80 @@ private fun CoverCoronaColumn(
     palette: ArtworkPalette,
     liked: Boolean,
     skipDir: Int,
-    headerStyle: Int = 0,
     onTogglePlay: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onSeek: (Long) -> Unit,
     onToggleLike: () -> Unit,
 ) {
-    var discHovered by remember { mutableStateOf(false) }
-    var tiltX by remember { mutableFloatStateOf(0f) }
-    var tiltY by remember { mutableFloatStateOf(0f) }
+    val coverInteraction = remember { MutableInteractionSource() }
+    val isHovered by coverInteraction.collectIsHoveredAsState()
+    var manualHover by remember { mutableStateOf(false) }
+    val isCoverActive = isHovered || manualHover
     var burstTrigger by remember { mutableLongStateOf(0L) }
 
-    val animTiltX by animateFloatAsState(if (discHovered) tiltX else 0f, spring(stiffness = Spring.StiffnessLow), label = "tiltX")
-    val animTiltY by animateFloatAsState(if (discHovered) tiltY else 0f, spring(stiffness = Spring.StiffnessLow), label = "tiltY")
-    val controlsAlpha by animateFloatAsState(if (discHovered) 1f else 0f, tween(220, easing = FastOutSlowInEasing), label = "ctrlAlpha")
-    val controlsScale by animateFloatAsState(if (discHovered) 1f else 0.92f, spring(dampingRatio = 0.75f, stiffness = 400f), label = "ctrlScale")
+    val controlsAlpha by animateFloatAsState(
+        targetValue = if (isCoverActive) 1f else 0f,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "ctrlAlpha",
+    )
+    val controlsScale by animateFloatAsState(
+        targetValue = if (isCoverActive) 1f else 0.94f,
+        animationSpec = spring(dampingRatio = 0.75f, stiffness = 400f),
+        label = "ctrlScale",
+    )
 
     val duration = nowPlaying.durationMs.coerceAtLeast(1L)
     val progress = (positionMs.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-    val discDp = if (headerStyle == 2) 310.dp else 390.dp
-    val discPx = if (headerStyle == 2) 155f else 195f
+    val coverSize = 410.dp
 
     Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.width(coverSize),
+        horizontalAlignment = Alignment.Start,
         verticalArrangement = Arrangement.Center,
     ) {
-        // Tiempo desnudo encima de la carátula (sin bordes ni fondo, como la app)
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.padding(bottom = 10.dp),
-        ) {
-            Text(
-                text = formatTimeMs(positionMs),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = palette.primary,
-            )
-            Text(
-                text = "/",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                color = Color.White.copy(alpha = 0.32f),
-            )
-            Text(
-                text = formatTimeMs(nowPlaying.durationMs),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = Color.White.copy(alpha = 0.54f),
-            )
-        }
-
-        // Corona 360° + Carátula circular con hover controls
+        // 1. Carátula cuadrada con bordes redondeados (estilo Spotify Caelestia)
         Box(
             modifier = Modifier
-                .size(discDp)
-                .onPointerEvent(PointerEventType.Enter) { discHovered = true }
-                .onPointerEvent(PointerEventType.Exit) {
-                    discHovered = false
-                    tiltX = 0f
-                    tiltY = 0f
-                }
-                .onPointerEvent(PointerEventType.Move) { ev ->
-                    val pos = ev.changes.firstOrNull()?.position ?: return@onPointerEvent
-                    val cx = discPx
-                    val cy = discPx
-                    val dx = ((pos.x - cx) / cx).coerceIn(-1f, 1f)
-                    val dy = ((pos.y - cy) / cy).coerceIn(-1f, 1f)
-                    tiltY = dx * 8f
-                    tiltX = -dy * 8f
-                }
+                .size(coverSize)
+                .hoverable(coverInteraction)
+                .onPointerEvent(PointerEventType.Enter) { manualHover = true }
+                .onPointerEvent(PointerEventType.Move) { manualHover = true }
+                .onPointerEvent(PointerEventType.Exit) { manualHover = false }
+                .shadow(
+                    elevation = 28.dp,
+                    shape = RoundedCornerShape(20.dp),
+                    ambientColor = Color.Black.copy(alpha = 0.6f),
+                    spotColor = Color.Black.copy(alpha = 0.85f),
+                )
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color(0xFF14121A))
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp))
                 .pointerInput(nowPlaying.id) {
                     detectTapGestures(
                         onDoubleTap = {
                             onToggleLike()
                             burstTrigger = System.currentTimeMillis()
                         },
-                        onTap = { offset ->
-                            val cx = size.width / 2f
-                            val cy = size.height / 2f
-                            val dx = offset.x - cx
-                            val dy = offset.y - cy
-                            val dist = kotlin.math.sqrt(dx * dx + dy * dy)
-                            val outerR = size.width / 2f
-                            if (dist in (outerR * 0.84f)..outerR && nowPlaying.durationMs > 0L) {
-                                var deg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat() + 90f
-                                if (deg < 0f) deg += 360f
-                                val targetMs = ((deg / 360f) * nowPlaying.durationMs).toLong()
-                                onSeek(targetMs)
-                            } else {
-                                onTogglePlay()
-                            }
-                        },
+                        onTap = { onTogglePlay() },
                     )
                 },
             contentAlignment = Alignment.Center,
         ) {
-            // Anillo Corona 360°
-            Canvas(Modifier.fillMaxSize()) {
-                val strokePx = 4.5.dp.toPx()
-                val pad = 12.dp.toPx()
-                val arcSize = Size(size.width - pad * 2, size.height - pad * 2)
-                drawArc(
-                    color = Color.White.copy(alpha = 0.11f),
-                    startAngle = -90f,
-                    sweepAngle = 360f,
-                    useCenter = false,
-                    topLeft = Offset(pad, pad),
-                    size = arcSize,
-                    style = Stroke(width = strokePx, cap = StrokeCap.Round),
-                )
-                val sweep = 360f * progress
-                drawArc(
-                    brush = Brush.sweepGradient(
-                        listOf(palette.primary, palette.secondary, palette.tertiary, palette.primary),
-                    ),
-                    startAngle = -90f,
-                    sweepAngle = sweep,
-                    useCenter = false,
-                    topLeft = Offset(pad, pad),
-                    size = arcSize,
-                    style = Stroke(width = strokePx, cap = StrokeCap.Round),
-                )
-                // Punto luminoso en la punta del progreso
-                val rad = Math.toRadians((sweep - 90f).toDouble())
-                val r = arcSize.width / 2f
-                val dotX = size.width / 2f + (r * cos(rad)).toFloat()
-                val dotY = size.height / 2f + (r * sin(rad)).toFloat()
-                drawCircle(
-                    color = palette.primary.copy(alpha = 0.45f),
-                    radius = 9.dp.toPx(),
-                    center = Offset(dotX, dotY),
-                )
-                drawCircle(
-                    color = Color.White,
-                    radius = 4.5.dp.toPx(),
-                    center = Offset(dotX, dotY),
-                )
-            }
-
-            // Carátula circular animada al cambiar de canción + controles internos en hover
+            // Imagen animada al cambiar de canción
             AnimatedContent(
                 targetState = nowPlaying.id to artwork,
                 transitionSpec = {
                     (fadeIn(tween(360)) +
-                        slideInHorizontally(spring(dampingRatio = 0.72f, stiffness = 300f)) { skipDir * it / 3 } +
-                        scaleIn(spring(dampingRatio = 0.78f, stiffness = 300f), initialScale = 0.88f)) togetherWith
+                        slideInHorizontally(spring(dampingRatio = 0.72f, stiffness = 300f)) { skipDir * it / 4 } +
+                        scaleIn(spring(dampingRatio = 0.78f, stiffness = 300f), initialScale = 0.92f)) togetherWith
                         (fadeOut(tween(180)) +
-                            slideOutHorizontally(tween(180)) { -skipDir * it / 4 } +
-                            scaleOut(tween(180), targetScale = 1.05f))
+                            slideOutHorizontally(tween(180)) { -skipDir * it / 5 } +
+                            scaleOut(tween(180), targetScale = 1.04f))
                 },
-                label = "discArt",
+                label = "coverArt",
             ) { (_, bmp) ->
-                Box(
-                    modifier = Modifier
-                        .size(340.dp)
-                        .graphicsLayer {
-                            rotationX = animTiltX
-                            rotationY = animTiltY
-                            cameraDistance = 14f * density
-                        }
-                        .shadow(32.dp, CircleShape, ambientColor = palette.primary, spotColor = palette.primary)
-                        .clip(CircleShape)
-                        .background(Color(0xFF171422))
-                        .border(1.5.dp, Color.White.copy(alpha = 0.14f), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (bmp != null) {
                         Image(
                             bitmap = bmp,
@@ -717,201 +433,276 @@ private fun CoverCoronaColumn(
                             imageVector = Icons.Rounded.MusicNote,
                             contentDescription = null,
                             tint = palette.primary.copy(alpha = 0.55f),
-                            modifier = Modifier.size(84.dp),
+                            modifier = Modifier.size(80.dp),
                         )
-                    }
-
-                    // Velo oscuro suave + botones traslúcidos dentro de la carátula SOLO en hover
-                    if (controlsAlpha > 0.01f) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .graphicsLayer { alpha = controlsAlpha }
-                                .background(
-                                    Brush.radialGradient(
-                                        colors = listOf(
-                                            Color.Black.copy(alpha = 0.54f),
-                                            Color.Black.copy(alpha = 0.26f),
-                                        ),
-                                    ),
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Row(
-                                modifier = Modifier.graphicsLayer {
-                                    scaleX = controlsScale
-                                    scaleY = controlsScale
-                                },
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(22.dp),
-                            ) {
-                                CoverControlButton(
-                                    size = 52.dp,
-                                    isPrimary = false,
-                                    accent = palette.primary,
-                                    onClick = onPrev,
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.SkipPrevious,
-                                        contentDescription = "Anterior",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(26.dp),
-                                    )
-                                }
-
-                                CoverControlButton(
-                                    size = 72.dp,
-                                    isPrimary = true,
-                                    accent = palette.primary,
-                                    onClick = onTogglePlay,
-                                ) {
-                                    Icon(
-                                        imageVector = if (nowPlaying.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                        contentDescription = if (nowPlaying.playing) "Pausar" else "Reproducir",
-                                        tint = Color(0xFF120D1D),
-                                        modifier = Modifier.size(36.dp),
-                                    )
-                                }
-
-                                CoverControlButton(
-                                    size = 52.dp,
-                                    isPrimary = false,
-                                    accent = palette.primary,
-                                    onClick = onNext,
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.SkipNext,
-                                        contentDescription = "Siguiente",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(26.dp),
-                                    )
-                                }
-                            }
-
-                            // Botón inferior derecho de guardar en la propia carátula
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .padding(22.dp)
-                                    .size(38.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.Black.copy(alpha = 0.62f))
-                                    .border(1.dp, Color.White.copy(alpha = 0.20f), CircleShape)
-                                    .clickable(onClick = onToggleLike),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                                    contentDescription = "Guardar",
-                                    tint = if (liked) palette.primary else Color.White.copy(alpha = 0.85f),
-                                    modifier = Modifier.size(19.dp),
-                                )
-                            }
-                        }
-                    }
-
-                    // HeartBurst animado al hacer doble clic
-                    val burstElapsed = System.currentTimeMillis() - burstTrigger
-                    if (burstElapsed < 650L) {
-                        val p = (burstElapsed.toFloat() / 650f).coerceIn(0f, 1f)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .graphicsLayer {
-                                    scaleX = 0.6f + p * 1.3f
-                                    scaleY = 0.6f + p * 1.3f
-                                    alpha = (1f - p).coerceIn(0f, 1f)
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Favorite,
-                                contentDescription = null,
-                                tint = palette.primary,
-                                modifier = Modifier.size(96.dp),
-                            )
-                        }
                     }
                 }
             }
-        }
 
-        if (headerStyle == 2) {
-            // Opción C: Título, artista y me gusta centrados bajo el vinilo
-            Spacer(Modifier.height(14.dp))
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.fillMaxWidth(0.92f),
-            ) {
-                Text(
-                    text = nowPlaying.title.ifBlank { "Elige algo para empezar" },
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFFF7F4FF),
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+            // Controles internos en la carátula visibles solo en hover
+            if (controlsAlpha > 0.01f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = controlsAlpha }
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    Color.Black.copy(alpha = 0.58f),
+                                    Color.Black.copy(alpha = 0.32f),
+                                ),
+                            ),
+                        ),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        text = nowPlaying.artist.ifBlank { "Oto · YouTube Music" },
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = palette.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = controlsScale
+                            scaleY = controlsScale
+                        },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(20.dp),
+                    ) {
+                        CoverControlButton(
+                            size = 48.dp,
+                            isPrimary = false,
+                            accent = palette.primary,
+                            onClick = onPrev,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.SkipPrevious,
+                                contentDescription = "Anterior",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
+
+                        CoverControlButton(
+                            size = 66.dp,
+                            isPrimary = true,
+                            accent = palette.primary,
+                            onClick = onTogglePlay,
+                        ) {
+                            Icon(
+                                imageVector = if (nowPlaying.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = if (nowPlaying.playing) "Pausar" else "Reproducir",
+                                tint = Color(0xFF120D1D),
+                                modifier = Modifier.size(34.dp),
+                            )
+                        }
+
+                        CoverControlButton(
+                            size = 48.dp,
+                            isPrimary = false,
+                            accent = palette.primary,
+                            onClick = onNext,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.SkipNext,
+                                contentDescription = "Siguiente",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
+                    }
+
+                    // Botón Me gusta en la esquina superior derecha de la carátula
                     Box(
                         modifier = Modifier
-                            .size(32.dp)
+                            .align(Alignment.TopEnd)
+                            .padding(14.dp)
+                            .size(36.dp)
                             .clip(CircleShape)
-                            .background(if (liked) palette.primary.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
-                            .border(
-                                1.dp,
-                                if (liked) palette.primary.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.16f),
-                                CircleShape,
-                            )
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = onToggleLike,
-                            ),
+                            .background(Color.Black.copy(alpha = 0.60f))
+                            .border(1.dp, Color.White.copy(alpha = 0.20f), CircleShape)
+                            .clickable(onClick = onToggleLike),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
                             imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                            contentDescription = if (liked) "Guardada" else "Guardar",
+                            contentDescription = "Guardar",
                             tint = if (liked) palette.primary else Color.White.copy(alpha = 0.85f),
-                            modifier = Modifier.size(15.dp),
+                            modifier = Modifier.size(18.dp),
                         )
                     }
                 }
             }
+
+            // HeartBurst animado al hacer doble tap
+            val burstElapsed = System.currentTimeMillis() - burstTrigger
+            if (burstElapsed < 650L) {
+                val p = (burstElapsed.toFloat() / 650f).coerceIn(0f, 1f)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = 0.6f + p * 1.3f
+                            scaleY = 0.6f + p * 1.3f
+                            alpha = (1f - p).coerceIn(0f, 1f)
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Favorite,
+                        contentDescription = null,
+                        tint = palette.primary,
+                        modifier = Modifier.size(96.dp),
+                    )
+                }
+            }
         }
 
-        // Calidad desnuda debajo de la carátula (sin bordes ni fondo)
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.padding(top = 10.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.GraphicEq,
-                contentDescription = null,
-                tint = palette.secondary.copy(alpha = 0.85f),
-                modifier = Modifier.size(14.dp),
-            )
+        Spacer(Modifier.height(18.dp))
+
+        // 2. Título abajo de la carátula
+        AnimatedContent(
+            targetState = Pair(nowPlaying.id, nowPlaying.title.ifBlank { "Elige algo para empezar" }),
+            transitionSpec = {
+                (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
+                    (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
+            },
+            label = "trackTitle",
+        ) { (_, title) ->
             Text(
-                text = quality?.toString()?.uppercase() ?: "—",
+                text = title,
+                fontSize = 33.sp,
+                lineHeight = 39.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFFF7F4FF),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        Spacer(Modifier.height(5.dp))
+
+        // 3. Artista abajo del título
+        AnimatedContent(
+            targetState = Pair(nowPlaying.id, nowPlaying.artist.ifBlank { "Oto · YouTube Music" }),
+            transitionSpec = {
+                (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
+                    (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
+            },
+            label = "trackArtist",
+        ) { (_, artist) ->
+            Text(
+                text = artist,
+                fontSize = 18.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White.copy(alpha = 0.65f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // 4. Barra de progreso minimal abajo
+        MinimalProgressBar(
+            progress = progress,
+            positionMs = positionMs,
+            durationMs = duration,
+            quality = quality,
+            accent = palette.primary,
+            onSeek = onSeek,
+        )
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun MinimalProgressBar(
+    progress: Float,
+    positionMs: Long,
+    durationMs: Long,
+    quality: Quality?,
+    accent: Color,
+    onSeek: (Long) -> Unit,
+) {
+    var barHovered by remember { mutableStateOf(false) }
+    val barHeight by animateFloatAsState(
+        targetValue = if (barHovered) 5f else 3f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "barHeight",
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onPointerEvent(PointerEventType.Enter) { barHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { barHovered = false },
+    ) {
+        // Línea interactiva con zona táctil y de clic amplia (18.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(18.dp)
+                .pointerInput(durationMs) {
+                    detectTapGestures { offset ->
+                        val p = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                        onSeek((p * durationMs).toLong())
+                    }
+                }
+                .pointerInput(durationMs) {
+                    detectDragGestures { change, _ ->
+                        change.consume()
+                        val p = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
+                        onSeek((p * durationMs).toLong())
+                    }
+                },
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            // Fondo de la barra
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(barHeight.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(Color.White.copy(alpha = 0.16f)),
+            )
+            // Relleno de la barra
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(progress)
+                    .height(barHeight.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(accent.copy(alpha = 0.85f), Color.White),
+                        ),
+                    ),
+            )
+        }
+
+        Spacer(Modifier.height(4.dp))
+
+        // Fila de tiempos y calidad minimal
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = formatTimeMs(positionMs),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
-                letterSpacing = 0.8.sp,
-                color = Color.White.copy(alpha = 0.48f),
+                color = Color.White.copy(alpha = 0.40f),
+            )
+            Text(
+                text = quality?.toString()?.uppercase() ?: "OPUS",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                letterSpacing = 0.6.sp,
+                fontWeight = FontWeight.Normal,
+                color = Color.White.copy(alpha = 0.30f),
+            )
+            Text(
+                text = formatTimeMs(durationMs),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color.White.copy(alpha = 0.40f),
             )
         }
     }
@@ -1137,15 +928,15 @@ private fun SyncedLyricRow(
     ) {
         Text(
             text = line.text.ifBlank { "♪" },
-            fontSize = if (isActive) 28.sp else 22.sp,
+            fontSize = if (isActive) 35.sp else 26.sp,
             fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Bold,
             color = if (isActive) Color.White else Color.White.copy(alpha = alpha),
-            lineHeight = if (isActive) 36.sp else 29.sp,
+            lineHeight = if (isActive) 46.sp else 36.sp,
             style = if (isActive) {
                 TextStyle(
                     shadow = Shadow(
-                        color = palette.primary.copy(alpha = 0.65f),
-                        blurRadius = 26f,
+                        color = Color.White.copy(alpha = 0.60f),
+                        blurRadius = 22f,
                     ),
                 )
             } else TextStyle.Default,

@@ -9,6 +9,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -76,8 +77,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -171,7 +174,7 @@ fun DesktopMenuSheet(
     }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-        // Píldora inferior cuando está cerrado
+        // Píldora inferior liquid glass cuando está cerrado
         AnimatedVisibility(
             visible = !open,
             enter = fadeIn() + slideInVertically { it / 2 },
@@ -180,10 +183,26 @@ fun DesktopMenuSheet(
         ) {
             Row(
                 modifier = Modifier
-                    .shadow(20.dp, CircleShape)
+                    .shadow(24.dp, CircleShape, ambientColor = palette.primary.copy(alpha = 0.4f), spotColor = Color.Black)
                     .clip(CircleShape)
-                    .background(Color(0xD9161321))
-                    .border(1.dp, palette.primary.copy(alpha = 0.28f), CircleShape)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.White.copy(alpha = 0.16f),
+                                Color(0xC0171324),
+                            ),
+                        ),
+                    )
+                    .border(
+                        1.dp,
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.White.copy(alpha = 0.50f),
+                                palette.primary.copy(alpha = 0.35f),
+                            ),
+                        ),
+                        CircleShape,
+                    )
                     .clickable { onToggleOpen(true) }
                     .onPointerEvent(PointerEventType.Scroll) { ev ->
                         val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
@@ -191,9 +210,9 @@ fun DesktopMenuSheet(
                             onToggleOpen(true)
                         }
                     }
-                    .padding(horizontal = 22.dp, vertical = 11.dp),
+                    .padding(horizontal = 22.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Icon(
                     imageVector = Icons.Rounded.KeyboardArrowUp,
@@ -202,20 +221,21 @@ fun DesktopMenuSheet(
                     modifier = Modifier.size(18.dp),
                 )
                 Text(
-                    text = "Tu música · Explorar · Buscar",
+                    text = "Tu música · Explorar",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color.White.copy(alpha = 0.88f),
+                    color = Color.White.copy(alpha = 0.92f),
                 )
                 Text(
                     text = "Scroll ↓ o Ctrl+K",
                     fontSize = 11.sp,
-                    color = palette.primary.copy(alpha = 0.78f),
+                    fontWeight = FontWeight.Medium,
+                    color = palette.primary.copy(alpha = 0.85f),
                 )
             }
         }
 
-        // Fondo oscurecido y cajón desplegado desde abajo
+        // Fondo oscurecido y cajón desplegado desde abajo con estilo Liquid Glass
         AnimatedVisibility(
             visible = open,
             enter = fadeIn(),
@@ -224,7 +244,7 @@ fun DesktopMenuSheet(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.56f))
+                    .background(Color.Black.copy(alpha = 0.50f))
                     .clickable { onToggleOpen(false) }
                     .onPointerEvent(PointerEventType.Scroll) { ev ->
                         val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
@@ -238,17 +258,33 @@ fun DesktopMenuSheet(
                     modifier = Modifier
                         .widthIn(max = 1180.dp)
                         .fillMaxWidth()
-                        .fillMaxHeight(0.84f)
-                        .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                        .fillMaxHeight(0.85f)
+                        .shadow(
+                            elevation = 40.dp,
+                            shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
+                            ambientColor = palette.primary.copy(alpha = 0.35f),
+                            spotColor = Color.Black,
+                        )
+                        .clip(RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp))
                         .background(
                             Brush.verticalGradient(
-                                listOf(Color(0xF5171424), Color(0xFA0E0C17)),
+                                listOf(
+                                    Color(0xC41B172E),
+                                    Color(0xD6110E20),
+                                    Color(0xF00A0814),
+                                ),
                             ),
                         )
                         .border(
                             1.dp,
-                            palette.primary.copy(alpha = 0.24f),
-                            RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color.White.copy(alpha = 0.45f),
+                                    palette.primary.copy(alpha = 0.38f),
+                                    Color.White.copy(alpha = 0.08f),
+                                ),
+                            ),
+                            RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
                         )
                         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
                         .padding(horizontal = 28.dp, vertical = 18.dp),
@@ -728,6 +764,7 @@ private fun YourMusicPane(
                 SongRowDesktop(
                     title = h.title,
                     subtitle = h.artist,
+                    thumbnail = h.artwork,
                     isCurrent = h.id == currentMediaId,
                     accent = palette.primary,
                     onClick = { onPlayHeard(h) },
@@ -1029,6 +1066,7 @@ private fun LocalPlaylistDetailPane(
                 SongRowDesktop(
                     title = s.title,
                     subtitle = s.artist,
+                    thumbnail = s.artwork,
                     isCurrent = s.id == currentMediaId,
                     accent = palette.primary,
                     onClick = { onPlayIndex(idx) },
@@ -1077,6 +1115,7 @@ private fun RemoteDetailPane(
                     SongRowDesktop(
                         title = s.title,
                         subtitle = s.artists.joinToString { it.name },
+                        thumbnail = s.thumbnail,
                         isCurrent = s.id == currentMediaId,
                         accent = palette.primary,
                         onClick = { onPlayAll(songs, idx) },
@@ -1132,6 +1171,7 @@ private fun ExplorePane(
                             SongRowDesktop(
                                 title = item.title,
                                 subtitle = sub,
+                                thumbnail = item.thumbnail,
                                 isCurrent = false,
                                 accent = palette.primary,
                                 onClick = { if (item is SongItem) onPlaySong(item) else onOpenItem(item) },
@@ -1179,6 +1219,7 @@ private fun SearchResultsPane(
                     SongRowDesktop(
                         title = item.title,
                         subtitle = sub,
+                        thumbnail = item.thumbnail,
                         isCurrent = item.id == currentMediaId,
                         accent = palette.primary,
                         onClick = { if (item is SongItem) onPlaySong(item) else onOpenItem(item) },
@@ -1237,6 +1278,7 @@ private fun QueuePane(
                     index = idx + 1,
                     title = entry.title,
                     subtitle = entry.artist,
+                    artwork = entry.artwork,
                     isCurrent = entry.id == currentMediaId,
                     accent = palette.primary,
                     canMoveUp = idx > 0,
@@ -1256,6 +1298,7 @@ private fun QueueRowDesktop(
     index: Int,
     title: String,
     subtitle: String,
+    artwork: String? = null,
     isCurrent: Boolean,
     accent: Color,
     canMoveUp: Boolean,
@@ -1265,13 +1308,20 @@ private fun QueueRowDesktop(
     onMoveDown: () -> Unit,
     onRemove: () -> Unit,
 ) {
+    var thumbBmp by remember(artwork) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(artwork) {
+        if (!artwork.isNullOrBlank()) {
+            thumbBmp = ArtworkLoader.load(artwork).first
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(if (isCurrent) accent.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.03f))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 14.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -1290,6 +1340,29 @@ private fun QueueRowDesktop(
                 color = Color.White.copy(alpha = 0.45f),
                 modifier = Modifier.width(22.dp),
             )
+        }
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.White.copy(alpha = 0.07f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (thumbBmp != null) {
+                Image(
+                    bitmap = thumbBmp!!,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Rounded.MusicNote,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.40f),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
         }
         Column(Modifier.weight(1f)) {
             Text(
@@ -1482,26 +1555,66 @@ private fun SettingsAndAccountPane(
 private fun SongRowDesktop(
     title: String,
     subtitle: String,
+    thumbnail: String? = null,
     isCurrent: Boolean,
     accent: Color,
     onClick: () -> Unit,
 ) {
+    var thumbBmp by remember(thumbnail) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(thumbnail) {
+        if (!thumbnail.isNullOrBlank()) {
+            thumbBmp = ArtworkLoader.load(thumbnail).first
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(if (isCurrent) accent.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.03f))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Icon(
-            imageVector = if (isCurrent) Icons.Rounded.PlayArrow else Icons.Rounded.MusicNote,
-            contentDescription = null,
-            tint = if (isCurrent) accent else Color.White.copy(alpha = 0.45f),
-            modifier = Modifier.size(18.dp),
-        )
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.White.copy(alpha = 0.07f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (thumbBmp != null) {
+                Image(
+                    bitmap = thumbBmp!!,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            if (isCurrent) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.50f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.PlayArrow,
+                        contentDescription = "Sonando",
+                        tint = accent,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            } else if (thumbBmp == null) {
+                Icon(
+                    imageVector = Icons.Rounded.MusicNote,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.45f),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
         Column(Modifier.weight(1f)) {
             Text(
                 text = title,
