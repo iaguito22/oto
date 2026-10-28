@@ -205,7 +205,7 @@ class DesktopPlayerConnection(
     }
 
     override fun playLocal(list: LocalPlaylist, start: Int?, newestFirst: Boolean) {
-        val base = if (newestFirst) list.songs.asReversed() else list.songs
+        val base = if (newestFirst) list.songs.reversed() else list.songs
         val items = base.map { it.toSong() }
         if (items.isEmpty()) return
         dj = null

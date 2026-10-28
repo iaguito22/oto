@@ -208,11 +208,8 @@ class DesktopAudioEngine(
                     currentProcess = proc
                     val code = proc.waitFor()
                     if (isActive && currentProcess === proc && code == 0) {
-                        val elapsed = startOffsetMs + (System.currentTimeMillis() - playStartedWallMs)
-                        if (activeDurationMs <= 0L || elapsed >= activeDurationMs - 1500L) {
-                            _state.value = _state.value.copy(playing = false, positionMs = activeDurationMs)
-                            onEnded()
-                        }
+                        _state.value = _state.value.copy(playing = false, positionMs = activeDurationMs)
+                        onEnded()
                     }
                 } else {
                     playWithJavaSound(file, startOffsetMs)
