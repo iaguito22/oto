@@ -50,6 +50,7 @@ object InnerTubeXPlayer {
 
     @Volatile private var appContext: Context? = null
     @Volatile private var currentBundle: Bundle? = null
+    @Volatile private var prewarming = false
     private val bundleMutex = Mutex()
     private val clientFailures = ConcurrentHashMap<String, FailedClients>()
 
@@ -59,7 +60,14 @@ object InnerTubeXPlayer {
     }
 
     /** Descarga la configuración del reproductor y el cifrado antes de la primera canción. */
-    suspend fun prewarm() = bundle().extractor.prewarm()
+    suspend fun prewarm() {
+        prewarming = true
+        try {
+            bundle().extractor.prewarm()
+        } finally {
+            prewarming = false
+        }
+    }
 
     /** [tier]: la calidad que se decidió para esta canción (ver [Tier]); la misma en cada vuelta a pedirla. */
     suspend fun resolve(videoId: String, tier: Tier): Result<Stream> =
@@ -140,10 +148,15 @@ object InnerTubeXPlayer {
     }
 
     private val tokenProvider = object : TokenProvider {
-        override val capabilities = TokenProviderCapabilities(
-            providers = setOf(PoTokenProviderKind.WEB_BOTGUARD),
-            usesWebView = true,
-        )
+        override val capabilities: TokenProviderCapabilities
+            get() = if (prewarming) {
+                TokenProviderCapabilities(providers = emptySet(), usesWebView = false)
+            } else {
+                TokenProviderCapabilities(
+                    providers = setOf(PoTokenProviderKind.WEB_BOTGUARD),
+                    usesWebView = true,
+                )
+            }
 
         override suspend fun getPoToken(videoId: String, visitorData: String, cookie: String?): PoTokenResult? =
             poTokenGenerator.getWebClientPoToken(videoId, visitorData)?.let {

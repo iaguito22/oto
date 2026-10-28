@@ -43,9 +43,9 @@ private val blurs = LruCache<String, ImageBitmap>(6)
  */
 suspend fun blurredArtwork(context: Context, artwork: String): ImageBitmap? {
     blurs.get(artwork)?.let { return it }
-    val request = ImageRequest.Builder(context).data(smallArtwork(artwork)).allowHardware(false).build()
-    val bitmap = context.imageLoader.execute(request).image?.toBitmap() ?: return null
-    return withContext(Dispatchers.Default) {
+    return withContext(Dispatchers.IO) {
+        val request = ImageRequest.Builder(context).data(smallArtwork(artwork)).allowHardware(false).build()
+        val bitmap = context.imageLoader.execute(request).image?.toBitmap() ?: return@withContext null
         val w = bitmap.width
         val h = bitmap.height
         val px = IntArray(w * h)

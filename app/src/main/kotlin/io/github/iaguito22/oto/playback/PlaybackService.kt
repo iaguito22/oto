@@ -172,10 +172,6 @@ class PlaybackService : MediaLibraryService() {
         scope.launch { prefs.likedIds.collect { liked = it; showLike() } }
 
         connectivity.registerDefaultNetworkCallback(networkCallback)
-        scope.launch(Dispatchers.IO) {
-            delay(2500)
-            runCatching { InnerTubeXPlayer.prewarm() }.onFailure { Timber.w(it, "prewarm") }
-        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = session
