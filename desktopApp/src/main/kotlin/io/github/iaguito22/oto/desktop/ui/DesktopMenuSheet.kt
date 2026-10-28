@@ -18,6 +18,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -62,6 +64,7 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -1877,6 +1880,7 @@ private fun QueuePane(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun QueueRowDesktop(
     index: Int,
@@ -1893,6 +1897,7 @@ private fun QueueRowDesktop(
     onRemove: () -> Unit,
 ) {
     var thumbBmp by remember(artwork) { mutableStateOf<ImageBitmap?>(null) }
+    var isHovered by remember { mutableStateOf(false) }
     LaunchedEffect(artwork) {
         if (!artwork.isNullOrBlank()) {
             thumbBmp = ArtworkLoader.load(artwork).first
@@ -1903,15 +1908,33 @@ private fun QueueRowDesktop(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (isCurrent) accent.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.03f))
+            .background(
+                if (isCurrent) Brush.horizontalGradient(
+                    listOf(accent.copy(alpha = 0.32f), accent.copy(alpha = 0.14f)),
+                )
+                else if (isHovered) Brush.horizontalGradient(
+                    listOf(Color.White.copy(alpha = 0.12f), Color.White.copy(alpha = 0.05f)),
+                )
+                else SolidColor(Color.White.copy(alpha = 0.03f)),
+            )
+            .border(
+                1.dp,
+                if (isCurrent) accent.copy(alpha = 0.50f)
+                else if (isHovered) Color.White.copy(alpha = 0.20f)
+                else Color.Transparent,
+                RoundedCornerShape(12.dp),
+            )
+            .pointerHoverIcon(PointerIcon.Hand)
             .clickable(onClick = onClick)
+            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
             .padding(horizontal = 14.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (isCurrent) {
             Icon(
-                imageVector = Icons.Rounded.PlayArrow,
+                imageVector = Icons.Rounded.GraphicEq,
                 contentDescription = "Sonando",
                 tint = accent,
                 modifier = Modifier.size(18.dp),
@@ -2007,6 +2030,7 @@ private fun QueueRowDesktop(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsAndAccountPane(
     prefs: Prefs,
@@ -2022,6 +2046,7 @@ private fun SettingsAndAccountPane(
     palette: ArtworkPalette,
 ) {
     val scope = rememberCoroutineScope()
+    val crossfade by prefs.crossfade.collectAsState(initial = 3)
     var importError by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -2128,6 +2153,76 @@ private fun SettingsAndAccountPane(
                     }
                     MenuTabPill(if (dataSaver) "Ahorro de datos: sí" else "Ahorro de datos: no", dataSaver, palette.tertiary) {
                         scope.launch { prefs.setDataSaver(!dataSaver) }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text("Fundido entre canciones (crossfade)", fontSize = 13.sp, color = Color.White.copy(alpha = 0.70f))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(0 to "Sin fundido", 3 to "3s", 6 to "6s", 10 to "10s").forEach { (secs, label) ->
+                        MenuTabPill(label, crossfade == secs, palette.secondary) {
+                            scope.launch { prefs.setCrossfade(secs) }
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Color.White.copy(alpha = 0.05f))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp))
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Icon(Icons.Rounded.Tune, null, tint = palette.primary)
+                    Text("Atajos de teclado en el escritorio", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+                val shortcuts = listOf(
+                    "Espacio" to "Reproducir / Pausar",
+                    "N  /  Ctrl+→" to "Canción siguiente",
+                    "P  /  Ctrl+←" to "Canción anterior",
+                    "←  /  →" to "Retroceder / Avanzar ±5s",
+                    "↑  /  ↓  /  Rueda" to "Volumen ±4% (en carátula)",
+                    "M" to "Silenciar / Restaurar",
+                    "L" to "Guardar en Me gusta",
+                    "B" to "Guardar canción en lista",
+                    "Ctrl+K  /  Ctrl+F" to "Abrir / Cerrar menú",
+                    "F11" to "Pantalla completa",
+                    "Tab" to "Alternar Tu música / Explorar",
+                    "Escape" to "Cerrar modal o cajón",
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    shortcuts.forEach { (key, desc) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White.copy(alpha = 0.05f))
+                                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(
+                                text = key,
+                                fontSize = 11.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = palette.primary,
+                            )
+                            Text(
+                                text = desc,
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.70f),
+                            )
+                        }
                     }
                 }
             }
