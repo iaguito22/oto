@@ -13,6 +13,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,6 +45,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.Delete
@@ -51,6 +54,7 @@ import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -58,6 +62,7 @@ import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -83,14 +88,18 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -118,6 +127,7 @@ import io.github.iaguito22.oto.importer.ImportState
 import io.github.iaguito22.oto.importer.Spotify
 import io.github.iaguito22.oto.importer.Importer
 import io.github.iaguito22.oto.playback.QueueEntry
+import io.github.iaguito22.oto.toHeard
 import io.github.iaguito22.oto.toSong
 import io.github.iaguito22.oto.ui.menu.Filter
 import io.github.iaguito22.oto.ui.menu.MenuController
@@ -175,11 +185,13 @@ fun DesktopMenuSheet(
     val scope = rememberCoroutineScope()
 
     var subView by remember { mutableStateOf(MenuSubView.None) }
+    var savingTrack by remember { mutableStateOf<Heard?>(null) }
     val searchFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(open) {
         if (!open) {
             subView = MenuSubView.None
+            savingTrack = null
         }
     }
 
@@ -496,6 +508,7 @@ fun DesktopMenuSheet(
                                     onFilter = menu::onFilter,
                                     onPlaySong = { onPlaySong(it); onToggleOpen(false) },
                                     onOpenItem = menu::open,
+                                    onSaveTo = { savingTrack = it },
                                 )
                             }
                             topPage is Page.Local -> {
@@ -506,6 +519,7 @@ fun DesktopMenuSheet(
                                         palette = palette,
                                         currentMediaId = currentMediaId,
                                         onPlayIndex = { idx -> onPlayLocal(list, idx); onToggleOpen(false) },
+                                        onSaveTo = { savingTrack = it },
                                         onDeletePlaylist = if (list.id != LIKED_ID) {
                                             {
                                                 scope.launch {
@@ -530,6 +544,7 @@ fun DesktopMenuSheet(
                                     palette = palette,
                                     currentMediaId = currentMediaId,
                                     onPlayIndex = { idx -> onPlayLocal(topPage.list, idx); onToggleOpen(false) },
+                                    onSaveTo = { savingTrack = it },
                                     onDeletePlaylist = null,
                                     onRemoveSong = null,
                                 )
@@ -541,6 +556,7 @@ fun DesktopMenuSheet(
                                     currentMediaId = currentMediaId,
                                     onPlayAll = { songs, idx -> onPlayAll(songs, idx, topPage.item); onToggleOpen(false) },
                                     onOpenItem = menu::open,
+                                    onSaveTo = { savingTrack = it },
                                 )
                             }
                             subView == MenuSubView.Settings -> {
@@ -583,6 +599,7 @@ fun DesktopMenuSheet(
                                     onPlayLocal = { list, idx -> onPlayLocal(list, idx); onToggleOpen(false) },
                                     onPlayDj = { onPlayDj(); onToggleOpen(false) },
                                     onPlayHeard = { h -> onPlaySong(h.toSong()); onToggleOpen(false) },
+                                    onSaveTo = { savingTrack = it },
                                     onCreatePlaylist = { name ->
                                         scope.launch {
                                             val newId = prefs.createPlaylist(name)
@@ -603,12 +620,41 @@ fun DesktopMenuSheet(
                                     onRetry = menu::loadHome,
                                     onPlaySong = { onPlaySong(it); onToggleOpen(false) },
                                     onOpenItem = menu::open,
+                                    onSaveTo = { savingTrack = it },
                                 )
                             }
                         }
                     }
                 }
             }
+        }
+
+        // Modal emergente «Guardar en...» para añadir canciones a Me gusta o listas propias
+        if (savingTrack != null) {
+            SaveToModal(
+                track = savingTrack!!,
+                playlists = playlists,
+                likedList = likedList,
+                accent = palette.primary,
+                onToggleLike = { h -> scope.launch { prefs.toggleLike(h) } },
+                onTogglePlaylist = { pid, h ->
+                    scope.launch {
+                        val pl = playlists.firstOrNull { it.id == pid }
+                        if (pl != null && pl.songs.any { it.id == h.id }) {
+                            prefs.removeFromPlaylist(pid, h.id)
+                        } else {
+                            prefs.addToPlaylist(pid, h)
+                        }
+                    }
+                },
+                onCreateAndAdd = { name, h ->
+                    scope.launch {
+                        val pid = prefs.createPlaylist(name)
+                        prefs.addToPlaylist(pid, h)
+                    }
+                },
+                onDismiss = { savingTrack = null },
+            )
         }
     }
 }
@@ -737,6 +783,7 @@ private fun YourMusicPane(
     onPlayLocal: (LocalPlaylist, Int?) -> Unit,
     onPlayDj: () -> Unit,
     onPlayHeard: (Heard) -> Unit,
+    onSaveTo: (Heard) -> Unit,
     onCreatePlaylist: (String) -> Unit,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -949,6 +996,7 @@ private fun YourMusicPane(
                     isCurrent = h.id == currentMediaId,
                     accent = palette.primary,
                     onClick = { onPlayHeard(h) },
+                    onSaveTo = { onSaveTo(h) },
                 )
             }
         }
@@ -1294,6 +1342,7 @@ private fun LocalPlaylistDetailPane(
     palette: ArtworkPalette,
     currentMediaId: String?,
     onPlayIndex: (Int?) -> Unit,
+    onSaveTo: (Heard) -> Unit = {},
     onDeletePlaylist: (() -> Unit)? = null,
     onRemoveSong: ((String) -> Unit)? = null,
 ) {
@@ -1345,6 +1394,7 @@ private fun LocalPlaylistDetailPane(
                         isCurrent = s.id == currentMediaId,
                         accent = palette.primary,
                         onClick = { onPlayIndex(idx) },
+                        onSaveTo = { onSaveTo(s) },
                         trailing = if (onRemoveSong != null) {
                             {
                                 Box(
@@ -1378,6 +1428,7 @@ private fun RemoteDetailPane(
     currentMediaId: String?,
     onPlayAll: (List<SongItem>, Int?) -> Unit,
     onOpenItem: (YTItem) -> Unit,
+    onSaveTo: (Heard) -> Unit = {},
 ) {
     val songs = page.songs
     val shelves = page.shelves
@@ -1416,6 +1467,7 @@ private fun RemoteDetailPane(
                             isCurrent = s.id == currentMediaId,
                             accent = palette.primary,
                             onClick = { onPlayAll(songs, idx) },
+                            onSaveTo = { onSaveTo(s.toHeard()) },
                         )
                     }
                 }
@@ -1458,6 +1510,7 @@ private fun ExplorePane(
     onRetry: () -> Unit,
     onPlaySong: (SongItem) -> Unit,
     onOpenItem: (YTItem) -> Unit,
+    onSaveTo: (Heard) -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (chips.isNotEmpty()) {
@@ -1536,6 +1589,7 @@ private fun ExplorePane(
                                                 isCurrent = song.id == currentMediaId,
                                                 accent = palette.primary,
                                                 onClick = { onPlaySong(song) },
+                                                onSaveTo = { onSaveTo(song.toHeard()) },
                                             )
                                         }
                                     }
@@ -1686,6 +1740,7 @@ private fun SearchResultsPane(
     onFilter: (Filter) -> Unit,
     onPlaySong: (SongItem) -> Unit,
     onOpenItem: (YTItem) -> Unit,
+    onSaveTo: (Heard) -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1713,6 +1768,7 @@ private fun SearchResultsPane(
                         isCurrent = item.id == currentMediaId,
                         accent = palette.primary,
                         onClick = { if (item is SongItem) onPlaySong(item) else onOpenItem(item) },
+                        onSaveTo = if (item is SongItem) { { onSaveTo(item.toHeard()) } } else null,
                     )
                 }
             }
@@ -2050,6 +2106,7 @@ private fun SongRowDesktop(
     isCurrent: Boolean,
     accent: Color,
     onClick: () -> Unit,
+    onSaveTo: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     var thumbBmp by remember(thumbnail) { mutableStateOf<ImageBitmap?>(null) }
@@ -2067,81 +2124,406 @@ private fun SongRowDesktop(
             .background(
                 if (isCurrent) accent.copy(alpha = 0.22f)
                 else if (isHovered) Color.White.copy(alpha = 0.08f)
-                else Color.White.copy(alpha = 0.03f)
+                else Color.White.copy(alpha = 0.03f),
             )
             .border(
                 1.dp,
                 if (isCurrent) accent.copy(alpha = 0.45f)
                 else if (isHovered) Color.White.copy(alpha = 0.15f)
                 else Color.Transparent,
-                RoundedCornerShape(12.dp)
+                RoundedCornerShape(12.dp),
             )
-            .clickable(onClick = onClick)
             .onPointerEvent(PointerEventType.Enter) { isHovered = true }
             .onPointerEvent(PointerEventType.Exit) { isHovered = false }
             .padding(horizontal = 14.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .size(38.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color.White.copy(alpha = 0.07f)),
-            contentAlignment = Alignment.Center,
+                .weight(1f)
+                .clickable(onClick = onClick),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (thumbBmp != null) {
-                Image(
-                    bitmap = thumbBmp!!,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-            if (isCurrent) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.50f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
-                        contentDescription = "Sonando",
-                        tint = accent,
-                        modifier = Modifier.size(20.dp),
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.White.copy(alpha = 0.07f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (thumbBmp != null) {
+                    Image(
+                        bitmap = thumbBmp!!,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
-            } else if (thumbBmp == null) {
-                Icon(
-                    imageVector = Icons.Rounded.MusicNote,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.45f),
-                    modifier = Modifier.size(18.dp),
-                )
+                if (isCurrent) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.50f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = "Sonando",
+                            tint = accent,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                } else if (thumbBmp == null) {
+                    Icon(
+                        imageVector = Icons.Rounded.MusicNote,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.45f),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
-        }
-        Column(Modifier.weight(1f)) {
-            Text(
-                text = title,
-                fontSize = 14.sp,
-                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.SemiBold,
-                color = if (isCurrent) accent else Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (subtitle.isNotBlank()) {
+            Column(Modifier.weight(1f)) {
                 Text(
-                    text = subtitle,
-                    fontSize = 12.sp,
-                    color = Color.White.copy(alpha = 0.56f),
+                    text = title,
+                    fontSize = 14.sp,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.SemiBold,
+                    color = if (isCurrent) accent else Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (subtitle.isNotBlank()) {
+                    Text(
+                        text = subtitle,
+                        fontSize = 12.sp,
+                        color = Color.White.copy(alpha = 0.56f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         if (trailing != null) {
             trailing()
+        }
+        if (onSaveTo != null) {
+            IconButton(
+                onClick = onSaveTo,
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(if (isHovered) Color.White.copy(alpha = 0.12f) else Color.Transparent)
+                    .border(1.dp, if (isHovered) Color.White.copy(alpha = 0.20f) else Color.Transparent, CircleShape),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.MoreVert,
+                    contentDescription = "Guardar en...",
+                    tint = if (isHovered) Color.White else Color.White.copy(alpha = 0.40f),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun SaveToModal(
+    track: Heard,
+    playlists: List<LocalPlaylist>,
+    likedList: LocalPlaylist,
+    accent: Color,
+    onToggleLike: (Heard) -> Unit,
+    onTogglePlaylist: (playlistId: String, Heard) -> Unit,
+    onCreateAndAdd: (name: String, Heard) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var thumbBmp by remember(track.artwork) { mutableStateOf<ImageBitmap?>(null) }
+    var creatingNew by remember { mutableStateOf(false) }
+    var newListName by remember { mutableStateOf("") }
+    val newFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(track.artwork) {
+        if (!track.artwork.isNullOrBlank()) {
+            thumbBmp = ArtworkLoader.load(track.artwork).first
+        }
+    }
+
+    LaunchedEffect(creatingNew) {
+        if (creatingNew) {
+            kotlinx.coroutines.delay(100L)
+            newFocusRequester.requestFocus()
+        }
+    }
+
+    val isLiked = remember(likedList, track.id) {
+        likedList.songs.any { it.id == track.id }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.65f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onDismiss,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .width(420.dp)
+                .shadow(32.dp, RoundedCornerShape(24.dp), ambientColor = accent.copy(alpha = 0.35f), spotColor = Color.Black)
+                .clip(RoundedCornerShape(24.dp))
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0xFA1F1A30),
+                            Color(0xF5130F21),
+                            Color(0xFA0B0816),
+                        ),
+                    ),
+                )
+                .border(
+                    1.dp,
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.White.copy(alpha = 0.50f),
+                            accent.copy(alpha = 0.35f),
+                            Color.White.copy(alpha = 0.10f),
+                        ),
+                    ),
+                    RoundedCornerShape(24.dp),
+                )
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) {}
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            // Cabecera: Carátula + Datos + Botón cerrar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.08f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (thumbBmp != null) {
+                        Image(
+                            bitmap = thumbBmp!!,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Icon(Icons.Rounded.MusicNote, null, tint = accent, modifier = Modifier.size(24.dp))
+                    }
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = track.title,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = track.artist,
+                        fontSize = 12.5.sp,
+                        color = Color.White.copy(alpha = 0.60f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .clickable(onClick = onDismiss),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Close, "Cerrar", tint = Color.White, modifier = Modifier.size(16.dp))
+                }
+            }
+
+            // Separador
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(Color.White.copy(alpha = 0.10f)),
+            )
+
+            Text(
+                text = "Guardar en tus listas",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White.copy(alpha = 0.50f),
+            )
+
+            // Lista de destinos
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                // 1. Me gusta
+                item {
+                    SaveToDestinationRow(
+                        title = "Me gusta",
+                        subtitle = "${likedList.songs.size} canciones",
+                        icon = Icons.Rounded.Favorite,
+                        iconTint = if (isLiked) accent else Color.White.copy(alpha = 0.50f),
+                        checked = isLiked,
+                        accent = accent,
+                        onClick = { onToggleLike(track) },
+                    )
+                }
+
+                // 2. Playlists locales
+                items(playlists, key = { it.id }) { pl ->
+                    val inThis = pl.songs.any { it.id == track.id }
+                    SaveToDestinationRow(
+                        title = pl.name,
+                        subtitle = "${pl.songs.size} canciones",
+                        icon = Icons.Rounded.LibraryMusic,
+                        iconTint = if (inThis) accent else Color.White.copy(alpha = 0.50f),
+                        checked = inThis,
+                        accent = accent,
+                        onClick = { onTogglePlaylist(pl.id, track) },
+                    )
+                }
+            }
+
+            // Fila de creación inline
+            if (!creatingNew) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = 0.05f))
+                        .clickable { creatingNew = true }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(Icons.Rounded.Add, null, tint = accent, modifier = Modifier.size(18.dp))
+                    Text("Nueva lista y añadir aquí…", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .border(1.dp, accent.copy(alpha = 0.40f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    BasicTextField(
+                        value = newListName,
+                        onValueChange = { newListName = it },
+                        singleLine = true,
+                        textStyle = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium),
+                        cursorBrush = SolidColor(accent),
+                        decorationBox = { inner ->
+                            if (newListName.isBlank()) {
+                                Text("Nombre de la lista…", color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp)
+                            }
+                            inner()
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(newFocusRequester)
+                            .onPreviewKeyEvent { ev ->
+                                if (ev.type == KeyEventType.KeyDown && ev.key == Key.Enter && newListName.isNotBlank()) {
+                                    onCreateAndAdd(newListName.trim(), track)
+                                    newListName = ""
+                                    creatingNew = false
+                                    true
+                                } else false
+                            },
+                    )
+                    Text(
+                        text = "Añadir",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (newListName.isNotBlank()) accent else Color.White.copy(alpha = 0.35f),
+                        modifier = Modifier.clickable {
+                            if (newListName.isNotBlank()) {
+                                onCreateAndAdd(newListName.trim(), track)
+                                newListName = ""
+                                creatingNew = false
+                            }
+                        },
+                    )
+                    Text(
+                        text = "Cancelar",
+                        fontSize = 12.sp,
+                        color = Color.White.copy(alpha = 0.50f),
+                        modifier = Modifier.clickable {
+                            creatingNew = false
+                            newListName = ""
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun SaveToDestinationRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    iconTint: Color,
+    checked: Boolean,
+    accent: Color,
+    onClick: () -> Unit,
+) {
+    var isHovered by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (checked) accent.copy(alpha = 0.18f) else if (isHovered) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.03f))
+            .border(1.dp, if (checked) accent.copy(alpha = 0.45f) else if (isHovered) Color.White.copy(alpha = 0.15f) else Color.Transparent, RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(icon, null, tint = iconTint, modifier = Modifier.size(20.dp))
+        Column(Modifier.weight(1f)) {
+            Text(text = title, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = if (checked) accent else Color.White)
+            Text(text = subtitle, fontSize = 11.sp, color = Color.White.copy(alpha = 0.50f))
+        }
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(if (checked) accent else Color.White.copy(alpha = 0.10f))
+                .border(1.dp, if (checked) accent else Color.White.copy(alpha = 0.25f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (checked) {
+                Icon(Icons.Rounded.Check, null, tint = Color(0xFF140E20), modifier = Modifier.size(14.dp))
+            }
         }
     }
 }
