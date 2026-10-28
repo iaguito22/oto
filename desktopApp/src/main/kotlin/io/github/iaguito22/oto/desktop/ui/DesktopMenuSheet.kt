@@ -3448,24 +3448,21 @@ private fun SettingsAndAccountPane(
                         color = Color.White.copy(alpha = 0.65f),
                     )
 
-                    // Selector de método de inicio de sesión
+                    // Inicio de sesión: Chrome temporal con CDP (lo normal) o pegar la cookie a mano.
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        MenuTabPill("Navegador + Consola (F12)", loginMode == 0, palette.primary) { loginMode = 0 }
-                        MenuTabPill("Pegar Cookie o cURL", loginMode == 1, palette.primary) { loginMode = 1 }
+                        MenuTabPill("Entrar con Google", loginMode == 0, palette.primary) { loginMode = 0 }
+                        MenuTabPill("Pegar cookie", loginMode == 1, palette.primary) { loginMode = 1 }
                     }
 
                     if (loginMode == 0) {
                         val loginState by login.state.collectAsState()
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            MenuTabPill("1. Abrir YouTube Music en navegador", true, palette.primary) {
-                                snippetCopied = false
-                                login.start()
-                            }
-                            MenuTabPill("Instalar extensión si la usas", false, palette.secondary) { login.extractExtension() }
+                        MenuTabPill("Entrar con Google", true, palette.primary) {
+                            snippetCopied = false
+                            login.start()
                         }
 
                         when (val ls = loginState) {
-                            LoginState.Waiting -> {
+                            is LoginState.Waiting -> {
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -3476,37 +3473,37 @@ private fun SettingsAndAccountPane(
                                     verticalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
                                     Text(
-                                        "Paso 2: En la pestaña de music.youtube.com abierta, pulsa F12 → Consola y pega este comando:",
+                                        if (ls.automated) {
+                                            "Se ha abierto Chrome. Entra en YouTube Music con tu cuenta; Oto leerá la sesión y cerrará esa ventana solo."
+                                        } else {
+                                            "Se ha abierto el navegador. Pega el comando de abajo en la consola (F12) o instala la extensión."
+                                        },
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium,
                                         color = Color.White,
                                     )
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    ) {
-                                        MenuTabPill(
-                                            if (snippetCopied) "✓ Comando copiado al portapapeles" else "📋 Copiar comando de 1 línea para consola (F12)",
-                                            snippetCopied,
-                                            palette.primary,
+                                    if (!ls.automated) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                                         ) {
-                                            val snippet = login.getConsoleSnippet()
-                                            if (snippet != null) {
-                                                val sel = StringSelection(snippet)
-                                                Toolkit.getDefaultToolkit().systemClipboard.setContents(sel, sel)
-                                                snippetCopied = true
+                                            MenuTabPill(
+                                                if (snippetCopied) "✓ Comando copiado" else "Copiar comando (F12)",
+                                                snippetCopied,
+                                                palette.primary,
+                                            ) {
+                                                val snippet = login.getConsoleSnippet()
+                                                if (snippet != null) {
+                                                    val sel = StringSelection(snippet)
+                                                    Toolkit.getDefaultToolkit().systemClipboard.setContents(sel, sel)
+                                                    snippetCopied = true
+                                                }
                                             }
-                                        }
-                                        MenuTabPill("Cancelar", false, palette.secondary) {
-                                            login.cancel()
+                                            MenuTabPill("Instalar extensión", false, palette.secondary) { login.extractExtension() }
                                         }
                                     }
-                                    if (snippetCopied) {
-                                        Text(
-                                            "¡Listo! Pégalo en la consola de YouTube Music y pulsa Enter. Oto detectará tu sesión en el acto.",
-                                            fontSize = 11.5.sp,
-                                            color = palette.primary,
-                                        )
+                                    MenuTabPill("Cancelar", false, palette.secondary) {
+                                        login.cancel()
                                     }
                                 }
                             }

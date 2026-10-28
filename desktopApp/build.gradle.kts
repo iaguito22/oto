@@ -46,7 +46,7 @@ compose.desktop {
             packageVersion = "1.2.0"
             description = "Oto — Tu música de YouTube Music con estética Caelestia"
             vendor = "iaguito22"
-            modules("java.instrument", "java.management", "java.naming", "java.prefs", "java.sql", "jdk.unsupported", "jdk.httpserver", "java.desktop")
+            modules("java.instrument", "java.management", "java.naming", "java.prefs", "java.sql", "jdk.unsupported", "jdk.httpserver", "java.desktop", "java.net.http")
             linux {
                 packageName = "oto"
                 debMaintainer = "hola@ejemplo.com"
