@@ -9,13 +9,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.BufferedInputStream
 import java.io.File
-import java.io.RandomAccessFile
-import java.net.HttpURLConnection
-import java.net.URI
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioInputStream
 import javax.sound.sampled.AudioSystem
@@ -28,7 +24,7 @@ import kotlin.math.log10
  * Motor de audio de escritorio para Linux (PipeWire/PulseAudio/ALSA) y Windows (WASAPI/DirectSound).
  *
  * Estrategia dual sin dependencias nativas frágiles:
- * 1. Descarga por trozos HTTP de 1 MB (`CHUNK_BYTES`), igual que `Chunked.kt` en Android, evitando el
+ * 1. Descarga por trozos HTTP de 1 MB (`downloadChunked`), igual que `Chunked.kt` en Android, evitando el
  *    estrangulamiento de ~33 KB/s de YouTube y guardando cada canción en caché de disco (`Tier.key(id)`).
  * 2. Reproducción con `ffplay -nodisp -autoexit -loglevel quiet` cuando `ffplay` está en el `PATH`
  *    (soporta Opus/WebM 251 y AAC/M4A 140 nativos de YouTube Music con seek instantáneo `-ss`), y
@@ -129,57 +125,26 @@ class DesktopAudioEngine(
         }
     }
 
-    private suspend fun downloadChunked(
-        streamUrl: String,
-        headers: Map<String, String>,
-        knownLength: Long?,
-        outFile: File,
-        onProgress: (downloaded: Long, total: Long) -> Unit,
-    ) = withContext(Dispatchers.IO) {
-        var offset = if (outFile.exists()) outFile.length() else 0L
-        var total = knownLength ?: -1L
-
-        RandomAccessFile(outFile, "rw").use { raf ->
-            raf.seek(offset)
-            while (isActive && (total < 0L || offset < total)) {
-                val end = if (total > 0L) minOf(offset + CHUNK_BYTES - 1L, total - 1L) else offset + CHUNK_BYTES - 1L
-                val sep = if ('?' in streamUrl) '&' else '?'
-                val rangedUrl = "$streamUrl${sep}range=$offset-$end"
-                val conn = (URI.create(rangedUrl).toURL().openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 10_000
-                    readTimeout = 15_000
-                    headers.forEach { (k, v) -> setRequestProperty(k, v) }
-                }
-                try {
-                    val code = conn.responseCode
-                    if (code !in 200..299) {
-                        throw IllegalStateException("HTTP $code en chunk $offset-$end")
-                    }
-                    val cl = conn.contentLengthLong
-                    if (total < 0L && cl > 0L && cl < CHUNK_BYTES) {
-                        total = offset + cl
-                    }
-                    val buf = ByteArray(32 * 1024)
-                    var readInChunk = 0L
-                    conn.inputStream.use { ins ->
-                        while (isActive) {
-                            val n = ins.read(buf)
-                            if (n <= 0) break
-                            raf.write(buf, 0, n)
-                            offset += n
-                            readInChunk += n
-                            onProgress(offset, if (total > 0L) total else offset + CHUNK_BYTES)
-                        }
-                    }
-                    if (readInChunk < CHUNK_BYTES) {
-                        total = offset
-                    }
-                } finally {
-                    conn.disconnect()
-                }
-            }
-        }
-        onProgress(offset, offset)
+    /**
+     * Reproduce un archivo que ya está en disco (una descarga), sin pedir nada a la red.
+     * Devuelve false si el archivo no sirve.
+     */
+    fun loadLocalFile(file: File, durationMs: Long): Boolean {
+        if (!file.exists() || file.length() <= 0L) return false
+        stopInternal()
+        activeFile = file
+        activeDurationMs = durationMs.coerceAtLeast(0L)
+        pausedPositionMs = 0L
+        startOffsetMs = 0L
+        _state.value = EngineState(
+            playing = true,
+            buffering = false,
+            positionMs = 0L,
+            durationMs = activeDurationMs,
+            bufferedFraction = 1f,
+        )
+        startPlaybackAt(file, 0L)
+        return true
     }
 
     private fun startPlaybackAt(file: File, offsetMs: Long) {
@@ -328,7 +293,6 @@ class DesktopAudioEngine(
     }
 
     companion object {
-        private const val CHUNK_BYTES = 1_048_576L
         private const val FIRST_PLAY_BYTES = 128 * 1024L
         private const val MIN_PLAYABLE_BYTES = 64 * 1024L
     }

@@ -55,6 +55,7 @@ import androidx.compose.ui.window.WindowPlacement
 import io.github.iaguito22.oto.desktop.ui.CueInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.firstOrNull
+import io.github.iaguito22.oto.desktop.playback.DesktopDownloads
 import io.github.iaguito22.oto.desktop.playback.DesktopPlayerConnection
 import io.github.iaguito22.oto.desktop.ui.ArtworkLoader
 import io.github.iaguito22.oto.desktop.ui.ArtworkPalette
@@ -100,7 +101,9 @@ fun main() {
     val plays = Plays(File(OtoDirs.filesDir, "plays.jsonl"))
     val djCatalog = YouTubeCatalog(File(OtoDirs.cacheDir, "dj"))
     val lyricsStore = LyricsStore(File(OtoDirs.cacheDir, "lyrics"))
-    val player = DesktopPlayerConnection(prefs, plays, djCatalog, lyricsStore, appScope)
+    val downloads = DesktopDownloads(prefs, appScope)
+    downloads.start()
+    val player = DesktopPlayerConnection(prefs, plays, djCatalog, lyricsStore, downloads, appScope)
     val menu = MenuController(appScope)
 
     if (account.restore() == null) {
@@ -421,6 +424,7 @@ fun main() {
                     account = account,
                     cloud = cloud,
                     login = login,
+                    downloads = downloads,
                     palette = palette,
                     currentMediaId = nowPlaying.id,
                     queue = queue,

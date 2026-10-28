@@ -57,6 +57,7 @@ class DesktopPlayerConnection(
     private val plays: Plays,
     private val djCatalog: YouTubeCatalog,
     private val lyricsStore: LyricsStore,
+    private val downloads: DesktopDownloads,
     private val scope: CoroutineScope,
 ) : OtoPlayer {
 
@@ -427,6 +428,19 @@ class DesktopPlayerConnection(
             )
             prefs.addHeard(song.toHeard())
             fetchLyrics(song)
+
+            // Si está descargada, suena del archivo: ni red ni caché de reproducción.
+            val local = downloads.localFile(song.id)
+            if (local != null) {
+                downloads.quality(song.id)?.let { quality ->
+                    StreamInfo.put(song.id, quality)
+                    _currentQuality.value = quality
+                }
+                currentLoudnessGain = 1f
+                engine.setGain(_volume.value)
+                engine.loadLocalFile(local, durGuess)
+                return@launch
+            }
 
             val resolved = withContext(Dispatchers.IO) {
                 InnerTubeXPlayer.resolve(song.id, tier)

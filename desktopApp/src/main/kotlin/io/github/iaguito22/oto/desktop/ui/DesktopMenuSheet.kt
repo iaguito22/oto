@@ -75,6 +75,8 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.ui.zIndex
@@ -174,6 +176,7 @@ import io.github.iaguito22.oto.QualityMode
 import io.github.iaguito22.oto.account.Account
 import io.github.iaguito22.oto.desktop.BrowserLogin
 import io.github.iaguito22.oto.desktop.LoginState
+import io.github.iaguito22.oto.desktop.playback.DesktopDownloads
 import io.github.iaguito22.oto.account.Cloud
 import io.github.iaguito22.oto.account.CloudState
 import io.github.iaguito22.oto.account.Session
@@ -191,7 +194,7 @@ import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
 
-private enum class MenuSubView { None, Settings, Queue, Import }
+private enum class MenuSubView { None, Settings, Queue, Import, Downloads }
 
 /**
  * Cajón inferior (`Sheet` estilo prototipo 2 + `fusion.html`):
@@ -213,6 +216,7 @@ fun DesktopMenuSheet(
     account: Account,
     cloud: Cloud,
     login: BrowserLogin,
+    downloads: DesktopDownloads,
     palette: ArtworkPalette,
     currentMediaId: String?,
     queue: List<QueueEntry>,
@@ -247,6 +251,8 @@ fun DesktopMenuSheet(
     val qualityMode by prefs.quality.collectAsState(initial = QualityMode.Auto)
     val dataSaver by prefs.dataSaver.collectAsState(initial = false)
     val importState by importer.state.collectAsState()
+    val downloadEntries by downloads.entries.collectAsState()
+    val downloadLists by prefs.downloadLists.collectAsState(initial = emptySet())
     val session by account.session.collectAsState()
     val cloudState by cloud.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -815,6 +821,16 @@ fun DesktopMenuSheet(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 SheetCircleIconButton(
+                                    icon = Icons.Rounded.Download,
+                                    tooltip = "Descargas",
+                                    active = subView == MenuSubView.Downloads,
+                                    accent = palette.primary,
+                                    badge = downloadEntries.size.takeIf { it > 0 }?.toString(),
+                                    onClick = {
+                                        subView = if (subView == MenuSubView.Downloads) MenuSubView.None else MenuSubView.Downloads
+                                    },
+                                )
+                                SheetCircleIconButton(
                                     icon = Icons.AutoMirrored.Rounded.QueueMusic,
                                     tooltip = "Cola de reproducción",
                                     active = subView == MenuSubView.Queue,
@@ -884,6 +900,21 @@ fun DesktopMenuSheet(
                                         onOpenImport = { subView = MenuSubView.Import },
                                     )
                                 }
+                                subView == MenuSubView.Downloads -> {
+                                    DownloadsPane(
+                                        downloads = downloads,
+                                        prefs = prefs,
+                                        palette = palette,
+                                        currentMediaId = currentMediaId,
+                                        onBack = { subView = MenuSubView.None },
+                                        onOpenLocal = { id ->
+                                            subView = MenuSubView.None
+                                            menu.openLocal(id)
+                                        },
+                                        onPlayLocal = { list -> onPlayLocal(list, null, false); onToggleOpen(false) },
+                                        onPlaySong = { song -> onPlaySong(song); onToggleOpen(false) },
+                                    )
+                                }
                                 subView == MenuSubView.Queue -> {
                                     QueuePane(
                                         queue = queue,
@@ -925,6 +956,8 @@ fun DesktopMenuSheet(
                                                 }
                                             } else null,
                                             prefs = prefs,
+                                            downloads = downloads,
+                                            downloadLists = downloadLists,
                                         )
                                     }
                                 }
@@ -1146,7 +1179,7 @@ private fun SheetCircleIconButton(
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun MenuTabPill(
+internal fun MenuTabPill(
     label: String,
     selected: Boolean,
     accent: Color,
@@ -2143,9 +2176,13 @@ private fun LocalPlaylistDetailPane(
     onDeletePlaylist: (() -> Unit)? = null,
     onRemoveSong: ((String) -> Unit)? = null,
     prefs: Prefs? = null,
+    downloads: DesktopDownloads? = null,
+    downloadLists: Set<String> = emptySet(),
 ) {
     val scope = rememberCoroutineScope()
     val sortFlipped by prefs?.sortFlipped?.collectAsState(initial = emptySet()) ?: remember { mutableStateOf(emptySet()) }
+    val requestedSongs by (prefs?.downloadSongs?.collectAsState(initial = emptyList())
+        ?: remember { mutableStateOf(emptyList()) })
     val normal = list.id == LIKED_ID
     val flipped = list.id in sortFlipped
     val newest = if (normal) !flipped else flipped
@@ -2286,7 +2323,7 @@ private fun LocalPlaylistDetailPane(
                         onClick = { onPlayIndex(null, newest) },
                     )
 
-                    if (onDeletePlaylist != null) {
+                    if (onDeletePlaylist != null || downloads != null) {
                         var showPlaylistMenu by remember { mutableStateOf(false) }
                         Box {
                             SheetCircleIconButton(
@@ -2303,14 +2340,34 @@ private fun LocalPlaylistDetailPane(
                                     .background(Color(0xFF1B1726))
                                     .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
                             ) {
-                                DropdownMenuItem(
-                                    text = { Text("Eliminar playlist", color = Color(0xFFFF6E6E), fontWeight = FontWeight.Bold, fontSize = 13.sp) },
-                                    leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
-                                    onClick = {
-                                        showPlaylistMenu = false
-                                        onDeletePlaylist()
-                                    },
-                                )
+                                if (downloads != null) {
+                                    val isDownloaded = list.id in downloadLists
+                                    DropdownMenuItem(
+                                        text = { Text(if (isDownloaded) "Quitar descarga" else "Descargar lista", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = if (isDownloaded) Icons.Rounded.DownloadDone else Icons.Rounded.Download,
+                                                contentDescription = null,
+                                                tint = Color.White.copy(alpha = 0.8f),
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        },
+                                        onClick = {
+                                            showPlaylistMenu = false
+                                            scope.launch { prefs?.setDownloadList(list.id, !isDownloaded) }
+                                        },
+                                    )
+                                }
+                                if (onDeletePlaylist != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Eliminar playlist", color = Color(0xFFFF6E6E), fontWeight = FontWeight.Bold, fontSize = 13.sp) },
+                                        leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
+                                        onClick = {
+                                            showPlaylistMenu = false
+                                            onDeletePlaylist()
+                                        },
+                                    )
+                                }
                             }
                         }
                     }
@@ -2382,6 +2439,24 @@ private fun LocalPlaylistDetailPane(
                                             onSaveTo(s)
                                         },
                                     )
+                                    if (downloads != null) {
+                                        val isDownloaded = requestedSongs.any { it.id == s.id }
+                                        DropdownMenuItem(
+                                            text = { Text(if (isDownloaded) "Quitar descarga" else "Descargar", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = if (isDownloaded) Icons.Rounded.DownloadDone else Icons.Rounded.Download,
+                                                    contentDescription = null,
+                                                    tint = Color.White.copy(alpha = 0.8f),
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            },
+                                            onClick = {
+                                                showSongMenu = false
+                                                scope.launch { prefs?.setDownloadSong(s, !isDownloaded) }
+                                            },
+                                        )
+                                    }
                                     if (onRemoveSong != null) {
                                         DropdownMenuItem(
                                             text = { Text("Quitar de esta lista", color = Color(0xFFFF6E6E), fontSize = 13.sp) },
