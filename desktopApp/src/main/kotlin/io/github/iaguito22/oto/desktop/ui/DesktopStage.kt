@@ -543,8 +543,8 @@ private fun SpotifyPlayerColumn(
                 }
             }
 
-            // Controles internos en la carátula visibles solo en hover
-            if (controlsAlpha > 0.01f) {
+            // Controles internos en la carátula visibles en hover
+            if (controlsAlpha > 0.001f || isCoverActive) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
