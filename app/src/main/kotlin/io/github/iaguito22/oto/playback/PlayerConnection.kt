@@ -16,6 +16,7 @@ import com.metrolist.innertube.models.ArtistItem
 import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
 import io.github.iaguito22.oto.LocalPlaylist
+import io.github.iaguito22.oto.LoopMode
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.dj.Plays
 import io.github.iaguito22.oto.dj.Smart
@@ -80,9 +81,9 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     private val _shuffle = MutableStateFlow(false)
     val shuffle: StateFlow<Boolean> = _shuffle.asStateFlow()
 
-    private val _loop = MutableStateFlow(false)
+    private val _loop = MutableStateFlow(LoopMode.Off)
     /** Las listas en bucle (ver [Prefs.loop]). */
-    val loop: StateFlow<Boolean> = _loop.asStateFlow()
+    val loop: StateFlow<LoopMode> = _loop.asStateFlow()
 
     // Lo que el aleatorio tiene en cuenta, siempre a mano: lo que te gusta y cuándo sonó de verdad cada una.
     @Volatile private var liked = emptySet<String>()
@@ -137,7 +138,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         shuffling?.cancel()
         _source.value = Source("Radio", song.title)
         original = null
-        it.repeatMode = Player.REPEAT_MODE_OFF
+        it.repeatMode = repeatModeOf(_loop.value)
         it.setMediaItem(song.toMediaItem())
         it.prepare()
         it.play()
@@ -181,7 +182,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
 
     private fun setList(c: MediaController, items: List<MediaItem>, start: Int) {
         // Antes que la cola: el servicio mira el bucle al recibirla para decidir si seguirá con parecidas.
-        c.repeatMode = if (_loop.value) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
+        c.repeatMode = repeatModeOf(_loop.value)
         c.setMediaItems(items, start, 0)
         c.prepare()
         c.play()
@@ -217,11 +218,27 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         }
     }
 
-    /** Pone o quita el bucle; si suena una lista, vale ya (si no, desde la próxima). */
-    fun setLoop(on: Boolean) {
-        _loop.value = on
-        scope.launch { prefs.setLoop(on) }
-        if (original != null) withController { it.repeatMode = if (on) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF }
+    /** Pasa al siguiente estado del bucle: apagado -> lista entera -> una canción -> apagado. */
+    fun cycleLoop() {
+        val next = when (_loop.value) {
+            LoopMode.Off -> LoopMode.All
+            LoopMode.All -> LoopMode.One
+            LoopMode.One -> LoopMode.Off
+        }
+        setLoop(next)
+    }
+
+    /** Pone el bucle en el modo indicado; vale ya para lo que suena y para lo que venga después. */
+    fun setLoop(mode: LoopMode) {
+        _loop.value = mode
+        scope.launch { prefs.setLoop(mode) }
+        withController { it.repeatMode = repeatModeOf(mode) }
+    }
+
+    private fun repeatModeOf(mode: LoopMode) = when (mode) {
+        LoopMode.Off -> Player.REPEAT_MODE_OFF
+        LoopMode.All -> Player.REPEAT_MODE_ALL
+        LoopMode.One -> Player.REPEAT_MODE_ONE
     }
 
     private fun shuffleItems(indices: List<Int>) = indices.map { i ->

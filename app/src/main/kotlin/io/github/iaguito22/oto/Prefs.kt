@@ -52,6 +52,7 @@ private val CLOUD = stringPreferencesKey("cloud")
 private val QUALITY = stringPreferencesKey("audio_quality")
 private val DATA_SAVER = booleanPreferencesKey("data_saver")
 private val LOOP = booleanPreferencesKey("loop")
+private val LOOP_MODE = stringPreferencesKey("loop_mode")
 private val CROSSFADE = intPreferencesKey("crossfade")
 private val ROMANIZE = booleanPreferencesKey("romanize")
 private val DROP_STYLE = stringPreferencesKey("drop_style")
@@ -88,6 +89,9 @@ enum class QualityMode { Auto, Max }
 
 /** Cómo se ve la gota: un aro fino del color de acento, como la huella de los Nothing, o la gota líquida. */
 enum class DropStyle { Ring, Liquid }
+
+/** Bucle: apagado, la lista entera o solo la canción que suena. */
+enum class LoopMode { Off, All, One }
 
 /** Lo que la app recuerda entre sesiones. */
 class Prefs(private val context: Context) {
@@ -138,11 +142,17 @@ class Prefs(private val context: Context) {
         context.store.edit { it[CROSSFADE] = seconds }
     }
 
-    /** Una lista que acaba vuelve a empezar; si no, siguen canciones parecidas (como la reproducción automática). */
-    val loop: Flow<Boolean> = context.store.data.map { it[LOOP] ?: false }.distinctUntilChanged()
+    /** Estado del bucle: apagado, lista entera o solo una canción (ver [LoopMode]). */
+    val loop: Flow<LoopMode> = context.store.data.map { p ->
+        p[LOOP_MODE]?.let { runCatching { LoopMode.valueOf(it) }.getOrNull() }
+            ?: if (p[LOOP] == true) LoopMode.All else LoopMode.Off
+    }.distinctUntilChanged()
 
-    suspend fun setLoop(on: Boolean) {
-        context.store.edit { it[LOOP] = on }
+    suspend fun setLoop(mode: LoopMode) {
+        context.store.edit {
+            it[LOOP_MODE] = mode.name
+            it[LOOP] = mode != LoopMode.Off
+        }
     }
 
     /** La letra en otra escritura (japonés, coreano…) lleva debajo cómo se lee. */

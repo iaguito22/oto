@@ -130,6 +130,7 @@ import io.github.iaguito22.oto.DropStyle
 import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.LIKED_ID
 import io.github.iaguito22.oto.LocalPlaylist
+import io.github.iaguito22.oto.LoopMode
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.QualityMode
@@ -428,7 +429,7 @@ fun MenuSheet(
                 label = "menuView",
             ) { nav ->
                 when (nav.view) {
-                    View.Tabs -> HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1, userScrollEnabled = !arranging) { page ->
+                    View.Tabs -> HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 0, userScrollEnabled = !arranging) { page ->
                         if (page == 0) YourMusic(history, liked, playlists, pinned, folders, played, currentId, play, onHold = { hold(it, null) }, onOpen = vm::openLocal, onFolder = vm::openFolder, onNew = { creating = true },
                             dj = source?.kind == "DJ" && np.playing,
                             onDj = {
@@ -841,6 +842,7 @@ private fun Explore(
     state: LazyListState,
 ) {
     val list = s.shelves
+    LaunchedEffect(Unit) { if (s.shelves == null) onRetry() }
     LazyColumn(Modifier.fillMaxSize(), state = state, contentPadding = PaddingValues(bottom = Space.lg)) {
         // Los ánimos de YouTube Music (Relax, Entrenar…): elegir uno rehace lo de debajo con ese ánimo.
         if (s.chips.isNotEmpty()) item(key = "chips") {
@@ -1049,12 +1051,21 @@ fun ShuffleButton() {
     RoundAction(R.drawable.ic_shuffle, "Aleatorio", on) { connection.setShuffle(!on) }
 }
 
-/** Bucle sí o no: una lista que acaba vuelve a empezar; sin él, siguen canciones parecidas. Vale ya, si suena una. */
+/** Bucle apagado, toda la lista o una canción. Tocarlo pasa al siguiente estado. */
 @Composable
 fun LoopButton() {
     val connection = (LocalContext.current.applicationContext as OtoApp).player
-    val on by connection.loop.collectAsStateWithLifecycle()
-    RoundAction(R.drawable.ic_repeat, "Repetir la lista", on) { connection.setLoop(!on) }
+    val loop by connection.loop.collectAsStateWithLifecycle()
+    val icon = when (loop) {
+        LoopMode.One -> R.drawable.ic_repeat_one
+        else -> R.drawable.ic_repeat
+    }
+    val desc = when (loop) {
+        LoopMode.Off -> "Repetir lista"
+        LoopMode.All -> "Repetir en bucle"
+        LoopMode.One -> "Repetir esta canción"
+    }
+    RoundAction(icon, desc, on = loop != LoopMode.Off) { connection.cycleLoop() }
 }
 
 /** La cabecera de una página: atrás, la carátula, el nombre, una línea de datos y los botones. */
@@ -1290,10 +1301,22 @@ private fun PlaybackSettings(app: OtoApp) {
     ToggleRow(R.drawable.ic_shuffle, "Aleatorio", "Lo que pongas suena mezclado. También con el botón junto a «Reproducir».", shuffle) {
         app.player.setShuffle(!shuffle)
     }
+    val loopIcon = when (loop) {
+        LoopMode.One -> R.drawable.ic_repeat_one
+        else -> R.drawable.ic_repeat
+    }
+    val loopTitle = when (loop) {
+        LoopMode.One -> "Repetir una canción"
+        else -> "Repetir la lista"
+    }
+    val loopSub = when (loop) {
+        LoopMode.Off -> "Al acabar la lista, siguen canciones parecidas."
+        LoopMode.All -> "Al acabar, la lista vuelve a empezar."
+        LoopMode.One -> "La misma canción suena una y otra vez."
+    }
     ToggleRow(
-        R.drawable.ic_repeat, "Repetir la lista",
-        if (loop) "Al acabar, la lista vuelve a empezar." else "Al acabar la lista, siguen canciones parecidas.", loop,
-    ) { app.player.setLoop(!loop) }
+        loopIcon, loopTitle, loopSub, loop != LoopMode.Off,
+    ) { app.player.cycleLoop() }
 }
 
 /** Cómo se ve la pantalla de lo que suena: la gota, el tiempo y la letra. */
