@@ -90,7 +90,10 @@ class DesktopPlayerConnection(
     private val _lyricsLoading = MutableStateFlow(false)
     val lyricsLoading: StateFlow<Boolean> = _lyricsLoading.asStateFlow()
 
-    private val _volume = MutableStateFlow(1.0f)
+    private val desktopKv = OtoDirs.keyValue("desktop")
+    private val _volume = MutableStateFlow(
+        desktopKv.getString("volume")?.toFloatOrNull()?.coerceIn(0f, 1f) ?: 1.0f
+    )
     val volume: StateFlow<Float> = _volume.asStateFlow()
 
     private var currentLoudnessGain: Float = 1.0f
@@ -112,6 +115,7 @@ class DesktopPlayerConnection(
     )
 
     init {
+        engine.setGain(_volume.value)
         scope.launch {
             engine.state.collect { es ->
                 _positionMs.value = es.positionMs
@@ -287,6 +291,7 @@ class DesktopPlayerConnection(
     fun setVolume(vol: Float) {
         val clamped = vol.coerceIn(0f, 1f)
         _volume.value = clamped
+        desktopKv.putString("volume", clamped.toString())
         engine.setGain(currentLoudnessGain * clamped)
     }
 

@@ -118,10 +118,25 @@ fun main() {
     appScope.launch(Dispatchers.IO) { OtoDirs.trimDj(File(OtoDirs.cacheDir, "dj")) }
 
     application {
+        val desktopKv = remember { OtoDirs.keyValue("desktop") }
+        val savedW = remember { desktopKv.getLong("win_w", 1340L).coerceIn(800L, 3840L) }
+        val savedH = remember { desktopKv.getLong("win_h", 840L).coerceIn(600L, 2160L) }
+        val wasFullscreen = remember { desktopKv.getString("win_fullscreen") == "true" }
         val windowState = rememberWindowState(
-            size = DpSize(1340.dp, 840.dp),
-            position = WindowPosition.Aligned( androidx.compose.ui.Alignment.Center ),
+            size = DpSize(savedW.toInt().dp, savedH.toInt().dp),
+            position = WindowPosition.Aligned(androidx.compose.ui.Alignment.Center),
+            placement = if (wasFullscreen) WindowPlacement.Fullscreen else WindowPlacement.Floating,
         )
+
+        LaunchedEffect(windowState.size, windowState.placement) {
+            if (windowState.placement == WindowPlacement.Floating) {
+                desktopKv.putLong("win_w", windowState.size.width.value.toLong())
+                desktopKv.putLong("win_h", windowState.size.height.value.toLong())
+                desktopKv.putString("win_fullscreen", "false")
+            } else if (windowState.placement == WindowPlacement.Fullscreen) {
+                desktopKv.putString("win_fullscreen", "true")
+            }
+        }
 
         var menuOpen by remember { mutableStateOf(false) }
         var menuTab by remember { mutableIntStateOf(0) } // 0 = Tu música, 1 = Explorar
