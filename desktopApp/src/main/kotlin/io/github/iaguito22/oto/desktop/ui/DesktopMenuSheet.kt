@@ -349,13 +349,13 @@ fun DesktopMenuSheet(
                     if (open) {
                         Brush.verticalGradient(
                             0.00f to Color.White.copy(alpha = 0.14f),
-                            0.28f to Color(0x82101218),
-                            1.00f to Color(0x9E0C0D12),
+                            0.28f to Color(0x82101010),
+                            1.00f to Color(0x9E0C0C0C),
                         )
                     } else {
                         Brush.verticalGradient(
                             0.00f to Color.White.copy(alpha = if (pillHovered) 0.08f else 0.04f),
-                            1.00f to Color(0x600C0D12),
+                            1.00f to Color(0x600C0C0C),
                         )
                     },
                 )
@@ -498,7 +498,7 @@ fun DesktopMenuSheet(
                                         text = nowPlaying.title,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = Color(0xFFF3EEFF),
+                                        color = Color(0xFFFFFFFF),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
@@ -570,7 +570,7 @@ fun DesktopMenuSheet(
                                     Icon(
                                         imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                         contentDescription = if (isPlaying) "Pausar" else "Reproducir",
-                                        tint = Color(0xFF101214),
+                                        tint = Color(0xFF101010),
                                         modifier = Modifier.size(18.dp),
                                     )
                                 }
@@ -1284,7 +1284,7 @@ internal fun MenuTabPill(
             text = label,
             fontSize = 13.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
-            color = if (selected) Color(0xFF101214) else if (hovered) Color.White else Color.White.copy(alpha = 0.72f),
+            color = if (selected) Color(0xFF101010) else if (hovered) Color.White else Color.White.copy(alpha = 0.72f),
         )
     }
 }
@@ -1340,7 +1340,7 @@ private fun DesktopSegmentedTabs(
                     text = title,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (isSelected) Color(0xFFF3EEFF) else if (isHovered) Color.White else Color.White.copy(alpha = 0.66f),
+                    color = if (isSelected) Color(0xFFFFFFFF) else if (isHovered) Color.White else Color.White.copy(alpha = 0.66f),
                 )
             }
         }
@@ -1443,7 +1443,7 @@ private fun YourMusicPane(
                     fontSize = 21.sp,
                     fontWeight = FontWeight.ExtraBold,
                     letterSpacing = (-0.4).sp,
-                    color = Color(0xFFF3EEFF),
+                    color = Color(0xFFFFFFFF),
                 )
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1464,8 +1464,8 @@ private fun YourMusicPane(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Icon(Icons.Rounded.Add, null, tint = Color(0xFFF3EEFF), modifier = Modifier.size(15.dp))
-                        Text("Nueva", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF))
+                        Icon(Icons.Rounded.Add, null, tint = Color(0xFFFFFFFF), modifier = Modifier.size(15.dp))
+                        Text("Nueva", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFFFFF))
                     }
                     var folderHovered by remember { mutableStateOf(false) }
                     Row(
@@ -1482,8 +1482,8 @@ private fun YourMusicPane(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Icon(Icons.Rounded.CreateNewFolder, null, tint = Color(0xFFF3EEFF), modifier = Modifier.size(15.dp))
-                        Text("Carpeta", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF))
+                        Icon(Icons.Rounded.CreateNewFolder, null, tint = Color(0xFFFFFFFF), modifier = Modifier.size(15.dp))
+                        Text("Carpeta", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFFFFF))
                     }
                 }
             }
@@ -1540,7 +1540,7 @@ private fun YourMusicPane(
                             }
                             .padding(horizontal = 14.dp, vertical = 6.dp),
                     ) {
-                        Text("Crear", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF101214))
+                        Text("Crear", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF101010))
                     }
                     Box(
                         modifier = Modifier
@@ -1607,7 +1607,7 @@ private fun YourMusicPane(
                             }
                             .padding(horizontal = 14.dp, vertical = 6.dp),
                     ) {
-                        Text("Crear", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF101214))
+                        Text("Crear", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF101010))
                     }
                     Box(
                         modifier = Modifier
@@ -1631,7 +1631,7 @@ private fun YourMusicPane(
                     fontSize = 21.sp,
                     fontWeight = FontWeight.ExtraBold,
                     letterSpacing = (-0.4).sp,
-                    color = Color(0xFFF3EEFF),
+                    color = Color(0xFFFFFFFF),
                     modifier = Modifier.padding(top = 6.dp),
                 )
             }
@@ -1773,7 +1773,7 @@ private fun YourMusicPane(
                     text = "Todas tus listas",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFF3EEFF),
+                    color = Color(0xFFFFFFFF),
                 )
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1802,7 +1802,7 @@ private fun YourMusicPane(
                 fontSize = 21.sp,
                 fontWeight = FontWeight.ExtraBold,
                 letterSpacing = (-0.4).sp,
-                color = Color(0xFFF3EEFF),
+                color = Color(0xFFFFFFFF),
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
@@ -1886,7 +1886,7 @@ private fun AllListsSubPane(
                 text = "Todas tus listas",
                 fontSize = 22.sp,
                 fontWeight = FontWeight.ExtraBold,
-                color = Color(0xFFF3EEFF),
+                color = Color(0xFFFFFFFF),
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2051,9 +2051,9 @@ private fun DjShelfCard(
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
-                            Color(0xFF33274A),
-                            Color(0xFF1E172C),
-                            Color(0xFF120E1C),
+                            Color(0xFF2B2B2B),
+                            Color(0xFF1E1E1E),
+                            Color(0xFF121212),
                         ),
                         center = Offset.Unspecified,
                         radius = 280f,
@@ -2073,8 +2073,8 @@ private fun DjShelfCard(
                 // Sombra suave bajo el vinilo
                 drawCircle(Color.Black.copy(alpha = 0.65f), r * 1.04f, center + Offset(0f, r * 0.05f))
                 // Borde exterior biselado brillante del vinilo
-                drawCircle(Color(0xFF2B2B36), r, center)
-                drawCircle(Color(0xFF0C0C10), r * 0.985f, center)
+                drawCircle(Color(0xFF2B2B2B), r, center)
+                drawCircle(Color(0xFF0B0B0B), r * 0.985f, center)
                 // Surcos concéntricos del vinilo con brillo
                 var g = 0.38f
                 while (g < 0.96f) {
@@ -2093,7 +2093,7 @@ private fun DjShelfCard(
                 rotate(angle, center) {
                     drawCircle(Color.White.copy(alpha = 0.90f), r * 0.04f, center + Offset(r * 0.19f, 0f))
                 }
-                drawCircle(Color(0xFF101214), r * 0.065f, center)
+                drawCircle(Color(0xFF101010), r * 0.065f, center)
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -2101,7 +2101,7 @@ private fun DjShelfCard(
             text = "DJ",
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFFF3EEFF),
+            color = Color(0xFFFFFFFF),
             maxLines = 1,
         )
         Text(
@@ -2168,7 +2168,7 @@ private fun MeGustaShelfCard(
             Icon(
                 imageVector = Icons.Rounded.Favorite,
                 contentDescription = null,
-                tint = Color(0xFF101214).copy(alpha = 0.90f),
+                tint = Color(0xFF101010).copy(alpha = 0.90f),
                 modifier = Modifier.size(64.dp),
             )
             if (isHovered) {
@@ -2179,7 +2179,7 @@ private fun MeGustaShelfCard(
                         .size(40.dp)
                         .shadow(10.dp, CircleShape)
                         .clip(CircleShape)
-                        .background(Color(0xFF101214))
+                        .background(Color(0xFF101010))
                         .clickable(onClick = onPlayDirect),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -2197,7 +2197,7 @@ private fun MeGustaShelfCard(
             text = "Me gusta",
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFFF3EEFF),
+            color = Color(0xFFFFFFFF),
             maxLines = 1,
         )
         Text(
@@ -2253,7 +2253,7 @@ private fun FolderShelfCard(
                 .aspectRatio(1f)
                 .shadow(18.dp, RoundedCornerShape(16.dp), ambientColor = Color.Black.copy(alpha = 0.55f))
                 .clip(RoundedCornerShape(16.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF231D33), Color(0xFF151220))))
+                .background(Brush.linearGradient(listOf(Color(0xFF242424), Color(0xFF161616))))
                 .border(1.dp, if (isHovered) accent.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp)),
             contentAlignment = Alignment.Center,
         ) {
@@ -2279,12 +2279,12 @@ private fun FolderShelfCard(
                         .clickable(onClick = onPlayDirect),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Rounded.PlayArrow, "Reproducir carpeta", tint = Color(0xFF101214), modifier = Modifier.size(22.dp))
+                    Icon(Icons.Rounded.PlayArrow, "Reproducir carpeta", tint = Color(0xFF101010), modifier = Modifier.size(22.dp))
                 }
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text(name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(folderSubtitle(lists), fontSize = 12.sp, color = Color.White.copy(alpha = 0.58f), maxLines = 1)
     }
 }
@@ -2337,8 +2337,8 @@ private fun PlaylistShelfCard(
                 .background(
                     Brush.linearGradient(
                         listOf(
-                            Color(0xFF221C32),
-                            Color(0xFF151220),
+                            Color(0xFF222222),
+                            Color(0xFF161616),
                         ),
                     ),
                 )
@@ -2375,7 +2375,7 @@ private fun PlaylistShelfCard(
                     Icon(
                         imageVector = Icons.Rounded.PlayArrow,
                         contentDescription = "Reproducir",
-                        tint = Color(0xFF101214),
+                        tint = Color(0xFF101010),
                         modifier = Modifier.size(22.dp),
                     )
                 }
@@ -2386,7 +2386,7 @@ private fun PlaylistShelfCard(
             text = playlist.name,
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFFF3EEFF),
+            color = Color(0xFFFFFFFF),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -2444,7 +2444,7 @@ private fun PlaylistTileDesktop(
                     if (playlist.id == LIKED_ID) {
                         Brush.linearGradient(listOf(accent, accent.copy(alpha = 0.65f)))
                     } else {
-                        Brush.linearGradient(listOf(Color(0xFF231D33), Color(0xFF161221)))
+                        Brush.linearGradient(listOf(Color(0xFF242424), Color(0xFF161616)))
                     },
                 ),
             contentAlignment = Alignment.Center,
@@ -2454,7 +2454,7 @@ private fun PlaylistTileDesktop(
                     Icon(
                         imageVector = Icons.Rounded.Favorite,
                         contentDescription = null,
-                        tint = Color(0xFF101214),
+                        tint = Color(0xFF101010),
                         modifier = Modifier.size(26.dp),
                     )
                 }
@@ -2481,7 +2481,7 @@ private fun PlaylistTileDesktop(
                 text = playlist.name,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFFF3EEFF),
+                color = Color(0xFFFFFFFF),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -2506,7 +2506,7 @@ private fun PlaylistTileDesktop(
                 Icon(
                     imageVector = Icons.Rounded.PlayArrow,
                     contentDescription = "Reproducir lista",
-                    tint = Color(0xFF101214),
+                    tint = Color(0xFF101010),
                     modifier = Modifier.size(18.dp),
                 )
             }
@@ -2554,7 +2554,7 @@ private fun FolderTileDesktop(
             modifier = Modifier
                 .size(56.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF231D33), Color(0xFF161221)))),
+                .background(Brush.linearGradient(listOf(Color(0xFF242424), Color(0xFF161616)))),
             contentAlignment = Alignment.Center,
         ) {
             if (coverBmp != null) {
@@ -2573,7 +2573,7 @@ private fun FolderTileDesktop(
                 text = name,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFFF3EEFF),
+                color = Color(0xFFFFFFFF),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -2598,7 +2598,7 @@ private fun FolderTileDesktop(
                 Icon(
                     imageVector = Icons.Rounded.PlayArrow,
                     contentDescription = "Reproducir carpeta",
-                    tint = Color(0xFF101214),
+                    tint = Color(0xFF101010),
                     modifier = Modifier.size(18.dp),
                 )
             }
@@ -2715,7 +2715,7 @@ private fun FolderDetailPane(
                     modifier = Modifier
                         .size(92.dp)
                         .clip(RoundedCornerShape(18.dp))
-                        .background(Brush.linearGradient(listOf(Color(0xFF2A2238), Color(0xFF17131F))))
+                        .background(Brush.linearGradient(listOf(Color(0xFF2A2A2A), Color(0xFF171717))))
                         .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(18.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -2736,7 +2736,7 @@ private fun FolderDetailPane(
                         fontSize = 26.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = (-0.5).sp,
-                        color = Color(0xFFF3EEFF),
+                        color = Color(0xFFFFFFFF),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -2762,8 +2762,8 @@ private fun FolderDetailPane(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Icon(Icons.Rounded.PlayArrow, null, tint = Color(0xFF101214), modifier = Modifier.size(20.dp))
-                                Text("Reproducir", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF101214))
+                                Icon(Icons.Rounded.PlayArrow, null, tint = Color(0xFF101010), modifier = Modifier.size(20.dp))
+                                Text("Reproducir", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF101010))
                             }
                         }
                         Box {
@@ -2778,12 +2778,12 @@ private fun FolderDetailPane(
                                 expanded = showMenu,
                                 onDismissRequest = { showMenu = false },
                                 modifier = Modifier
-                                    .background(Color(0xFF1B1726))
+                                    .background(Color(0xFF171717))
                                     .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
                             ) {
                                 if (onTogglePin != null) {
                                     DropdownMenuItem(
-                                        text = { Text(if (pinned) "Quitar de arriba" else "Fijar arriba", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                        text = { Text(if (pinned) "Quitar de arriba" else "Fijar arriba", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
                                         leadingIcon = { Icon(Icons.Rounded.PushPin, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
                                         onClick = {
                                             showMenu = false
@@ -2792,7 +2792,7 @@ private fun FolderDetailPane(
                                     )
                                 }
                                 DropdownMenuItem(
-                                    text = { Text("Añadir o quitar listas", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                    text = { Text("Añadir o quitar listas", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
                                     leadingIcon = { Icon(Icons.Rounded.FolderOpen, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
                                     onClick = {
                                         showMenu = false
@@ -2801,7 +2801,7 @@ private fun FolderDetailPane(
                                     },
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Cambiar el nombre", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                    text = { Text("Cambiar el nombre", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
                                     leadingIcon = { Icon(Icons.Rounded.Edit, null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
                                     onClick = {
                                         showMenu = false
@@ -2873,7 +2873,7 @@ private fun FolderDetailPane(
                             }
                             .padding(horizontal = 14.dp, vertical = 6.dp),
                     ) {
-                        Text("Guardar", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF101214))
+                        Text("Guardar", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF101010))
                     }
                     Box(
                         modifier = Modifier
@@ -2940,11 +2940,11 @@ private fun FolderDetailPane(
                                 contentAlignment = Alignment.Center,
                             ) {
                                 if (inside) {
-                                    Icon(Icons.Rounded.Check, null, tint = Color(0xFF101214), modifier = Modifier.size(14.dp))
+                                    Icon(Icons.Rounded.Check, null, tint = Color(0xFF101010), modifier = Modifier.size(14.dp))
                                 }
                             }
                             Column(Modifier.weight(1f)) {
-                                Text(pl.name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(pl.name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(
                                     text = pl.folder?.takeIf { !inside }?.let { "En «$it»" } ?: "${pl.songs.size} canciones",
                                     fontSize = 12.sp,
@@ -2995,7 +2995,7 @@ private fun FolderDetailPane(
                         modifier = Modifier
                             .size(52.dp)
                             .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF191622)),
+                            .background(Color(0xFF1A1A1A)),
                         contentAlignment = Alignment.Center,
                     ) {
                         if (bmp != null) {
@@ -3005,7 +3005,7 @@ private fun FolderDetailPane(
                         }
                     }
                     Column(Modifier.weight(1f)) {
-                        Text(pl.name, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(pl.name, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text("${pl.songs.size} canciones", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.56f), maxLines = 1)
                     }
                     Icon(
@@ -3076,7 +3076,7 @@ private fun LocalPlaylistDetailPane(
                         if (list.id == LIKED_ID) {
                             Brush.linearGradient(listOf(palette.primary, palette.secondary))
                         } else {
-                            Brush.linearGradient(listOf(Color(0xFF241E34), Color(0xFF151220)))
+                            Brush.linearGradient(listOf(Color(0xFF242424), Color(0xFF161616)))
                         },
                     )
                     .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp)),
@@ -3087,7 +3087,7 @@ private fun LocalPlaylistDetailPane(
                         Icon(
                             imageVector = Icons.Rounded.Favorite,
                             contentDescription = null,
-                            tint = Color(0xFF101214),
+                            tint = Color(0xFF101010),
                             modifier = Modifier.size(54.dp),
                         )
                     }
@@ -3121,7 +3121,7 @@ private fun LocalPlaylistDetailPane(
                         fontSize = 26.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = (-0.5).sp,
-                        color = Color(0xFFF3EEFF),
+                        color = Color(0xFFFFFFFF),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
@@ -3167,14 +3167,14 @@ private fun LocalPlaylistDetailPane(
                         Icon(
                             imageVector = Icons.Rounded.PlayArrow,
                             contentDescription = null,
-                            tint = Color(0xFF101214),
+                            tint = Color(0xFF101010),
                             modifier = Modifier.size(20.dp),
                         )
                         Text(
                             text = "Reproducir",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            color = Color(0xFF101214),
+                            color = Color(0xFF101010),
                         )
                     }
 
@@ -3200,13 +3200,13 @@ private fun LocalPlaylistDetailPane(
                                 expanded = showPlaylistMenu,
                                 onDismissRequest = { showPlaylistMenu = false },
                                 modifier = Modifier
-                                    .background(Color(0xFF1B1726))
+                                    .background(Color(0xFF171717))
                                     .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
                             ) {
                                 if (downloads != null) {
                                     val isDownloaded = list.id in downloadLists
                                     DropdownMenuItem(
-                                        text = { Text(if (isDownloaded) "Quitar descarga" else "Descargar lista", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                        text = { Text(if (isDownloaded) "Quitar descarga" else "Descargar lista", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
                                         leadingIcon = {
                                             Icon(
                                                 imageVector = if (isDownloaded) Icons.Rounded.DownloadDone else Icons.Rounded.Download,
@@ -3223,7 +3223,7 @@ private fun LocalPlaylistDetailPane(
                                 }
                                 if (onTogglePin != null) {
                                     DropdownMenuItem(
-                                        text = { Text(if (pinned) "Quitar de arriba" else "Fijar arriba", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                        text = { Text(if (pinned) "Quitar de arriba" else "Fijar arriba", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
                                         leadingIcon = { Icon(Icons.Rounded.PushPin, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
                                         onClick = {
                                             showPlaylistMenu = false
@@ -3233,7 +3233,7 @@ private fun LocalPlaylistDetailPane(
                                 }
                                 if (onMoveToFolder != null) {
                                     DropdownMenuItem(
-                                        text = { Text("Mover a carpeta…", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                        text = { Text("Mover a carpeta…", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
                                         leadingIcon = { Icon(Icons.Rounded.Folder, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
                                         onClick = {
                                             showPlaylistMenu = false
@@ -3395,11 +3395,11 @@ private fun LocalPlaylistDetailPane(
                                     expanded = showSongMenu,
                                     onDismissRequest = { showSongMenu = false },
                                     modifier = Modifier
-                                        .background(Color(0xFF1B1726))
+                                        .background(Color(0xFF171717))
                                         .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
                                 ) {
                                     DropdownMenuItem(
-                                        text = { Text("Guardar en otra lista…", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                        text = { Text("Guardar en otra lista…", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
                                         leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
                                         onClick = {
                                             showSongMenu = false
@@ -3409,7 +3409,7 @@ private fun LocalPlaylistDetailPane(
                                     if (downloads != null) {
                                         val isDownloaded = requestedSongs.any { it.id == s.id }
                                         DropdownMenuItem(
-                                            text = { Text(if (isDownloaded) "Quitar descarga" else "Descargar", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                            text = { Text(if (isDownloaded) "Quitar descarga" else "Descargar", color = Color(0xFFFFFFFF), fontSize = 13.sp) },
                                             leadingIcon = {
                                                 Icon(
                                                     imageVector = if (isDownloaded) Icons.Rounded.DownloadDone else Icons.Rounded.Download,
@@ -3477,7 +3477,7 @@ private fun RemoteDetailPane(
                     .size(if (isArtist) 130.dp else 116.dp)
                     .shadow(24.dp, shape, ambientColor = Color.Black.copy(alpha = 0.6f))
                     .clip(shape)
-                    .background(Color(0xFF1B1626))
+                    .background(Color(0xFF1B1B1B))
                     .border(
                         if (isArtist) 2.dp else 1.dp,
                         if (isArtist) Brush.sweepGradient(listOf(palette.primary, palette.secondary, palette.primary)) else SolidColor(Color.White.copy(alpha = 0.12f)),
@@ -3557,7 +3557,7 @@ private fun RemoteDetailPane(
                     fontSize = if (isArtist) 30.sp else 26.sp,
                     fontWeight = FontWeight.ExtraBold,
                     letterSpacing = (-0.5).sp,
-                    color = Color(0xFFF3EEFF),
+                    color = Color(0xFFFFFFFF),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -3584,14 +3584,14 @@ private fun RemoteDetailPane(
                             Icon(
                                 imageVector = Icons.Rounded.PlayArrow,
                                 contentDescription = null,
-                                tint = Color(0xFF101214),
+                                tint = Color(0xFF101010),
                                 modifier = Modifier.size(20.dp),
                             )
                             Text(
                                 text = "Reproducir",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = Color(0xFF101214),
+                                color = Color(0xFF101010),
                             )
                         }
                         SheetCircleIconButton(
@@ -3621,7 +3621,7 @@ private fun RemoteDetailPane(
                                 text = "Canciones populares",
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFFF3EEFF),
+                                color = Color(0xFFFFFFFF),
                                 modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
                             )
                         }
@@ -3642,7 +3642,7 @@ private fun RemoteDetailPane(
                 if (shelves.isNotEmpty()) {
                     items(shelves, key = { it.title }) { shelf ->
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text(shelf.title, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFF3EEFF))
+                            Text(shelf.title, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFFFFFFF))
                             LazyRow(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -3736,7 +3736,7 @@ private fun ExplorePane(
                             fontSize = 21.sp,
                             fontWeight = FontWeight.ExtraBold,
                             letterSpacing = (-0.4).sp,
-                            color = Color(0xFFF3EEFF),
+                            color = Color(0xFFFFFFFF),
                         )
                         if (allSongs && shelf.items.size > 3) {
                             // Columnas de 4 canciones envueltas en tarjeta sutil (.quick-picks-col en core.css:1139-1147)
@@ -3841,7 +3841,7 @@ private fun ExploreShelfCard(
                 .size(184.dp)
                 .shadow(18.dp, shape, ambientColor = Color.Black.copy(alpha = 0.55f))
                 .clip(shape)
-                .background(Color(0xFF181522))
+                .background(Color(0xFF181818))
                 .border(
                     width = 1.dp,
                     color = if (isHovered) accent.copy(alpha = 0.50f) else Color.White.copy(alpha = 0.08f),
@@ -3879,7 +3879,7 @@ private fun ExploreShelfCard(
                     Icon(
                         imageVector = Icons.Rounded.PlayArrow,
                         contentDescription = "Reproducir",
-                        tint = Color(0xFF101214),
+                        tint = Color(0xFF101010),
                         modifier = Modifier.size(22.dp),
                     )
                 }
@@ -3892,7 +3892,7 @@ private fun ExploreShelfCard(
             text = item.title,
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFFF3EEFF),
+            color = Color(0xFFFFFFFF),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = if (isArtist) TextAlign.Center else TextAlign.Start,
@@ -3960,7 +3960,7 @@ private fun SearchResultsPane(
                             text = "Resultado principal",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            color = Color(0xFFF3EEFF),
+                            color = Color(0xFFFFFFFF),
                         )
                     }
                     item(key = "topResultCard-${topItem.id}") {
@@ -3976,7 +3976,7 @@ private fun SearchResultsPane(
                                 text = "Canciones y más",
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = Color(0xFFF3EEFF),
+                                color = Color(0xFFFFFFFF),
                                 modifier = Modifier.padding(top = 6.dp),
                             )
                         }
@@ -4064,7 +4064,7 @@ private fun TopResultCard(
                 .size(88.dp)
                 .shadow(16.dp, RoundedCornerShape(16.dp))
                 .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xFF1C1726)),
+                .background(Color(0xFF1C1C1C)),
             contentAlignment = Alignment.Center,
         ) {
             if (thumbBmp != null) {
@@ -4089,7 +4089,7 @@ private fun TopResultCard(
                 fontSize = 24.sp,
                 fontWeight = FontWeight.ExtraBold,
                 letterSpacing = (-0.5).sp,
-                color = Color(0xFFF3EEFF),
+                color = Color(0xFFFFFFFF),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -4112,7 +4112,7 @@ private fun TopResultCard(
             Icon(
                 imageVector = Icons.Rounded.PlayArrow,
                 contentDescription = "Reproducir",
-                tint = Color(0xFF101214),
+                tint = Color(0xFF101010),
                 modifier = Modifier.size(26.dp),
             )
         }
@@ -5354,7 +5354,7 @@ private fun SongRowDesktop(
                 modifier = Modifier
                     .size(48.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF191622)),
+                    .background(Color(0xFF1A1A1A)),
                 contentAlignment = Alignment.Center,
             ) {
                 if (thumbBmp != null) {
@@ -5393,7 +5393,7 @@ private fun SongRowDesktop(
                     text = title,
                     fontSize = 14.5.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (isCurrent) accent else Color(0xFFF3EEFF),
+                    color = if (isCurrent) accent else Color(0xFFFFFFFF),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -5484,9 +5484,9 @@ fun SaveToModal(
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            Color(0xFA1F1A30),
-                            Color(0xF5130F21),
-                            Color(0xFA0B0816),
+                            Color(0xFA1F1F1F),
+                            Color(0xF5121212),
+                            Color(0xFA0B0B0B),
                         ),
                     ),
                 )
@@ -5726,7 +5726,7 @@ private fun SaveToDestinationRow(
             contentAlignment = Alignment.Center,
         ) {
             if (checked) {
-                Icon(Icons.Rounded.Check, null, tint = Color(0xFF140E20), modifier = Modifier.size(14.dp))
+                Icon(Icons.Rounded.Check, null, tint = Color(0xFF101010), modifier = Modifier.size(14.dp))
             }
         }
     }

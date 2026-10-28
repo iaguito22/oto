@@ -17,32 +17,43 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+/** El acento de reserva del móvil mientras no hay carátula (o si no tiene color). */
+val DefaultAccent = Color(0xFF8FD3DB)
+
 /**
- * Tokens de color de Oto Desktop (estética Caelestia + degradado vivo de la carátula como en el móvil).
+ * Tokens de color de Oto Desktop, los mismos roles que `OtoColors` en el móvil: fondo casi negro, blancos con alfa y
+ * **un solo acento** que sale de la carátula que suena.
  */
 @Immutable
 data class DesktopColors(
-    val bgDeep: Color = Color(0xFF0A090F),
-    val bgSurface: Color = Color(0xFF14121D),
-    val bgCard: Color = Color(0x16FFFFFF),
-    val bgCardHover: Color = Color(0x24FFFFFF),
-    val text: Color = Color(0xFFF6F3FF),
-    val textMuted: Color = Color(0xA6F6F3FF),
-    val textFaint: Color = Color(0x5CF6F3FF),
-    val accent: Color = Color(0xFFD8B9FF),
-    val accentWarm: Color = Color(0xFFFFB69E),
-    val accentCool: Color = Color(0xFF9ED8FF),
-    val onAccent: Color = Color(0xFF140E21),
-    val border: Color = Color(0x1FFFFFFF),
+    val bgDeep: Color = Color(0xFF0B0B0B),
+    val veil: Color = Color(0x800B0B0B),
+    val bgSurface: Color = Color(0xFF121212),
+    val bgCard: Color = Color(0x0DFFFFFF),
+    val bgCardHover: Color = Color(0x1AFFFFFF),
+    val text: Color = Color.White,
+    val textMuted: Color = Color(0x9EFFFFFF),
+    val textFaint: Color = Color(0x5CFFFFFF),
+    val accent: Color = DefaultAccent,
+    val accentWarm: Color = DefaultAccent,
+    val accentCool: Color = DefaultAccent,
+    val onAccent: Color = Color(0xFF101010),
+    val glass: Color = Color(0x8F181818),
+    val field: Color = Color(0x14FFFFFF),
+    val border: Color = Color(0x17FFFFFF),
 )
 
 val LocalDesktopColors = staticCompositionLocalOf { DesktopColors() }
 
+/**
+ * La carátula da un único acento ([primary]); [secondary] y [tertiary] se quedan igual para que ninguna vista
+ * reintroduzca un segundo color fijo. [deep] es el fondo neutro, no un color sacado de la portada.
+ */
 data class ArtworkPalette(
-    val primary: Color = Color(0xFFD8B9FF),
-    val secondary: Color = Color(0xFFFFB69E),
-    val tertiary: Color = Color(0xFF9ED8FF),
-    val deep: Color = Color(0xFF0C0A14),
+    val primary: Color = DefaultAccent,
+    val secondary: Color = DefaultAccent,
+    val tertiary: Color = DefaultAccent,
+    val deep: Color = Color(0xFF0B0B0B),
 )
 
 /**
@@ -155,67 +166,18 @@ object ArtworkLoader {
             }.let { if (it < 0f) it + 360f else it }
             val curLum = (mx + mn) / 2f
             val curSat = if (delta < 0.001f) 0f else delta / (1f - abs(2f * curLum - 1f))
-            val finalSat = curSat.coerceIn(targetSatFloor, 0.92f)
+            val finalSat = curSat.coerceIn(targetSatFloor, 0.85f)
             return hslToColor(hue, finalSat, targetLightness)
         }
 
         val primaryBin = sortedBins.firstOrNull()
-        val secondaryBin = sortedBins.firstOrNull { bin ->
-            primaryBin == null || abs(bin - primaryBin).let { min(it, numBins - it) } >= 2
-        }
-        val tertiaryBin = sortedBins.firstOrNull { bin ->
-            (primaryBin == null || abs(bin - primaryBin).let { min(it, numBins - it) } >= 2) &&
-            (secondaryBin == null || abs(bin - secondaryBin).let { min(it, numBins - it) } >= 2)
-        }
-
-        val p1 = if (primaryBin != null) {
-            binToColor(primaryBin, targetLightness = 0.74f, targetSatFloor = 0.55f)
+        // Como en el móvil: el acento tiene que leerse sobre el fondo oscuro, claro y con color si la portada lo tiene.
+        val accent = if (primaryBin != null) {
+            binToColor(primaryBin, targetLightness = 0.70f, targetSatFloor = 0.38f)
         } else {
-            Color(0xFFD8B9FF)
+            DefaultAccent
         }
-
-        val p2 = if (secondaryBin != null) {
-            binToColor(secondaryBin, targetLightness = 0.68f, targetSatFloor = 0.50f)
-        } else if (primaryBin != null) {
-            // Variante análoga cálida
-            val h = (primaryBin * 30f + 35f) % 360f
-            hslToColor(h, 0.65f, 0.70f)
-        } else {
-            Color(0xFFFFB69E)
-        }
-
-        val p3 = if (tertiaryBin != null) {
-            binToColor(tertiaryBin, targetLightness = 0.64f, targetSatFloor = 0.45f)
-        } else if (primaryBin != null) {
-            val h = (primaryBin * 30f + 180f) % 360f
-            hslToColor(h, 0.50f, 0.64f)
-        } else {
-            Color(0xFF9ED8FF)
-        }
-
-        val deep = if (primaryBin != null) {
-            val count = binCount[primaryBin]
-            val avgR = (binR[primaryBin] / count).toInt()
-            val avgG = (binG[primaryBin] / count).toInt()
-            val avgB = (binB[primaryBin] / count).toInt()
-            val rf = avgR / 255f
-            val gf = avgG / 255f
-            val bf = avgB / 255f
-            val mx = max(rf, max(gf, bf))
-            val mn = min(rf, min(gf, bf))
-            val delta = mx - mn
-            val hue = when {
-                delta < 0.001f -> 0f
-                mx == rf -> 60f * (((gf - bf) / delta) % 6f)
-                mx == gf -> 60f * (((bf - rf) / delta) + 2f)
-                else -> 60f * (((rf - gf) / delta) + 4f)
-            }.let { if (it < 0f) it + 360f else it }
-            hslToColor(hue, 0.38f, 0.06f)
-        } else {
-            Color(0xFF0C0A14)
-        }
-
-        return ArtworkPalette(primary = p1, secondary = p2, tertiary = p3, deep = deep)
+        return ArtworkPalette(primary = accent, secondary = accent, tertiary = accent, deep = Color(0xFF0B0B0B))
     }
 
     private fun hslToColor(h: Float, s: Float, l: Float): Color {

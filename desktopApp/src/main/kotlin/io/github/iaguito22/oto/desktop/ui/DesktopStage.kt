@@ -131,34 +131,6 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 
-val OtoFontFamily = FontFamily(
-    Font(resource = "fonts/rubik.ttf", weight = FontWeight.Normal),
-    Font(resource = "fonts/rubik.ttf", weight = FontWeight.Medium),
-    Font(resource = "fonts/rubik.ttf", weight = FontWeight.SemiBold),
-    Font(resource = "fonts/rubik.ttf", weight = FontWeight.Bold),
-    Font(resource = "fonts/rubik.ttf", weight = FontWeight.ExtraBold),
-)
-
-val OtoTypography = Typography().let { base ->
-    Typography(
-        displayLarge = base.displayLarge.copy(fontFamily = OtoFontFamily),
-        displayMedium = base.displayMedium.copy(fontFamily = OtoFontFamily),
-        displaySmall = base.displaySmall.copy(fontFamily = OtoFontFamily),
-        headlineLarge = base.headlineLarge.copy(fontFamily = OtoFontFamily),
-        headlineMedium = base.headlineMedium.copy(fontFamily = OtoFontFamily),
-        headlineSmall = base.headlineSmall.copy(fontFamily = OtoFontFamily),
-        titleLarge = base.titleLarge.copy(fontFamily = OtoFontFamily),
-        titleMedium = base.titleMedium.copy(fontFamily = OtoFontFamily),
-        titleSmall = base.titleSmall.copy(fontFamily = OtoFontFamily),
-        bodyLarge = base.bodyLarge.copy(fontFamily = OtoFontFamily),
-        bodyMedium = base.bodyMedium.copy(fontFamily = OtoFontFamily),
-        bodySmall = base.bodySmall.copy(fontFamily = OtoFontFamily),
-        labelLarge = base.labelLarge.copy(fontFamily = OtoFontFamily),
-        labelMedium = base.labelMedium.copy(fontFamily = OtoFontFamily),
-        labelSmall = base.labelSmall.copy(fontFamily = OtoFontFamily),
-    )
-}
-
 /**
  * Escenario principal a ventana completa de Oto Desktop (Linux / Windows),
  * calcado del prototipo `fusion.html`:
@@ -297,9 +269,9 @@ fun DesktopStage(
             drawRect(
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        Color(0x5508070C),
-                        Color(0x2808070C),
-                        Color(0x8808070C),
+                        Color(0x55080808),
+                        Color(0x28080808),
+                        Color(0x88080808),
                     ),
                 ),
             )
@@ -485,8 +457,8 @@ fun DesktopStage(
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            Color(0xE61B152A),
-                            Color(0xF0120D1F),
+                            Color(0xE61B1B1B),
+                            Color(0xF0121212),
                         ),
                     ),
                 )
@@ -599,8 +571,8 @@ fun DesktopStage(
                         .background(
                             Brush.verticalGradient(
                                 listOf(
-                                    Color(0xE61E1830),
-                                    Color(0xF2120D20),
+                                    Color(0xE61E1E1E),
+                                    Color(0xF2121212),
                                 ),
                             ),
                         )
@@ -680,7 +652,7 @@ private fun TopSourceOriginBar(
             text = source?.title ?: "Me gusta",
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = if (hovered) accent else Color(0xFFF3EEFF),
+            color = if (hovered) accent else Color(0xFFFFFFFF),
         )
     }
 }
@@ -816,7 +788,7 @@ private fun SpotifyPlayerColumn(
                         }
                         .shadow(18.dp, RoundedCornerShape(18.dp))
                         .clip(RoundedCornerShape(18.dp))
-                        .background(Color(0xFF14121A))
+                        .background(Color(0xFF141414))
                         .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(18.dp)),
                 ) {
                     Image(
@@ -843,7 +815,7 @@ private fun SpotifyPlayerColumn(
                         }
                         .shadow(18.dp, RoundedCornerShape(18.dp))
                         .clip(RoundedCornerShape(18.dp))
-                        .background(Color(0xFF14121A))
+                        .background(Color(0xFF141414))
                         .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(18.dp)),
                 ) {
                     Image(
@@ -896,7 +868,7 @@ private fun SpotifyPlayerColumn(
                         spotColor = Color.Black.copy(alpha = 0.85f),
                     )
                     .clip(RoundedCornerShape(20.dp))
-                    .background(Color(0xFF14121A))
+                    .background(Color(0xFF141414))
                     .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp))
                     .pointerInput(nowPlaying.id) {
                         detectTapGestures(
@@ -951,8 +923,8 @@ private fun SpotifyPlayerColumn(
                         .background(
                             Brush.radialGradient(
                                 colors = listOf(
-                                    Color(0xFF0A0810).copy(alpha = 0.58f),
-                                    Color(0xFF0A0810).copy(alpha = 0.28f),
+                                    Color(0xFF0B0B0B).copy(alpha = 0.58f),
+                                    Color(0xFF0B0B0B).copy(alpha = 0.28f),
                                 ),
                             ),
                         ),
@@ -989,7 +961,7 @@ private fun SpotifyPlayerColumn(
                             Icon(
                                 imageVector = Icons.Rounded.SkipPrevious,
                                 contentDescription = "Anterior",
-                                tint = Color(0xFFF3EEFF),
+                                tint = Color(0xFFFFFFFF),
                                 modifier = Modifier.size(28.dp),
                             )
                         }
@@ -1003,7 +975,7 @@ private fun SpotifyPlayerColumn(
                             Icon(
                                 imageVector = if (nowPlaying.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                 contentDescription = if (nowPlaying.playing) "Pausar" else "Reproducir",
-                                tint = Color(0xFF15101E),
+                                tint = Color(0xFF151515),
                                 modifier = Modifier.size(34.dp),
                             )
                         }
@@ -1020,7 +992,7 @@ private fun SpotifyPlayerColumn(
                             Icon(
                                 imageVector = Icons.Rounded.SkipNext,
                                 contentDescription = "Siguiente",
-                                tint = Color(0xFFF3EEFF),
+                                tint = Color(0xFFFFFFFF),
                                 modifier = Modifier.size(28.dp),
                             )
                         }
@@ -1033,7 +1005,7 @@ private fun SpotifyPlayerColumn(
                             .padding(bottom = 18.dp)
                             .shadow(12.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.45f))
                             .clip(CircleShape)
-                            .background(Color(0xFF12101A).copy(alpha = 0.68f))
+                            .background(Color(0xFF121212).copy(alpha = 0.68f))
                             .border(1.dp, if (liked) palette.primary.copy(alpha = 0.48f) else Color.White.copy(alpha = 0.16f), CircleShape)
                             .padding(horizontal = 6.dp, vertical = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -1136,7 +1108,7 @@ private fun SpotifyPlayerColumn(
                 fontSize = 42.sp,
                 lineHeight = 48.sp,
                 fontWeight = FontWeight.ExtraBold,
-                color = Color(0xFFF7F4FF),
+                color = Color(0xFFFFFFFF),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

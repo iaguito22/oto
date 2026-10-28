@@ -115,7 +115,7 @@ internal fun DownloadsPane(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RoundButton(Icons.AutoMirrored.Rounded.ArrowBack, "Volver", onBack)
                     Spacer(Modifier.width(10.dp))
-                    Text("Descargas", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFF3EEFF))
+                    Text("Descargas", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFFFFFFF))
                 }
                 val parts = buildList {
                     if (done > 0 || size > 0L) add("$done ${if (done == 1) "canción" else "canciones"} · ${formatBytes(size)}")
@@ -275,7 +275,7 @@ private fun ListRow(
             modifier = Modifier
                 .size(48.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(Color(0xFF191622)),
+                .background(Color(0xFF1A1A1A)),
             contentAlignment = Alignment.Center,
         ) {
             if (bmp != null) {
@@ -286,7 +286,7 @@ private fun ListRow(
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(name, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(name, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(status, fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.58f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (total > 0 && done < total) {
@@ -332,7 +332,7 @@ private fun SongDownloadRow(
             modifier = Modifier
                 .size(48.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(Color(0xFF191622)),
+                .background(Color(0xFF1A1A1A)),
             contentAlignment = Alignment.Center,
         ) {
             if (bmp != null) {
@@ -347,7 +347,7 @@ private fun SongDownloadRow(
                 heard.title,
                 fontSize = 14.5.sp,
                 fontWeight = FontWeight.Bold,
-                color = if (isCurrent) accent else Color(0xFFF3EEFF),
+                color = if (isCurrent) accent else Color(0xFFFFFFFF),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
