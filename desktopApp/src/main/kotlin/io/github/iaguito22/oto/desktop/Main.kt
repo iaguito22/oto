@@ -37,6 +37,24 @@ import io.github.iaguito22.oto.OtoDirs
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.account.Account
 import io.github.iaguito22.oto.account.Cloud
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.VolumeMute
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.FastForward
+import androidx.compose.material.icons.rounded.FastRewind
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.window.WindowPlacement
+import io.github.iaguito22.oto.desktop.ui.CueInfo
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.firstOrNull
 import io.github.iaguito22.oto.desktop.playback.DesktopPlayerConnection
 import io.github.iaguito22.oto.desktop.ui.ArtworkLoader
 import io.github.iaguito22.oto.desktop.ui.ArtworkPalette
@@ -109,6 +127,15 @@ fun main() {
         var menuTab by remember { mutableIntStateOf(0) } // 0 = Tu música, 1 = Explorar
         var savingTrack by remember { mutableStateOf<Heard?>(null) }
         var lastWheelToggleMs by remember { mutableLongStateOf(0L) }
+        var cue by remember { mutableStateOf<CueInfo?>(null) }
+        var lastNonZeroVolume by remember { mutableFloatStateOf(0.8f) }
+
+        LaunchedEffect(cue) {
+            if (cue != null) {
+                delay(1400L)
+                cue = null
+            }
+        }
 
         Window(
             onCloseRequest = ::exitApplication,
@@ -129,6 +156,12 @@ fun main() {
                             menuOpen = !menuOpen
                             true
                         }
+                        ev.key == Key.F11 -> {
+                            val isFull = windowState.placement == WindowPlacement.Fullscreen
+                            windowState.placement = if (isFull) WindowPlacement.Floating else WindowPlacement.Fullscreen
+                            cue = if (!isFull) CueInfo(Icons.Rounded.Fullscreen, "Pantalla completa") else CueInfo(Icons.Rounded.FullscreenExit, "Modo ventana")
+                            true
+                        }
                         ev.key == Key.F1 -> {
                             menuTab = 0
                             menuOpen = true
@@ -143,28 +176,30 @@ fun main() {
                             menuTab = (menuTab + 1) % 2
                             true
                         }
-                        ev.key == Key.Spacebar && !menuOpen -> {
+                        (ev.key == Key.Spacebar && !menuOpen) || ev.key == Key.MediaPlayPause -> {
+                            val willPlay = !player.state.value.playing
                             player.toggle()
+                            cue = if (willPlay) CueInfo(Icons.Rounded.PlayArrow, "Reanudado") else CueInfo(Icons.Rounded.Pause, "Pausado")
                             true
                         }
-                        ev.key == Key.MediaPlayPause -> {
-                            player.toggle()
-                            true
-                        }
-                        !menuOpen && ev.isCtrlPressed && ev.key == Key.DirectionRight -> {
+                        (!menuOpen && !ev.isCtrlPressed && ev.key == Key.N) || (!menuOpen && ev.isCtrlPressed && ev.key == Key.DirectionRight) -> {
                             player.next()
+                            cue = CueInfo(Icons.Rounded.SkipNext, "Siguiente")
                             true
                         }
-                        !menuOpen && ev.isCtrlPressed && ev.key == Key.DirectionLeft -> {
+                        (!menuOpen && !ev.isCtrlPressed && ev.key == Key.P) || (!menuOpen && ev.isCtrlPressed && ev.key == Key.DirectionLeft) -> {
                             player.previous()
+                            cue = CueInfo(Icons.Rounded.SkipPrevious, "Anterior")
                             true
                         }
                         !menuOpen && !ev.isCtrlPressed && ev.key == Key.DirectionRight -> {
                             player.seekTo(player.position() + 5000L)
+                            cue = CueInfo(Icons.Rounded.FastForward, "+5s")
                             true
                         }
                         !menuOpen && !ev.isCtrlPressed && ev.key == Key.DirectionLeft -> {
                             player.seekTo((player.position() - 5000L).coerceAtLeast(0L))
+                            cue = CueInfo(Icons.Rounded.FastRewind, "-5s")
                             true
                         }
                         !menuOpen && ev.key == Key.DirectionUp -> {
@@ -173,6 +208,35 @@ fun main() {
                         }
                         !menuOpen && ev.key == Key.DirectionDown -> {
                             player.adjustVolume(-0.05f)
+                            true
+                        }
+                        !menuOpen && ev.key == Key.M -> {
+                            if (player.volume.value > 0.001f) {
+                                lastNonZeroVolume = player.volume.value
+                                player.setVolume(0f)
+                                cue = CueInfo(Icons.AutoMirrored.Rounded.VolumeMute, "Silenciado")
+                            } else {
+                                val restoreVol = if (lastNonZeroVolume > 0.05f) lastNonZeroVolume else 0.8f
+                                player.setVolume(restoreVol)
+                                cue = CueInfo(Icons.AutoMirrored.Rounded.VolumeUp, "Sonido activo")
+                            }
+                            true
+                        }
+                        !menuOpen && !ev.isCtrlPressed && ev.key == Key.L -> {
+                            val cur = player.state.value
+                            val sid = cur.id
+                            if (sid != null) {
+                                appScope.launch {
+                                    val h = Heard(sid, cur.title, cur.artist, cur.artwork)
+                                    val wasLiked = prefs.likedIds.firstOrNull()?.contains(sid) ?: false
+                                    prefs.setLiked(h, !wasLiked)
+                                    cue = if (wasLiked) {
+                                        CueInfo(Icons.Rounded.FavoriteBorder, "Retirado de Me gusta")
+                                    } else {
+                                        CueInfo(Icons.Rounded.Favorite, "Guardado en Me gusta")
+                                    }
+                                }
+                            }
                             true
                         }
                         !menuOpen && (ev.key == Key.B || (ev.isCtrlPressed && ev.key == Key.D)) -> {
@@ -242,9 +306,20 @@ fun main() {
                     lyrics = lyrics,
                     lyricsLoading = lyricsLoading,
                     volume = volume,
-                    onTogglePlay = player::toggle,
-                    onPrev = player::previous,
-                    onNext = player::next,
+                    cue = cue,
+                    onTogglePlay = {
+                        val willPlay = !player.state.value.playing
+                        player.toggle()
+                        cue = if (willPlay) CueInfo(Icons.Rounded.PlayArrow, "Reanudado") else CueInfo(Icons.Rounded.Pause, "Pausado")
+                    },
+                    onPrev = {
+                        player.previous()
+                        cue = CueInfo(Icons.Rounded.SkipPrevious, "Anterior")
+                    },
+                    onNext = {
+                        player.next()
+                        cue = CueInfo(Icons.Rounded.SkipNext, "Siguiente")
+                    },
                     onSeek = player::seekTo,
                     onAdjustVolume = player::adjustVolume,
                     onSaveTo = {
@@ -262,7 +337,11 @@ fun main() {
                     onToggleLike = {
                         val id = nowPlaying.id ?: return@DesktopStage
                         val heard = Heard(id, nowPlaying.title, nowPlaying.artist, nowPlaying.artwork)
-                        uiScope.launch { prefs.setLiked(heard, !isLiked) }
+                        val willBeLiked = !isLiked
+                        uiScope.launch {
+                            prefs.setLiked(heard, willBeLiked)
+                            cue = if (willBeLiked) CueInfo(Icons.Rounded.Favorite, "Guardado en Me gusta") else CueInfo(Icons.Rounded.FavoriteBorder, "Retirado de Me gusta")
+                        }
                     },
                     onOpenSource = {
                         val src = source

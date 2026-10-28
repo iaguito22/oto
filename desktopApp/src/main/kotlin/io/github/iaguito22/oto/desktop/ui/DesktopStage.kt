@@ -17,8 +17,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -132,6 +135,12 @@ import kotlin.math.sin
  *   controles internos traslúcidos (`Anterior`, `Play/Pause`, `Siguiente`) que **solo aparecen al hacer hover**.
  * - Columna derecha con letras sincronizadas estilo karaoke Caelestia.
  */
+data class CueInfo(
+    val icon: ImageVector,
+    val text: String,
+    val timestampMs: Long = System.currentTimeMillis(),
+)
+
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun DesktopStage(
@@ -145,6 +154,7 @@ fun DesktopStage(
     lyrics: Lyrics?,
     lyricsLoading: Boolean,
     volume: Float = 1.0f,
+    cue: CueInfo? = null,
     headerStyle: Int = 0,
     onTogglePlay: () -> Unit,
     onPrev: () -> Unit,
@@ -296,12 +306,18 @@ fun DesktopStage(
                         modifier = Modifier.weight(0.58f).fillMaxHeight(),
                         verticalArrangement = Arrangement.Top,
                     ) {
-                        // Pill superior con origen de reproducción
-                        TopSourceOriginBar(
-                            source = source,
-                            accent = animPal.primary,
-                            onOpenSource = onOpenSource,
-                        )
+                        // Pill superior con origen de reproducción (se oculta suavemente mientras hay un aviso activo)
+                        AnimatedVisibility(
+                            visible = cue == null,
+                            enter = fadeIn(tween(200)),
+                            exit = fadeOut(tween(120)),
+                        ) {
+                            TopSourceOriginBar(
+                                source = source,
+                                accent = animPal.primary,
+                                onOpenSource = onOpenSource,
+                            )
+                        }
 
                         Spacer(Modifier.height(16.dp))
 
@@ -388,6 +404,57 @@ fun DesktopStage(
                     fontWeight = FontWeight.Bold,
                     color = Color.White,
                 )
+            }
+        }
+
+        // Píldora OSD animada de acciones rápidas (arriba al centro, estilo Caelestia)
+        AnimatedVisibility(
+            visible = cue != null,
+            enter = fadeIn(tween(140)) + slideInVertically(spring(dampingRatio = 0.8f, stiffness = 600f)) { -it / 2 },
+            exit = fadeOut(tween(200)) + slideOutVertically(tween(200)) { -it / 3 },
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp),
+        ) {
+            if (cue != null) {
+                Row(
+                    modifier = Modifier
+                        .shadow(24.dp, CircleShape, ambientColor = animPal.primary.copy(alpha = 0.45f), spotColor = Color.Black)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color(0xE61E1830),
+                                    Color(0xF2120D20),
+                                ),
+                            ),
+                        )
+                        .border(
+                            1.dp,
+                            Brush.horizontalGradient(
+                                listOf(
+                                    Color.White.copy(alpha = 0.50f),
+                                    animPal.primary.copy(alpha = 0.40f),
+                                    Color.White.copy(alpha = 0.20f),
+                                ),
+                            ),
+                            CircleShape,
+                        )
+                        .padding(horizontal = 20.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(
+                        imageVector = cue.icon,
+                        contentDescription = null,
+                        tint = animPal.primary,
+                        modifier = Modifier.size(19.dp),
+                    )
+                    Text(
+                        text = cue.text,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                    )
+                }
             }
         }
     }
