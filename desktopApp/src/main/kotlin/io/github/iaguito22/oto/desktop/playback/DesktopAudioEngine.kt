@@ -75,12 +75,13 @@ class DesktopAudioEngine(
     }
 
     fun setGain(linear: Float) {
-        gainLinear = linear.coerceIn(0.05f, 2.0f)
+        gainLinear = linear.coerceIn(0.0f, 2.0f)
         currentLine?.let { line ->
             runCatching {
                 if (line.isControlSupported(FloatControl.Type.MASTER_GAIN)) {
                     val ctrl = line.getControl(FloatControl.Type.MASTER_GAIN) as FloatControl
-                    val db = (20f * log10(gainLinear.coerceAtLeast(0.0001f))).coerceIn(ctrl.minimum, ctrl.maximum)
+                    val db = if (gainLinear <= 0.0001f) ctrl.minimum
+                             else (20f * log10(gainLinear)).coerceIn(ctrl.minimum, ctrl.maximum)
                     ctrl.value = db
                 }
             }

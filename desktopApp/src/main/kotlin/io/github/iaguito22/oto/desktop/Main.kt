@@ -32,6 +32,7 @@ import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.YouTubeLocale
 import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.LIKED_ID
+import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.OtoDirs
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.account.Account
@@ -41,6 +42,7 @@ import io.github.iaguito22.oto.desktop.ui.ArtworkLoader
 import io.github.iaguito22.oto.desktop.ui.ArtworkPalette
 import io.github.iaguito22.oto.desktop.ui.DesktopMenuSheet
 import io.github.iaguito22.oto.desktop.ui.DesktopStage
+import io.github.iaguito22.oto.desktop.ui.SaveToModal
 import io.github.iaguito22.oto.dj.Plays
 import io.github.iaguito22.oto.dj.YouTubeCatalog
 import io.github.iaguito22.oto.importer.Importer
@@ -105,6 +107,7 @@ fun main() {
 
         var menuOpen by remember { mutableStateOf(false) }
         var menuTab by remember { mutableIntStateOf(0) } // 0 = Tu música, 1 = Explorar
+        var savingTrack by remember { mutableStateOf<Heard?>(null) }
         var lastWheelToggleMs by remember { mutableLongStateOf(0L) }
 
         Window(
@@ -114,6 +117,10 @@ fun main() {
             onPreviewKeyEvent = { ev ->
                 if (ev.type == KeyEventType.KeyDown) {
                     when {
+                        ev.key == Key.Escape && savingTrack != null -> {
+                            savingTrack = null
+                            true
+                        }
                         ev.key == Key.Escape && menuOpen -> {
                             menuOpen = false
                             true
@@ -160,6 +167,22 @@ fun main() {
                             player.seekTo((player.position() - 5000L).coerceAtLeast(0L))
                             true
                         }
+                        !menuOpen && ev.key == Key.DirectionUp -> {
+                            player.adjustVolume(0.05f)
+                            true
+                        }
+                        !menuOpen && ev.key == Key.DirectionDown -> {
+                            player.adjustVolume(-0.05f)
+                            true
+                        }
+                        !menuOpen && (ev.key == Key.B || (ev.isCtrlPressed && ev.key == Key.D)) -> {
+                            val cur = player.state.value
+                            val sid = cur.id
+                            if (sid != null) {
+                                savingTrack = Heard(sid, cur.title, cur.artist, cur.artwork)
+                            }
+                            true
+                        }
                         else -> false
                     }
                 } else false
@@ -174,7 +197,10 @@ fun main() {
             val lyricsLoading by player.lyricsLoading.collectAsState()
             val positionMs by player.positionMs.collectAsState()
             val quality by player.currentQuality.collectAsState()
+            val volume by player.volume.collectAsState()
             val likedIds by prefs.likedIds.collectAsState(initial = emptySet())
+            val likedList by prefs.likedList.collectAsState(initial = LocalPlaylist(LIKED_ID, "Me gusta", emptyList()))
+            val playlists by prefs.playlists.collectAsState(initial = emptyList())
             val uiScope = rememberCoroutineScope()
 
             var artwork by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -215,10 +241,24 @@ fun main() {
                     liked = isLiked,
                     lyrics = lyrics,
                     lyricsLoading = lyricsLoading,
+                    volume = volume,
                     onTogglePlay = player::toggle,
                     onPrev = player::previous,
                     onNext = player::next,
                     onSeek = player::seekTo,
+                    onAdjustVolume = player::adjustVolume,
+                    onSaveTo = {
+                        val id = nowPlaying.id ?: return@DesktopStage
+                        savingTrack = Heard(id, nowPlaying.title, nowPlaying.artist, nowPlaying.artwork)
+                    },
+                    onOpenArtist = { id, name ->
+                        if (!id.isNullOrBlank()) {
+                            menu.openArtist(id, name)
+                        } else {
+                            menu.onQuery(name)
+                        }
+                        menuOpen = true
+                    },
                     onToggleLike = {
                         val id = nowPlaying.id ?: return@DesktopStage
                         val heard = Heard(id, nowPlaying.title, nowPlaying.artist, nowPlaying.artwork)
@@ -254,6 +294,7 @@ fun main() {
                     onSetLoop = player::setLoop,
                     onMoveQueue = player::move,
                     onRemoveQueue = player::remove,
+                    onClearQueue = player::clearQueue,
                     onPlaySong = player::play,
                     onPlayAll = { songs, i, item -> player.playAll(songs, i, item) },
                     onPlayLocal = { list, idx -> player.playLocal(list, idx, list.id == LIKED_ID) },
@@ -261,7 +302,36 @@ fun main() {
                     onSkipToQueue = player::skipTo,
                     selectedTab = menuTab,
                     onSelectTab = { menuTab = it },
+                    onSaveTrack = { savingTrack = it },
                 )
+
+                // Modal emergente de guardado en listas (accesible desde Stage, Menú y atajo de teclado B)
+                if (savingTrack != null) {
+                    SaveToModal(
+                        track = savingTrack!!,
+                        playlists = playlists,
+                        likedList = likedList,
+                        accent = palette.primary,
+                        onToggleLike = { h -> uiScope.launch { prefs.toggleLike(h) } },
+                        onTogglePlaylist = { pid, h ->
+                            uiScope.launch {
+                                val pl = playlists.firstOrNull { it.id == pid }
+                                if (pl != null && pl.songs.any { it.id == h.id }) {
+                                    prefs.removeFromPlaylist(pid, h.id)
+                                } else {
+                                    prefs.addToPlaylist(pid, h)
+                                }
+                            }
+                        },
+                        onCreateAndAdd = { name, h ->
+                            uiScope.launch {
+                                val pid = prefs.createPlaylist(name)
+                                prefs.addToPlaylist(pid, h)
+                            }
+                        },
+                        onDismiss = { savingTrack = null },
+                    )
+                }
             }
         }
     }

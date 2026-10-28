@@ -90,6 +90,10 @@ class DesktopPlayerConnection(
     private val _lyricsLoading = MutableStateFlow(false)
     val lyricsLoading: StateFlow<Boolean> = _lyricsLoading.asStateFlow()
 
+    private val _volume = MutableStateFlow(1.0f)
+    val volume: StateFlow<Float> = _volume.asStateFlow()
+
+    private var currentLoudnessGain: Float = 1.0f
     private var songQueue = mutableListOf<SongItem>()
     private var currentIndex = -1
     private var radio: Radio? = null
@@ -266,6 +270,30 @@ class DesktopPlayerConnection(
         syncQueueFlow()
     }
 
+    fun clearQueue() {
+        val cur = currentIndex
+        if (cur in songQueue.indices) {
+            val curSong = songQueue[cur]
+            songQueue.clear()
+            songQueue.add(curSong)
+            currentIndex = 0
+        } else {
+            songQueue.clear()
+            currentIndex = -1
+        }
+        syncQueueFlow()
+    }
+
+    fun setVolume(vol: Float) {
+        val clamped = vol.coerceIn(0f, 1f)
+        _volume.value = clamped
+        engine.setGain(currentLoudnessGain * clamped)
+    }
+
+    fun adjustVolume(delta: Float) {
+        setVolume(_volume.value + delta)
+    }
+
     override fun setShuffle(on: Boolean) {
         _shuffle.value = on
         scope.launch { prefs.setShuffle(on) }
@@ -403,7 +431,8 @@ class DesktopPlayerConnection(
                 _currentQuality.value = stream.quality
                 // Normalización igual que PlaybackService: solo atenúa picos fuertes (loudnessDb > 0)
                 val gain = stream.loudnessDb?.let { min(1f, 10f.pow(-it.toFloat() / 20f)) } ?: 1f
-                engine.setGain(gain)
+                currentLoudnessGain = gain
+                engine.setGain(gain * _volume.value)
                 engine.loadAndPlay(
                     cacheKey = tier.key(song.id),
                     streamUrl = stream.url,

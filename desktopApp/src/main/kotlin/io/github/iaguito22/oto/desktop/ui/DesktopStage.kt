@@ -33,6 +33,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -50,12 +52,16 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.VolumeDown
+import androidx.compose.material.icons.automirrored.rounded.VolumeMute
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.Icon
@@ -73,6 +79,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.text.style.TextDecoration
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
@@ -119,7 +128,7 @@ import kotlin.math.sin
  *   controles internos traslúcidos (`Anterior`, `Play/Pause`, `Siguiente`) que **solo aparecen al hacer hover**.
  * - Columna derecha con letras sincronizadas estilo karaoke Caelestia.
  */
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun DesktopStage(
     nowPlaying: NowPlaying,
@@ -131,14 +140,18 @@ fun DesktopStage(
     liked: Boolean,
     lyrics: Lyrics?,
     lyricsLoading: Boolean,
+    volume: Float = 1.0f,
     headerStyle: Int = 0,
     onTogglePlay: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onSeek: (Long) -> Unit,
     onToggleLike: () -> Unit,
+    onSaveTo: () -> Unit = {},
+    onOpenArtist: (id: String?, name: String) -> Unit = { _, _ -> },
     onOpenSource: () -> Unit,
     onOpenMenu: () -> Unit,
+    onAdjustVolume: (Float) -> Unit = {},
 ) {
     val animPal = rememberAnimatedPalette(palette)
     val inf = rememberInfiniteTransition(label = "bgDrift")
@@ -151,6 +164,17 @@ fun DesktopStage(
 
     // Dirección de salto para animar la transición de canción en la carátula y el título.
     var skipDir by remember { mutableIntStateOf(1) }
+
+    // Control de visibilidad del overlay flotante de volumen al modificarlo
+    var lastVolumeChangeMs by remember { mutableLongStateOf(0L) }
+    var prevVol by remember { mutableFloatStateOf(volume) }
+    LaunchedEffect(volume) {
+        if (abs(volume - prevVol) > 0.001f) {
+            lastVolumeChangeMs = System.currentTimeMillis()
+            prevVol = volume
+        }
+    }
+    val showVolume = (System.currentTimeMillis() - lastVolumeChangeMs) < 1600L
 
     Box(
         modifier = Modifier
@@ -253,6 +277,9 @@ fun DesktopStage(
                             onNext = { skipDir = 1; onNext() },
                             onSeek = onSeek,
                             onToggleLike = onToggleLike,
+                            onSaveTo = onSaveTo,
+                            onOpenArtist = onOpenArtist,
+                            onAdjustVolume = onAdjustVolume,
                         )
                     }
 
@@ -284,6 +311,74 @@ fun DesktopStage(
                         }
                     }
                 }
+            }
+        }
+
+        // Píldora flotante animada de volumen estilo liquid glass (arriba a la derecha)
+        AnimatedVisibility(
+            visible = showVolume,
+            enter = fadeIn(tween(180)) + scaleIn(spring(dampingRatio = 0.8f, stiffness = 500f), initialScale = 0.88f),
+            exit = fadeOut(tween(240)),
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = 28.dp, end = 36.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .shadow(20.dp, CircleShape, ambientColor = animPal.primary.copy(alpha = 0.40f), spotColor = Color.Black)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color(0xE61B152A),
+                                Color(0xF0120D1F),
+                            ),
+                        ),
+                    )
+                    .border(
+                        1.dp,
+                        Brush.horizontalGradient(
+                            listOf(
+                                Color.White.copy(alpha = 0.45f),
+                                animPal.primary.copy(alpha = 0.40f),
+                                Color.White.copy(alpha = 0.15f),
+                            ),
+                        ),
+                        CircleShape,
+                    )
+                    .padding(horizontal = 16.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(
+                    imageVector = when {
+                        volume <= 0.001f -> Icons.AutoMirrored.Rounded.VolumeMute
+                        volume < 0.5f -> Icons.AutoMirrored.Rounded.VolumeDown
+                        else -> Icons.AutoMirrored.Rounded.VolumeUp
+                    },
+                    contentDescription = "Volumen",
+                    tint = animPal.primary,
+                    modifier = Modifier.size(19.dp),
+                )
+                Box(
+                    modifier = Modifier
+                        .width(72.dp)
+                        .height(5.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.15f)),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(volume.coerceIn(0f, 1f))
+                            .clip(CircleShape)
+                            .background(animPal.primary),
+                    )
+                }
+                Text(
+                    text = "${(volume * 100f).roundToInt()}%",
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                )
             }
         }
     }
@@ -337,7 +432,7 @@ private fun TopSourceOriginBar(
     }
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun SpotifyPlayerColumn(
     nowPlaying: NowPlaying,
@@ -352,6 +447,9 @@ private fun SpotifyPlayerColumn(
     onNext: () -> Unit,
     onSeek: (Long) -> Unit,
     onToggleLike: () -> Unit,
+    onSaveTo: () -> Unit = {},
+    onOpenArtist: (id: String?, name: String) -> Unit = { _, _ -> },
+    onAdjustVolume: (Float) -> Unit = {},
 ) {
     val coverInteraction = remember { MutableInteractionSource() }
     val isHovered by coverInteraction.collectIsHoveredAsState()
@@ -387,6 +485,11 @@ private fun SpotifyPlayerColumn(
                 .onPointerEvent(PointerEventType.Enter) { manualHover = true }
                 .onPointerEvent(PointerEventType.Move) { manualHover = true }
                 .onPointerEvent(PointerEventType.Exit) { manualHover = false }
+                .onPointerEvent(PointerEventType.Scroll) { ev ->
+                    val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                    if (dy < -0.1f) onAdjustVolume(0.04f)
+                    else if (dy > 0.1f) onAdjustVolume(-0.04f)
+                }
                 .shadow(
                     elevation = 28.dp,
                     shape = RoundedCornerShape(20.dp),
@@ -402,6 +505,7 @@ private fun SpotifyPlayerColumn(
                             onToggleLike()
                             burstTrigger = System.currentTimeMillis()
                         },
+                        onLongPress = { onSaveTo() },
                         onTap = { onTogglePlay() },
                     )
                 },
@@ -506,25 +610,70 @@ private fun SpotifyPlayerColumn(
                         }
                     }
 
-                    // Botón Me gusta en la esquina superior derecha de la carátula
-                    Box(
+                    // Botones en la esquina superior derecha: Guardar en lista + Me gusta
+                    Row(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
-                            .padding(14.dp)
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.60f))
-                            .border(1.dp, Color.White.copy(alpha = 0.20f), CircleShape)
-                            .clickable(onClick = onToggleLike),
-                        contentAlignment = Alignment.Center,
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(
-                            imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                            contentDescription = "Guardar",
-                            tint = if (liked) palette.primary else Color.White.copy(alpha = 0.85f),
-                            modifier = Modifier.size(18.dp),
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.60f))
+                                .border(1.dp, Color.White.copy(alpha = 0.20f), CircleShape)
+                                .clickable(onClick = onSaveTo),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.PlaylistAdd,
+                                contentDescription = "Guardar en lista",
+                                tint = Color.White.copy(alpha = 0.85f),
+                                modifier = Modifier.size(19.dp),
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.60f))
+                                .border(1.dp, Color.White.copy(alpha = 0.20f), CircleShape)
+                                .clickable(onClick = onToggleLike),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                contentDescription = if (liked) "Quitar de Me gusta" else "Añadir a Me gusta",
+                                tint = if (liked) palette.primary else Color.White.copy(alpha = 0.85f),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
+                }
+            }
+
+            // Marca de guardado visible en la esquina inferior derecha cuando no hay hover si está guardada
+            if (!isCoverActive && liked) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(14.dp)
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.50f))
+                        .border(1.dp, palette.primary.copy(alpha = 0.50f), CircleShape)
+                        .clickable(onClick = onSaveTo),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Favorite,
+                        contentDescription = "Guardado en Me gusta",
+                        tint = palette.primary,
+                        modifier = Modifier.size(16.dp),
+                    )
                 }
             }
 
@@ -576,23 +725,54 @@ private fun SpotifyPlayerColumn(
 
         Spacer(Modifier.height(6.dp))
 
-        // 3. Artista abajo del título
+        // 3. Artista abajo del título (interactivo con enlace a artista)
         AnimatedContent(
-            targetState = Pair(nowPlaying.id, nowPlaying.artist.ifBlank { "Oto · YouTube Music" }),
+            targetState = Pair(nowPlaying.id, nowPlaying.artists to nowPlaying.artist),
             transitionSpec = {
                 (fadeIn(tween(320)) + slideInHorizontally(spring(dampingRatio = 0.75f, stiffness = 320f)) { skipDir * it / 6 }) togetherWith
                     (fadeOut(tween(160)) + slideOutHorizontally(tween(160)) { -skipDir * it / 8 })
             },
             label = "trackArtist",
-        ) { (_, artist) ->
-            Text(
-                text = artist,
-                fontSize = 21.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White.copy(alpha = 0.65f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        ) { (_, pair) ->
+            val (artists, fallbackArtist) = pair
+            if (artists.isNotEmpty()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    artists.forEachIndexed { i, (name, id) ->
+                        var artHover by remember { mutableStateOf(false) }
+                        Text(
+                            text = name,
+                            fontSize = 21.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (artHover) Color.White else Color.White.copy(alpha = 0.65f),
+                            textDecoration = if (artHover) TextDecoration.Underline else TextDecoration.None,
+                            modifier = Modifier
+                                .onPointerEvent(PointerEventType.Enter) { artHover = true }
+                                .onPointerEvent(PointerEventType.Exit) { artHover = false }
+                                .clickable { onOpenArtist(id, name) },
+                        )
+                        if (i < artists.lastIndex) {
+                            Text(
+                                text = "·",
+                                fontSize = 21.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White.copy(alpha = 0.40f),
+                            )
+                        }
+                    }
+                }
+            } else {
+                Text(
+                    text = fallbackArtist.ifBlank { "Oto · YouTube Music" },
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White.copy(alpha = 0.65f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
         Spacer(Modifier.height(16.dp))

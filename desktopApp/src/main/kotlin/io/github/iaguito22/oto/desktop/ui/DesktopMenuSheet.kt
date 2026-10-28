@@ -42,8 +42,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Album
-import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
@@ -58,7 +59,6 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
@@ -165,6 +165,7 @@ fun DesktopMenuSheet(
     onSetLoop: (Boolean) -> Unit,
     onMoveQueue: (from: Int, to: Int) -> Unit,
     onRemoveQueue: (index: Int) -> Unit,
+    onClearQueue: () -> Unit = {},
     onPlaySong: (SongItem) -> Unit,
     onPlayAll: (List<SongItem>, Int?, YTItem?) -> Unit,
     onPlayLocal: (LocalPlaylist, Int?) -> Unit,
@@ -172,6 +173,7 @@ fun DesktopMenuSheet(
     onSkipToQueue: (Int) -> Unit,
     selectedTab: Int = 0,
     onSelectTab: (Int) -> Unit = {},
+    onSaveTrack: (Heard) -> Unit = {},
 ) {
     val menuState by menu.state.collectAsState()
     val likedList by prefs.likedList.collectAsState(initial = LocalPlaylist(LIKED_ID, "Me gusta", emptyList()))
@@ -185,13 +187,11 @@ fun DesktopMenuSheet(
     val scope = rememberCoroutineScope()
 
     var subView by remember { mutableStateOf(MenuSubView.None) }
-    var savingTrack by remember { mutableStateOf<Heard?>(null) }
     val searchFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(open) {
         if (!open) {
             subView = MenuSubView.None
-            savingTrack = null
         }
     }
 
@@ -365,7 +365,7 @@ fun DesktopMenuSheet(
                                         },
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    Icon(Icons.Rounded.ArrowBack, "Atrás", tint = Color.White, modifier = Modifier.size(19.dp))
+                                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Atrás", tint = Color.White, modifier = Modifier.size(19.dp))
                                 }
                                 Text(
                                     text = when {
@@ -450,7 +450,7 @@ fun DesktopMenuSheet(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
-                                Icon(Icons.Rounded.QueueMusic, "Cola", tint = if (subView == MenuSubView.Queue) palette.primary else Color.White.copy(alpha = 0.85f), modifier = Modifier.size(17.dp))
+                                Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Cola", tint = if (subView == MenuSubView.Queue) palette.primary else Color.White.copy(alpha = 0.85f), modifier = Modifier.size(17.dp))
                                 if (queue.isNotEmpty()) {
                                     Text(
                                         text = "${queue.size}",
@@ -508,7 +508,7 @@ fun DesktopMenuSheet(
                                     onFilter = menu::onFilter,
                                     onPlaySong = { onPlaySong(it); onToggleOpen(false) },
                                     onOpenItem = menu::open,
-                                    onSaveTo = { savingTrack = it },
+                                    onSaveTo = onSaveTrack,
                                 )
                             }
                             topPage is Page.Local -> {
@@ -519,7 +519,7 @@ fun DesktopMenuSheet(
                                         palette = palette,
                                         currentMediaId = currentMediaId,
                                         onPlayIndex = { idx -> onPlayLocal(list, idx); onToggleOpen(false) },
-                                        onSaveTo = { savingTrack = it },
+                                        onSaveTo = onSaveTrack,
                                         onDeletePlaylist = if (list.id != LIKED_ID) {
                                             {
                                                 scope.launch {
@@ -544,7 +544,7 @@ fun DesktopMenuSheet(
                                     palette = palette,
                                     currentMediaId = currentMediaId,
                                     onPlayIndex = { idx -> onPlayLocal(topPage.list, idx); onToggleOpen(false) },
-                                    onSaveTo = { savingTrack = it },
+                                    onSaveTo = onSaveTrack,
                                     onDeletePlaylist = null,
                                     onRemoveSong = null,
                                 )
@@ -556,7 +556,7 @@ fun DesktopMenuSheet(
                                     currentMediaId = currentMediaId,
                                     onPlayAll = { songs, idx -> onPlayAll(songs, idx, topPage.item); onToggleOpen(false) },
                                     onOpenItem = menu::open,
-                                    onSaveTo = { savingTrack = it },
+                                    onSaveTo = onSaveTrack,
                                 )
                             }
                             subView == MenuSubView.Settings -> {
@@ -585,6 +585,7 @@ fun DesktopMenuSheet(
                                     onToggleLoop = { onSetLoop(!loop) },
                                     onMove = onMoveQueue,
                                     onRemove = onRemoveQueue,
+                                    onClearQueue = onClearQueue,
                                     onSkipTo = { idx -> onSkipToQueue(idx); onToggleOpen(false) },
                                 )
                             }
@@ -599,7 +600,7 @@ fun DesktopMenuSheet(
                                     onPlayLocal = { list, idx -> onPlayLocal(list, idx); onToggleOpen(false) },
                                     onPlayDj = { onPlayDj(); onToggleOpen(false) },
                                     onPlayHeard = { h -> onPlaySong(h.toSong()); onToggleOpen(false) },
-                                    onSaveTo = { savingTrack = it },
+                                    onSaveTo = onSaveTrack,
                                     onCreatePlaylist = { name ->
                                         scope.launch {
                                             val newId = prefs.createPlaylist(name)
@@ -620,41 +621,13 @@ fun DesktopMenuSheet(
                                     onRetry = menu::loadHome,
                                     onPlaySong = { onPlaySong(it); onToggleOpen(false) },
                                     onOpenItem = menu::open,
-                                    onSaveTo = { savingTrack = it },
+                                    onSaveTo = onSaveTrack,
                                 )
                             }
                         }
                     }
                 }
             }
-        }
-
-        // Modal emergente «Guardar en...» para añadir canciones a Me gusta o listas propias
-        if (savingTrack != null) {
-            SaveToModal(
-                track = savingTrack!!,
-                playlists = playlists,
-                likedList = likedList,
-                accent = palette.primary,
-                onToggleLike = { h -> scope.launch { prefs.toggleLike(h) } },
-                onTogglePlaylist = { pid, h ->
-                    scope.launch {
-                        val pl = playlists.firstOrNull { it.id == pid }
-                        if (pl != null && pl.songs.any { it.id == h.id }) {
-                            prefs.removeFromPlaylist(pid, h.id)
-                        } else {
-                            prefs.addToPlaylist(pid, h)
-                        }
-                    }
-                },
-                onCreateAndAdd = { name, h ->
-                    scope.launch {
-                        val pid = prefs.createPlaylist(name)
-                        prefs.addToPlaylist(pid, h)
-                    }
-                },
-                onDismiss = { savingTrack = null },
-            )
         }
     }
 }
@@ -1185,7 +1158,7 @@ private fun PlaylistShelfCard(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.Rounded.QueueMusic,
+                imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
                 contentDescription = null,
                 tint = accent,
                 modifier = Modifier.size(42.dp),
@@ -1787,6 +1760,7 @@ private fun QueuePane(
     onToggleLoop: () -> Unit,
     onMove: (from: Int, to: Int) -> Unit,
     onRemove: (index: Int) -> Unit,
+    onClearQueue: () -> Unit = {},
     onSkipTo: (Int) -> Unit,
 ) {
     if (queue.isEmpty()) {
@@ -1804,6 +1778,14 @@ private fun QueuePane(
                 Text("${queue.size} canciones en total", fontSize = 12.sp, color = Color.White.copy(alpha = 0.6f))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (queue.size > 1) {
+                    MenuTabPill(
+                        label = "Vaciar cola",
+                        selected = false,
+                        accent = Color(0xFFFF5252),
+                        onClick = onClearQueue,
+                    )
+                }
                 MenuTabPill(
                     label = if (shuffle) "Aleatorio: Sí" else "Aleatorio: No",
                     selected = shuffle,
@@ -2229,7 +2211,7 @@ private fun SongRowDesktop(
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun SaveToModal(
+fun SaveToModal(
     track: Heard,
     playlists: List<LocalPlaylist>,
     likedList: LocalPlaylist,
