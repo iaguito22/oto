@@ -754,41 +754,12 @@ private fun LyricsStageColumn(
 ) {
     val listState = rememberLazyListState()
 
-    // Difuminado generoso arriba y abajo con máscara de gradiente vertical (BlendMode.DstOut)
+    // Contenedor de letras sin capa offscreen pesada para evitar artefactos de Skia en escritorio
     BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-            .drawWithContent {
-                drawContent()
-                val fadeTop = 130.dp.toPx()
-                val fadeBottom = 160.dp.toPx()
-                // Difuminado superior suave
-                drawRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(Color.Black, Color.Transparent),
-                        startY = 0f,
-                        endY = fadeTop,
-                    ),
-                    topLeft = Offset.Zero,
-                    size = Size(size.width, fadeTop),
-                    blendMode = BlendMode.DstOut,
-                )
-                // Difuminado inferior suave
-                drawRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(Color.Transparent, Color.Black),
-                        startY = size.height - fadeBottom,
-                        endY = size.height,
-                    ),
-                    topLeft = Offset(0f, size.height - fadeBottom),
-                    size = Size(size.width, fadeBottom),
-                    blendMode = BlendMode.DstOut,
-                )
-            },
+        modifier = Modifier.fillMaxSize(),
     ) {
         val boxHeightPx = constraints.maxHeight.toFloat()
-        val anchorOffset = (boxHeightPx * 0.30f).toInt()
+        val anchorOffset = (boxHeightPx * 0.32f).toInt()
 
         when {
             loading -> {
@@ -814,7 +785,7 @@ private fun LyricsStageColumn(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = 40.dp, bottom = 60.dp),
+                    contentPadding = PaddingValues(top = 48.dp, bottom = 80.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     itemsIndexed(lines, key = { idx, l -> "${l.start}-$idx" }) { idx, line ->
@@ -832,7 +803,7 @@ private fun LyricsStageColumn(
             lyrics is Lyrics.Plain && lyrics.lines.isNotEmpty() -> {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = 40.dp, bottom = 60.dp),
+                    contentPadding = PaddingValues(top = 48.dp, bottom = 80.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     itemsIndexed(lyrics.lines) { _, line: String ->
@@ -865,6 +836,38 @@ private fun LyricsStageColumn(
                 }
             }
         }
+
+        // Difuminado superior suave
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(72.dp)
+                .align(Alignment.TopCenter)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            palette.deep.copy(alpha = 0.85f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
+
+        // Difuminado inferior suave
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(110.dp)
+                .align(Alignment.BottomCenter)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            palette.deep.copy(alpha = 0.92f),
+                        ),
+                    ),
+                ),
+        )
     }
 }
 
@@ -878,7 +881,7 @@ private fun SyncedLyricRow(
 ) {
     val isActive = dist == 0
     val scale by animateFloatAsState(
-        targetValue = if (isActive) 1.045f else 1f,
+        targetValue = if (isActive) 1.035f else 1f,
         animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
         label = "lyricScale",
     )
@@ -890,21 +893,21 @@ private fun SyncedLyricRow(
     val absDist = kotlin.math.abs(dist)
     val targetAlpha = when {
         isActive -> 1f
-        dist == 1 -> 0.62f
-        dist == -1 -> 0.42f
-        absDist == 2 -> 0.32f
-        absDist == 3 -> 0.22f
-        else -> 0.15f
+        dist == 1 -> 0.58f
+        dist == -1 -> 0.40f
+        absDist == 2 -> 0.28f
+        absDist == 3 -> 0.18f
+        else -> 0.10f
     }
     val alpha by animateFloatAsState(
         targetValue = targetAlpha,
-        animationSpec = tween(320, easing = FastOutSlowInEasing),
+        animationSpec = tween(280, easing = FastOutSlowInEasing),
         label = "lyricAlpha",
     )
     val blurRadius = when {
         isActive || absDist <= 1 -> 0.dp
-        absDist == 2 -> 0.8.dp
-        else -> 1.6.dp
+        absDist == 2 -> 0.6.dp
+        else -> 1.4.dp
     }
 
     Column(
@@ -928,15 +931,15 @@ private fun SyncedLyricRow(
     ) {
         Text(
             text = line.text.ifBlank { "♪" },
-            fontSize = if (isActive) 35.sp else 26.sp,
-            fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Bold,
+            fontSize = if (isActive) 36.sp else 26.sp,
+            fontWeight = if (isActive) FontWeight.Black else FontWeight.Bold,
             color = if (isActive) Color.White else Color.White.copy(alpha = alpha),
-            lineHeight = if (isActive) 46.sp else 36.sp,
+            lineHeight = if (isActive) 48.sp else 36.sp,
             style = if (isActive) {
                 TextStyle(
                     shadow = Shadow(
-                        color = Color.White.copy(alpha = 0.60f),
-                        blurRadius = 22f,
+                        color = Color.White.copy(alpha = 0.75f),
+                        blurRadius = 26f,
                     ),
                 )
             } else TextStyle.Default,

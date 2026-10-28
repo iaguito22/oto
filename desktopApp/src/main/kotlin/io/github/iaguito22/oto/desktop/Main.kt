@@ -104,7 +104,7 @@ fun main() {
         )
 
         var menuOpen by remember { mutableStateOf(false) }
-        var headerStyle by remember { mutableIntStateOf(0) } // 0 = Lateral Pill, 1 = Lateral Circle, 2 = Under Vinyl
+        var menuTab by remember { mutableIntStateOf(0) } // 0 = Tu música, 1 = Explorar
         var lastWheelToggleMs by remember { mutableLongStateOf(0L) }
 
         Window(
@@ -118,24 +118,46 @@ fun main() {
                             menuOpen = false
                             true
                         }
-                        ev.isCtrlPressed && ev.key == Key.K -> {
+                        (ev.isCtrlPressed && ev.key == Key.K) || (ev.isCtrlPressed && ev.key == Key.F) -> {
                             menuOpen = !menuOpen
                             true
                         }
                         ev.key == Key.F1 -> {
-                            headerStyle = 0
+                            menuTab = 0
+                            menuOpen = true
                             true
                         }
                         ev.key == Key.F2 -> {
-                            headerStyle = 1
+                            menuTab = 1
+                            menuOpen = true
                             true
                         }
-                        ev.key == Key.F3 -> {
-                            headerStyle = 2
+                        ev.key == Key.Tab && menuOpen && menu.state.value.query.isEmpty() -> {
+                            menuTab = (menuTab + 1) % 2
                             true
                         }
                         ev.key == Key.Spacebar && !menuOpen -> {
                             player.toggle()
+                            true
+                        }
+                        ev.key == Key.MediaPlayPause -> {
+                            player.toggle()
+                            true
+                        }
+                        !menuOpen && ev.isCtrlPressed && ev.key == Key.DirectionRight -> {
+                            player.next()
+                            true
+                        }
+                        !menuOpen && ev.isCtrlPressed && ev.key == Key.DirectionLeft -> {
+                            player.previous()
+                            true
+                        }
+                        !menuOpen && !ev.isCtrlPressed && ev.key == Key.DirectionRight -> {
+                            player.seekTo(player.position() + 5000L)
+                            true
+                        }
+                        !menuOpen && !ev.isCtrlPressed && ev.key == Key.DirectionLeft -> {
+                            player.seekTo((player.position() - 5000L).coerceAtLeast(0L))
                             true
                         }
                         else -> false
@@ -193,7 +215,6 @@ fun main() {
                     liked = isLiked,
                     lyrics = lyrics,
                     lyricsLoading = lyricsLoading,
-                    headerStyle = headerStyle,
                     onTogglePlay = player::toggle,
                     onPrev = player::previous,
                     onNext = player::next,
@@ -238,6 +259,8 @@ fun main() {
                     onPlayLocal = { list, idx -> player.playLocal(list, idx, list.id == LIKED_ID) },
                     onPlayDj = { player.playDj {} },
                     onSkipToQueue = player::skipTo,
+                    selectedTab = menuTab,
+                    onSelectTab = { menuTab = it },
                 )
             }
         }

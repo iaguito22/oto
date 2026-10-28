@@ -39,11 +39,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDone
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -73,6 +75,8 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -87,6 +91,7 @@ import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -152,6 +157,8 @@ fun DesktopMenuSheet(
     onPlayLocal: (LocalPlaylist, Int?) -> Unit,
     onPlayDj: () -> Unit,
     onSkipToQueue: (Int) -> Unit,
+    selectedTab: Int = 0,
+    onSelectTab: (Int) -> Unit = {},
 ) {
     val menuState by menu.state.collectAsState()
     val likedList by prefs.likedList.collectAsState(initial = LocalPlaylist(LIKED_ID, "Me gusta", emptyList()))
@@ -164,8 +171,8 @@ fun DesktopMenuSheet(
     val cloudState by cloud.state.collectAsState()
     val scope = rememberCoroutineScope()
 
-    var selectedPage by remember { mutableIntStateOf(0) } // 0 = Tu música, 1 = Explorar
     var subView by remember { mutableStateOf(MenuSubView.None) }
+    val searchFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(open) {
         if (!open) {
@@ -362,9 +369,9 @@ fun DesktopMenuSheet(
                         } else {
                             // Selector segmentado de 2 pestañas: [ Tu música | Explorar ]
                             DesktopSegmentedTabs(
-                                selectedPage = selectedPage,
+                                selectedPage = selectedTab,
                                 accent = palette.primary,
-                                onSelect = { selectedPage = it },
+                                onSelect = onSelectTab,
                             )
                         }
 
@@ -378,6 +385,7 @@ fun DesktopMenuSheet(
                                 .clip(CircleShape)
                                 .background(Color.White.copy(alpha = 0.08f))
                                 .border(1.dp, palette.primary.copy(alpha = 0.22f), CircleShape)
+                                .clickable { searchFocusRequester.requestFocus() }
                                 .padding(horizontal = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -397,7 +405,7 @@ fun DesktopMenuSheet(
                                     singleLine = true,
                                     textStyle = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium),
                                     cursorBrush = SolidColor(palette.primary),
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier.fillMaxWidth().focusRequester(searchFocusRequester),
                                 )
                             }
                             if (menuState.query.isNotEmpty()) {
@@ -495,8 +503,33 @@ fun DesktopMenuSheet(
                                         palette = palette,
                                         currentMediaId = currentMediaId,
                                         onPlayIndex = { idx -> onPlayLocal(list, idx); onToggleOpen(false) },
+                                        onDeletePlaylist = if (list.id != LIKED_ID) {
+                                            {
+                                                scope.launch {
+                                                    prefs.deletePlaylist(list.id)
+                                                    menu.closeDetail()
+                                                }
+                                            }
+                                        } else null,
+                                        onRemoveSong = if (list.id != LIKED_ID) {
+                                            { songId ->
+                                                scope.launch {
+                                                    prefs.removeFromPlaylist(list.id, songId)
+                                                }
+                                            }
+                                        } else null,
                                     )
                                 }
+                            }
+                            topPage is Page.Smart -> {
+                                LocalPlaylistDetailPane(
+                                    list = topPage.list,
+                                    palette = palette,
+                                    currentMediaId = currentMediaId,
+                                    onPlayIndex = { idx -> onPlayLocal(topPage.list, idx); onToggleOpen(false) },
+                                    onDeletePlaylist = null,
+                                    onRemoveSong = null,
+                                )
                             }
                             topPage is Page.Remote -> {
                                 RemoteDetailPane(
@@ -536,7 +569,7 @@ fun DesktopMenuSheet(
                                     onSkipTo = { idx -> onSkipToQueue(idx); onToggleOpen(false) },
                                 )
                             }
-                            selectedPage == 0 -> {
+                            selectedTab == 0 -> {
                                 YourMusicPane(
                                     likedList = likedList,
                                     playlists = playlists,
@@ -547,6 +580,12 @@ fun DesktopMenuSheet(
                                     onPlayLocal = { list, idx -> onPlayLocal(list, idx); onToggleOpen(false) },
                                     onPlayDj = { onPlayDj(); onToggleOpen(false) },
                                     onPlayHeard = { h -> onPlaySong(h.toSong()); onToggleOpen(false) },
+                                    onCreatePlaylist = { name ->
+                                        scope.launch {
+                                            val newId = prefs.createPlaylist(name)
+                                            menu.openLocal(newId)
+                                        }
+                                    },
                                 )
                             }
                             else -> {
@@ -556,6 +595,7 @@ fun DesktopMenuSheet(
                                     selectedChip = menuState.chip,
                                     error = menuState.homeError,
                                     palette = palette,
+                                    currentMediaId = currentMediaId,
                                     onChip = menu::onChip,
                                     onRetry = menu::loadHome,
                                     onPlaySong = { onPlaySong(it); onToggleOpen(false) },
@@ -662,13 +702,25 @@ private fun YourMusicPane(
     onPlayLocal: (LocalPlaylist, Int?) -> Unit,
     onPlayDj: () -> Unit,
     onPlayHeard: (Heard) -> Unit,
+    onCreatePlaylist: (String) -> Unit,
 ) {
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var newListName by remember { mutableStateOf("") }
+    val createFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(showCreateDialog) {
+        if (showCreateDialog) {
+            kotlinx.coroutines.delay(100L)
+            createFocusRequester.requestFocus()
+        }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(22.dp),
         contentPadding = PaddingValues(bottom = 24.dp),
     ) {
-        // 1. Estante fijado (Pinned Shelf): DJ + Me gusta + Listas fijadas
+        // 1. Estante fijado (Pinned Shelf): DJ + Me gusta + Listas fijadas + Nueva lista
         item(key = "pinnedShelf") {
             LazyRow(
                 modifier = Modifier.fillMaxWidth(),
@@ -701,19 +753,113 @@ private fun YourMusicPane(
                         onPlayDirect = { onPlayLocal(pl, null) },
                     )
                 }
+
+                // Tarjeta rápida para crear nueva lista
+                item(key = "newPlaylistCard") {
+                    NewPlaylistShelfCard(
+                        accent = palette.primary,
+                        onClick = { showCreateDialog = true },
+                    )
+                }
+            }
+        }
+
+        // Fila de creación rápida de lista si está activada
+        if (showCreateDialog) {
+            item(key = "createPlaylistInline") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .border(1.dp, palette.primary.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    BasicTextField(
+                        value = newListName,
+                        onValueChange = { newListName = it },
+                        singleLine = true,
+                        textStyle = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                        cursorBrush = SolidColor(palette.primary),
+                        decorationBox = { innerTextField ->
+                            if (newListName.isBlank()) {
+                                Text("Nombre de la nueva lista…", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+                            }
+                            innerTextField()
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(createFocusRequester)
+                            .onPreviewKeyEvent { ev ->
+                                if (ev.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                                    ev.key == androidx.compose.ui.input.key.Key.Enter &&
+                                    newListName.isNotBlank()
+                                ) {
+                                    onCreatePlaylist(newListName.trim())
+                                    newListName = ""
+                                    showCreateDialog = false
+                                    true
+                                } else false
+                            },
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(palette.primary)
+                            .clickable {
+                                if (newListName.isNotBlank()) {
+                                    onCreatePlaylist(newListName.trim())
+                                    newListName = ""
+                                    showCreateDialog = false
+                                }
+                            }
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                    ) {
+                        Text("Crear", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF130E1F))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.08f))
+                            .clickable { showCreateDialog = false; newListName = "" }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text("Cancelar", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.70f))
+                    }
+                }
             }
         }
 
         // 2. Baldosas de 2 columnas para tus listas
-        if (playlists.isNotEmpty()) {
-            item(key = "playlistsGridHeader") {
+        item(key = "playlistsGridHeader") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
                     text = "Tus listas",
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White,
                 )
+                Row(
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .clickable { showCreateDialog = true }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(Icons.Rounded.Add, null, tint = palette.primary, modifier = Modifier.size(16.dp))
+                    Text("Nueva lista", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                }
             }
+        }
+        if (playlists.isNotEmpty()) {
             item(key = "playlistsGrid") {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     val pairs = playlists.chunked(2)
@@ -967,6 +1113,57 @@ private fun PlaylistShelfCard(
 }
 
 @Composable
+private fun NewPlaylistShelfCard(
+    accent: Color,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .width(148.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.White.copy(alpha = 0.04f))
+            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(124.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(
+                    Brush.radialGradient(
+                        listOf(accent.copy(alpha = 0.18f), Color.White.copy(alpha = 0.04f)),
+                    ),
+                )
+                .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(14.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Add,
+                contentDescription = "Nueva lista",
+                tint = accent,
+                modifier = Modifier.size(36.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "Nueva lista",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            maxLines = 1,
+        )
+        Text(
+            text = "Crear lista propia",
+            fontSize = 12.sp,
+            color = Color.White.copy(alpha = 0.50f),
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
 private fun PlaylistTileDesktop(
     playlist: LocalPlaylist,
     accent: Color,
@@ -1040,8 +1237,10 @@ private fun LocalPlaylistDetailPane(
     palette: ArtworkPalette,
     currentMediaId: String?,
     onPlayIndex: (Int?) -> Unit,
+    onDeletePlaylist: (() -> Unit)? = null,
+    onRemoveSong: ((String) -> Unit)? = null,
 ) {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1051,26 +1250,65 @@ private fun LocalPlaylistDetailPane(
                 Text(list.name, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
                 Text("${list.songs.size} canciones", fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f))
             }
-            Box(
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .background(palette.primary)
-                    .clickable { onPlayIndex(null) }
-                    .padding(horizontal = 18.dp, vertical = 9.dp),
-            ) {
-                Text("Aleatoria", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF140E21))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (onDeletePlaylist != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(Color(0xFFE53935).copy(alpha = 0.16f))
+                            .border(1.dp, Color(0xFFE53935).copy(alpha = 0.35f), CircleShape)
+                            .clickable(onClick = onDeletePlaylist)
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    ) {
+                        Text("Eliminar lista", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFFF8A80))
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(palette.primary)
+                        .clickable { onPlayIndex(null) }
+                        .padding(horizontal = 18.dp, vertical = 9.dp),
+                ) {
+                    Text("Aleatoria", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF140E21))
+                }
             }
         }
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            itemsIndexed(list.songs, key = { idx, s -> "${s.id}-$idx" }) { idx, s ->
-                SongRowDesktop(
-                    title = s.title,
-                    subtitle = s.artist,
-                    thumbnail = s.artwork,
-                    isCurrent = s.id == currentMediaId,
-                    accent = palette.primary,
-                    onClick = { onPlayIndex(idx) },
-                )
+        if (list.songs.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("Esta lista está vacía.", color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp)
+            }
+        } else {
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                itemsIndexed(list.songs, key = { idx, s -> "${s.id}-$idx" }) { idx, s ->
+                    SongRowDesktop(
+                        title = s.title,
+                        subtitle = s.artist,
+                        thumbnail = s.artwork,
+                        isCurrent = s.id == currentMediaId,
+                        accent = palette.primary,
+                        onClick = { onPlayIndex(idx) },
+                        trailing = if (onRemoveSong != null) {
+                            {
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White.copy(alpha = 0.06f))
+                                        .clickable { onRemoveSong(s.id) },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Quitar",
+                                        tint = Color.White.copy(alpha = 0.55f),
+                                        modifier = Modifier.size(15.dp),
+                                    )
+                                }
+                            }
+                        } else null,
+                    )
+                }
             }
         }
     }
@@ -1085,7 +1323,8 @@ private fun RemoteDetailPane(
     onOpenItem: (YTItem) -> Unit,
 ) {
     val songs = page.songs
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val shelves = page.shelves
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1109,17 +1348,41 @@ private fun RemoteDetailPane(
         }
         when {
             page.error != null -> Text("Error: ${page.error}", color = palette.secondary, fontSize = 14.sp)
-            songs == null -> Text("Cargando pistas de YouTube Music…", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
-            else -> LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                itemsIndexed(songs, key = { i, s -> "${s.id}-$i" }) { idx, s ->
-                    SongRowDesktop(
-                        title = s.title,
-                        subtitle = s.artists.joinToString { it.name },
-                        thumbnail = s.thumbnail,
-                        isCurrent = s.id == currentMediaId,
-                        accent = palette.primary,
-                        onClick = { onPlayAll(songs, idx) },
-                    )
+            songs == null && shelves.isEmpty() -> Text("Cargando pistas de YouTube Music…", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
+            else -> LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (!songs.isNullOrEmpty()) {
+                    itemsIndexed(songs, key = { i, s -> "${s.id}-$i" }) { idx, s ->
+                        SongRowDesktop(
+                            title = s.title,
+                            subtitle = s.artists.joinToString { it.name },
+                            thumbnail = s.thumbnail,
+                            isCurrent = s.id == currentMediaId,
+                            accent = palette.primary,
+                            onClick = { onPlayAll(songs, idx) },
+                        )
+                    }
+                }
+                if (shelves.isNotEmpty()) {
+                    items(shelves, key = { it.title }) { shelf ->
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(shelf.title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            LazyRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                items(shelf.items, key = { it.id }) { item ->
+                                    ExploreShelfCard(
+                                        item = item,
+                                        accent = palette.primary,
+                                        onClick = {
+                                            if (item is SongItem) onPlayAll(listOf(item), 0)
+                                            else onOpenItem(item)
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1133,15 +1396,19 @@ private fun ExplorePane(
     selectedChip: String?,
     error: String?,
     palette: ArtworkPalette,
+    currentMediaId: String?,
     onChip: (String) -> Unit,
     onRetry: () -> Unit,
     onPlaySong: (SongItem) -> Unit,
     onOpenItem: (YTItem) -> Unit,
 ) {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (chips.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                chips.take(7).forEach { chip ->
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(chips, key = { it.title }) { chip ->
                     MenuTabPill(chip.title, selectedChip == chip.title, palette.secondary) {
                         onChip(chip.title)
                     }
@@ -1155,31 +1422,197 @@ private fun ExplorePane(
                     MenuTabPill("Reintentar", true, palette.primary, onRetry)
                 }
             }
-            shelves == null -> Text("Cargando portada de YouTube Music…", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
-            else -> LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                items(shelves, key = { it.title }) { shelf ->
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(shelf.title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        shelf.items.take(6).forEach { item ->
-                            val sub = when (item) {
-                                is SongItem -> item.artists.joinToString { it.name }
-                                is AlbumItem -> "Álbum · " + item.artists?.joinToString { it.name }.orEmpty()
-                                is ArtistItem -> "Artista"
-                                is PlaylistItem -> "Playlist · " + (item.author?.name ?: "")
-                                else -> ""
-                            }
-                            SongRowDesktop(
-                                title = item.title,
-                                subtitle = sub,
-                                thumbnail = item.thumbnail,
-                                isCurrent = false,
-                                accent = palette.primary,
-                                onClick = { if (item is SongItem) onPlaySong(item) else onOpenItem(item) },
+            shelves == null -> {
+                // Skeleton loading placeholder
+                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(22.dp)) {
+                    items(2) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Box(
+                                Modifier.size(width = 160.dp, height = 20.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color.White.copy(alpha = 0.08f)),
                             )
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                items(5) {
+                                    Box(
+                                        Modifier.size(136.dp)
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(Color.White.copy(alpha = 0.05f)),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
+            else -> LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(24.dp),
+                contentPadding = PaddingValues(bottom = 24.dp),
+            ) {
+                items(shelves, key = { it.title }) { shelf ->
+                    val allSongs = shelf.items.all { it is SongItem }
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = shelf.title,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                        )
+                        if (allSongs && shelf.items.size > 3) {
+                            // Columnas compactas de 3 canciones en carrusel horizontal
+                            val cols = shelf.items.filterIsInstance<SongItem>().chunked(3)
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                items(cols) { colSongs ->
+                                    Column(
+                                        modifier = Modifier.width(310.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        colSongs.forEach { song ->
+                                            SongRowDesktop(
+                                                title = song.title,
+                                                subtitle = song.artists.joinToString { it.name },
+                                                thumbnail = song.thumbnail,
+                                                isCurrent = song.id == currentMediaId,
+                                                accent = palette.primary,
+                                                onClick = { onPlaySong(song) },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // Carrusel horizontal de tarjetas con portada
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                items(shelf.items, key = { it.id }) { item ->
+                                    ExploreShelfCard(
+                                        item = item,
+                                        accent = palette.primary,
+                                        onClick = {
+                                            if (item is SongItem) onPlaySong(item)
+                                            else onOpenItem(item)
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun ExploreShelfCard(
+    item: YTItem,
+    accent: Color,
+    onClick: () -> Unit,
+) {
+    var thumbBmp by remember(item.thumbnail) { mutableStateOf<ImageBitmap?>(null) }
+    var isHovered by remember { mutableStateOf(false) }
+
+    LaunchedEffect(item.thumbnail) {
+        if (!item.thumbnail.isNullOrBlank()) {
+            thumbBmp = ArtworkLoader.load(item.thumbnail).first
+        }
+    }
+
+    val isArtist = item is ArtistItem
+    val shape = if (isArtist) CircleShape else RoundedCornerShape(16.dp)
+
+    Column(
+        modifier = Modifier
+            .width(148.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
+            .padding(4.dp),
+        horizontalAlignment = if (isArtist) Alignment.CenterHorizontally else Alignment.Start,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(140.dp)
+                .clip(shape)
+                .background(Color.White.copy(alpha = 0.05f))
+                .border(
+                    width = if (isHovered) 1.5.dp else 1.dp,
+                    color = if (isHovered) accent.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.10f),
+                    shape = shape,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (thumbBmp != null) {
+                Image(
+                    bitmap = thumbBmp!!,
+                    contentDescription = item.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Icon(
+                    imageVector = if (isArtist) Icons.Rounded.Person else Icons.Rounded.Album,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.40f),
+                    modifier = Modifier.size(44.dp),
+                )
+            }
+
+            if (isHovered) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.65f))
+                        .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.PlayArrow,
+                        contentDescription = "Reproducir",
+                        tint = accent,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Text(
+            text = item.title,
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            maxLines = if (isArtist) 1 else 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = if (isArtist) TextAlign.Center else TextAlign.Start,
+        )
+
+        val sub = when (item) {
+            is SongItem -> item.artists.joinToString { it.name }
+            is AlbumItem -> listOfNotNull("Álbum", item.year?.toString()).joinToString(" · ")
+            is PlaylistItem -> item.author?.name ?: "Playlist"
+            is ArtistItem -> "Artista"
+            else -> ""
+        }
+        if (sub.isNotBlank()) {
+            Text(
+                text = sub,
+                fontSize = 11.5.sp,
+                color = Color.White.copy(alpha = 0.52f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = if (isArtist) TextAlign.Center else TextAlign.Start,
+            )
         }
     }
 }
@@ -1559,6 +1992,7 @@ private fun SongRowDesktop(
     isCurrent: Boolean,
     accent: Color,
     onClick: () -> Unit,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     var thumbBmp by remember(thumbnail) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(thumbnail) {
@@ -1633,6 +2067,9 @@ private fun SongRowDesktop(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+        if (trailing != null) {
+            trailing()
         }
     }
 }
