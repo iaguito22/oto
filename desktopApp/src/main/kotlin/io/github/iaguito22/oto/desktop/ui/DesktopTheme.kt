@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.URI
 import org.jetbrains.skia.Image
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -81,48 +82,159 @@ object ArtworkLoader {
         val pixels = IntArray(w * h)
         bmp.readPixels(pixels, 0, 0, w, h)
 
-        var r1 = 0L; var g1 = 0L; var b1 = 0L; var c1 = 0
-        var r2 = 0L; var g2 = 0L; var b2 = 0L; var c2 = 0
-        var r3 = 0L; var g3 = 0L; var b3 = 0L; var c3 = 0
+        // 12 cubetas de tono (cada una cubre 30 grados del círculo cromático)
+        val numBins = 12
+        val binWeight = FloatArray(numBins)
+        val binR = LongArray(numBins)
+        val binG = LongArray(numBins)
+        val binB = LongArray(numBins)
+        val binCount = IntArray(numBins)
 
-        val step = max(1, (w * h) / 900)
+        var totalR = 0L; var totalG = 0L; var totalB = 0L; var totalCount = 0
+        val step = max(1, (w * h) / 1600)
         var i = 0
+
         while (i < pixels.size) {
             val px = pixels[i]
             val r = (px shr 16) and 0xFF
             val g = (px shr 8) and 0xFF
             val b = px and 0xFF
-            val mx = max(r, max(g, b))
-            val mn = min(r, min(g, b))
-            val sat = if (mx == 0) 0f else (mx - mn).toFloat() / mx.toFloat()
-            val lum = (r * 0.299f + g * 0.587f + b * 0.114f) / 255f
-            if (lum in 0.15f..0.88f && sat > 0.18f) {
-                when (i % 3) {
-                    0 -> { r1 += r; g1 += g; b1 += b; c1++ }
-                    1 -> { r2 += r; g2 += g; b2 += b; c2++ }
-                    else -> { r3 += r; g3 += g; b3 += b; c3++ }
-                }
+            val rf = r / 255f
+            val gf = g / 255f
+            val bf = b / 255f
+            val mx = max(rf, max(gf, bf))
+            val mn = min(rf, min(gf, bf))
+            val delta = mx - mn
+            val lum = (mx + mn) / 2f
+            val sat = if (delta < 0.001f) 0f else delta / (1f - abs(2f * lum - 1f))
+
+            totalR += r; totalG += g; totalB += b; totalCount++
+
+            // Buscamos colores vivos con presencia cromática (descartando blancos quemados o negros puros)
+            if (lum in 0.12f..0.88f && sat > 0.18f) {
+                val hue = when {
+                    delta < 0.001f -> 0f
+                    mx == rf -> 60f * (((gf - bf) / delta) % 6f)
+                    mx == gf -> 60f * (((bf - rf) / delta) + 2f)
+                    else -> 60f * (((rf - gf) / delta) + 4f)
+                }.let { if (it < 0f) it + 360f else it }
+
+                val bin = ((hue / 30f).toInt()).coerceIn(0, numBins - 1)
+                // Ponderar por saturación y equilibrio de luminosidad
+                val weight = sat * (1f - abs(lum - 0.5f) * 0.9f)
+                binWeight[bin] += weight
+                binR[bin] += r
+                binG[bin] += g
+                binB[bin] += b
+                binCount[bin]++
             }
             i += step
         }
 
-        fun lift(r: Long, g: Long, b: Long, count: Int, fallback: Color): Color {
-            if (count == 0) return fallback
-            val rf = ((r / count) * 0.72f + 255f * 0.28f).toInt().coerceIn(90, 250)
-            val gf = ((g / count) * 0.72f + 245f * 0.28f).toInt().coerceIn(90, 245)
-            val bf = ((b / count) * 0.72f + 255f * 0.28f).toInt().coerceIn(110, 255)
-            return Color(rf, gf, bf)
+        // Ordenamos las cubetas por peso acumulado
+        val sortedBins = (0 until numBins)
+            .filter { binCount[it] > 3 }
+            .sortedByDescending { binWeight[it] }
+
+        fun binToColor(binIdx: Int, targetLightness: Float, targetSatFloor: Float): Color {
+            val count = binCount[binIdx]
+            val avgR = (binR[binIdx] / count).toInt()
+            val avgG = (binG[binIdx] / count).toInt()
+            val avgB = (binB[binIdx] / count).toInt()
+            val rf = avgR / 255f
+            val gf = avgG / 255f
+            val bf = avgB / 255f
+            val mx = max(rf, max(gf, bf))
+            val mn = min(rf, min(gf, bf))
+            val delta = mx - mn
+            val hue = when {
+                delta < 0.001f -> 0f
+                mx == rf -> 60f * (((gf - bf) / delta) % 6f)
+                mx == gf -> 60f * (((bf - rf) / delta) + 2f)
+                else -> 60f * (((rf - gf) / delta) + 4f)
+            }.let { if (it < 0f) it + 360f else it }
+            val curLum = (mx + mn) / 2f
+            val curSat = if (delta < 0.001f) 0f else delta / (1f - abs(2f * curLum - 1f))
+            val finalSat = curSat.coerceIn(targetSatFloor, 0.92f)
+            return hslToColor(hue, finalSat, targetLightness)
         }
 
-        val p1 = lift(r1, g1, b1, c1, Color(0xFFD8B9FF))
-        val p2 = lift(r2, g2, b2, c2, Color(0xFFFFB69E))
-        val p3 = lift(r3, g3, b3, c3, Color(0xFF9ED8FF))
-        val deep = Color(
-            red = (p1.red * 0.14f).coerceIn(0.03f, 0.16f),
-            green = (p1.green * 0.12f).coerceIn(0.02f, 0.14f),
-            blue = (p1.blue * 0.18f).coerceIn(0.04f, 0.20f),
-        )
+        val primaryBin = sortedBins.firstOrNull()
+        val secondaryBin = sortedBins.firstOrNull { bin ->
+            primaryBin == null || abs(bin - primaryBin).let { min(it, numBins - it) } >= 2
+        }
+        val tertiaryBin = sortedBins.firstOrNull { bin ->
+            (primaryBin == null || abs(bin - primaryBin).let { min(it, numBins - it) } >= 2) &&
+            (secondaryBin == null || abs(bin - secondaryBin).let { min(it, numBins - it) } >= 2)
+        }
+
+        val p1 = if (primaryBin != null) {
+            binToColor(primaryBin, targetLightness = 0.74f, targetSatFloor = 0.55f)
+        } else {
+            Color(0xFFD8B9FF)
+        }
+
+        val p2 = if (secondaryBin != null) {
+            binToColor(secondaryBin, targetLightness = 0.68f, targetSatFloor = 0.50f)
+        } else if (primaryBin != null) {
+            // Variante análoga cálida
+            val h = (primaryBin * 30f + 35f) % 360f
+            hslToColor(h, 0.65f, 0.70f)
+        } else {
+            Color(0xFFFFB69E)
+        }
+
+        val p3 = if (tertiaryBin != null) {
+            binToColor(tertiaryBin, targetLightness = 0.64f, targetSatFloor = 0.45f)
+        } else if (primaryBin != null) {
+            val h = (primaryBin * 30f + 180f) % 360f
+            hslToColor(h, 0.50f, 0.64f)
+        } else {
+            Color(0xFF9ED8FF)
+        }
+
+        val deep = if (primaryBin != null) {
+            val count = binCount[primaryBin]
+            val avgR = (binR[primaryBin] / count).toInt()
+            val avgG = (binG[primaryBin] / count).toInt()
+            val avgB = (binB[primaryBin] / count).toInt()
+            val rf = avgR / 255f
+            val gf = avgG / 255f
+            val bf = avgB / 255f
+            val mx = max(rf, max(gf, bf))
+            val mn = min(rf, min(gf, bf))
+            val delta = mx - mn
+            val hue = when {
+                delta < 0.001f -> 0f
+                mx == rf -> 60f * (((gf - bf) / delta) % 6f)
+                mx == gf -> 60f * (((bf - rf) / delta) + 2f)
+                else -> 60f * (((rf - gf) / delta) + 4f)
+            }.let { if (it < 0f) it + 360f else it }
+            hslToColor(hue, 0.38f, 0.06f)
+        } else {
+            Color(0xFF0C0A14)
+        }
+
         return ArtworkPalette(primary = p1, secondary = p2, tertiary = p3, deep = deep)
+    }
+
+    private fun hslToColor(h: Float, s: Float, l: Float): Color {
+        val c = (1f - abs(2f * l - 1f)) * s
+        val x = c * (1f - abs((h / 60f) % 2f - 1f))
+        val m = l - c / 2f
+        val (r, g, b) = when ((h / 60f).toInt() % 6) {
+            0 -> Triple(c, x, 0f)
+            1 -> Triple(x, c, 0f)
+            2 -> Triple(0f, c, x)
+            3 -> Triple(0f, x, c)
+            4 -> Triple(x, 0f, c)
+            else -> Triple(c, 0f, x)
+        }
+        return Color(
+            red = (r + m).coerceIn(0f, 1f),
+            green = (g + m).coerceIn(0f, 1f),
+            blue = (b + m).coerceIn(0f, 1f),
+        )
     }
 }
 

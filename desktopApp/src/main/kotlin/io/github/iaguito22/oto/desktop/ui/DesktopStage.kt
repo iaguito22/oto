@@ -90,6 +90,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shadow
@@ -97,7 +99,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
@@ -187,48 +191,53 @@ fun DesktopStage(
                 }
             },
     ) {
-        // 1. Carátula desenfocada de fondo + 3 halos radiales vivos que respiran con la música
+        // 1. Carátula desenfocada de fondo + halos radiales vivos (Spotify Caelestia)
         if (artwork != null) {
             Image(
                 bitmap = artwork,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
+                colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.48f) }),
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer { alpha = 0.26f; scaleX = 1.25f; scaleY = 1.25f }
-                    .blur(90.dp),
+                    .graphicsLayer { alpha = 0.52f; scaleX = 1.35f; scaleY = 1.35f }
+                    .blur(95.dp),
             )
         }
         Canvas(Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
+            // Halo cálido y vibrante detrás de la columna de letras (derecha-centro)
             drawRect(
                 brush = Brush.radialGradient(
-                    colors = listOf(animPal.primary.copy(alpha = 0.34f), Color.Transparent),
-                    center = Offset(w * (0.26f + 0.06f * cos(drift)), h * (0.35f + 0.05f * sin(drift))),
-                    radius = w * 0.62f,
+                    colors = listOf(animPal.primary.copy(alpha = 0.44f), Color.Transparent),
+                    center = Offset(w * (0.68f + 0.04f * cos(drift)), h * (0.36f + 0.04f * sin(drift))),
+                    radius = w * 0.56f,
                 ),
             )
+            // Halo secundario envolviendo la carátula y el cuadrante izquierdo
             drawRect(
                 brush = Brush.radialGradient(
-                    colors = listOf(animPal.secondary.copy(alpha = 0.25f), Color.Transparent),
-                    center = Offset(w * (0.76f - 0.05f * cos(drift)), h * (0.28f + 0.06f * sin(drift))),
-                    radius = w * 0.55f,
+                    colors = listOf(animPal.secondary.copy(alpha = 0.30f), Color.Transparent),
+                    center = Offset(w * (0.28f - 0.04f * cos(drift)), h * (0.42f + 0.05f * sin(drift))),
+                    radius = w * 0.52f,
                 ),
             )
+            // Halo terciario de profundidad
             drawRect(
                 brush = Brush.radialGradient(
-                    colors = listOf(animPal.tertiary.copy(alpha = 0.20f), Color.Transparent),
-                    center = Offset(w * 0.52f, h * (0.82f - 0.04f * sin(drift))),
-                    radius = w * 0.58f,
+                    colors = listOf(animPal.tertiary.copy(alpha = 0.22f), Color.Transparent),
+                    center = Offset(w * 0.50f, h * (0.85f - 0.03f * sin(drift))),
+                    radius = w * 0.60f,
                 ),
             )
+            // Velo suave para legibilidad: oscurece arriba y abajo sin asfixiar la luz central
             drawRect(
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        Color(0x3808070C),
-                        Color(0x6608070C),
-                        Color(0xB808070C),
+                        Color(0x5508070C),
+                        Color(0x2808070C),
+                        Color(0x8808070C),
                     ),
                 ),
             )
@@ -817,6 +826,7 @@ private fun MinimalProgressBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(18.dp)
+                .pointerHoverIcon(PointerIcon.Hand)
                 .pointerInput(durationMs) {
                     detectTapGestures { offset ->
                         val p = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
@@ -852,6 +862,23 @@ private fun MinimalProgressBar(
                         ),
                     ),
             )
+            // Tirador / pomo visible al pasar el ratón (estilo Spotify)
+            if (barHovered && progress > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(progress)
+                        .height(18.dp),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .shadow(4.dp, CircleShape, ambientColor = accent, spotColor = Color.White)
+                            .clip(CircleShape)
+                            .background(Color.White),
+                    )
+                }
+            }
         }
 
         Spacer(Modifier.height(4.dp))
@@ -1028,32 +1055,36 @@ private fun SyncedLyricRow(
     onClick: () -> Unit,
 ) {
     val isActive = dist == 0
+    val interactionSource = remember { MutableInteractionSource() }
+    val isHovered by interactionSource.collectIsHoveredAsState()
+
     val scale by animateFloatAsState(
-        targetValue = if (isActive) 1.035f else 1f,
+        targetValue = if (isActive) 1.035f else if (isHovered) 1.018f else 1f,
         animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
         label = "lyricScale",
     )
     val transX by animateFloatAsState(
-        targetValue = if (isActive) 8f else 0f,
+        targetValue = if (isActive) 8f else if (isHovered) 5f else 0f,
         animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
         label = "lyricTransX",
     )
     val absDist = kotlin.math.abs(dist)
-    val targetAlpha = when {
+    val baseAlpha = when {
         isActive -> 1f
         dist == 1 -> 0.58f
         dist == -1 -> 0.40f
-        absDist == 2 -> 0.26f
-        absDist == 3 -> 0.16f
-        else -> 0.08f
+        absDist == 2 -> 0.28f
+        absDist == 3 -> 0.18f
+        else -> 0.10f
     }
+    val targetAlpha = if (isHovered && !isActive) 0.88f else baseAlpha
     val alpha by animateFloatAsState(
         targetValue = targetAlpha,
-        animationSpec = tween(280, easing = FastOutSlowInEasing),
+        animationSpec = tween(240, easing = FastOutSlowInEasing),
         label = "lyricAlpha",
     )
     val blurRadius = when {
-        isActive || absDist <= 1 -> 0.dp
+        isActive || isHovered || absDist <= 1 -> 0.dp
         absDist == 2 -> 0.6.dp
         else -> 1.4.dp
     }
@@ -1070,8 +1101,10 @@ private fun SyncedLyricRow(
             }
             .blur(blurRadius)
             .clip(RoundedCornerShape(12.dp))
+            .pointerHoverIcon(PointerIcon.Hand)
+            .hoverable(interactionSource)
             .clickable(
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick,
             )
