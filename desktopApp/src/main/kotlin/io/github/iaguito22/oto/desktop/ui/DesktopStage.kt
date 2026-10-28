@@ -107,11 +107,14 @@ import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.iaguito22.oto.lyrics.Line
@@ -155,6 +158,8 @@ fun DesktopStage(
     lyricsLoading: Boolean,
     volume: Float = 1.0f,
     cue: CueInfo? = null,
+    isIdle: Boolean = false,
+    menuOpen: Boolean = false,
     headerStyle: Int = 0,
     onTogglePlay: () -> Unit,
     onPrev: () -> Unit,
@@ -253,10 +258,39 @@ fun DesktopStage(
             )
         }
 
-        // 2. Contenido principal centrado abarcando de carátula a letra
+        // 2. Contenido principal centrado abarcando de carátula a letra.
+        // Al abrir el menú (menuOpen), el escenario se retrae, desenfoca y atenúa como en core.css (.sheet-open .oto-stage-wrap).
+        val stageScale by animateFloatAsState(
+            targetValue = if (menuOpen) 0.945f else 1f,
+            animationSpec = spring(dampingRatio = 0.82f, stiffness = 280f),
+            label = "stageScale",
+        )
+        val stageTransY by animateFloatAsState(
+            targetValue = if (menuOpen) -14f else 0f,
+            animationSpec = spring(dampingRatio = 0.82f, stiffness = 280f),
+            label = "stageTransY",
+        )
+        val stageAlpha by animateFloatAsState(
+            targetValue = if (menuOpen) 0.65f else 1f,
+            animationSpec = tween(320, easing = FastOutSlowInEasing),
+            label = "stageAlpha",
+        )
+        val stageBlur by animateFloatAsState(
+            targetValue = if (menuOpen) 22f else 0f,
+            animationSpec = tween(320, easing = FastOutSlowInEasing),
+            label = "stageBlur",
+        )
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = stageScale
+                    scaleY = stageScale
+                    translationY = stageTransY
+                    alpha = stageAlpha
+                }
+                .blur(stageBlur.dp)
                 .padding(vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -265,19 +299,48 @@ fun DesktopStage(
                     .widthIn(max = 1520.dp)
                     .fillMaxWidth()
                     .weight(1f)
-                    .padding(horizontal = 24.dp),
+                    .padding(horizontal = 36.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                // Escenario de 2 columnas (estilo Spotify Caelestia):
+                // Cabecera de origen superior centrada (se oculta suavemente en modo reposo idle o con cue activo, como en fusion.html)
+                val showTopBar = !isIdle && cue == null && !menuOpen
+                val topBarAlpha by animateFloatAsState(
+                    targetValue = if (showTopBar) 1f else 0f,
+                    animationSpec = tween(360, easing = FastOutSlowInEasing),
+                    label = "topBarAlpha",
+                )
+                val topBarTransY by animateFloatAsState(
+                    targetValue = if (showTopBar) 0f else -8f,
+                    animationSpec = tween(360, easing = FastOutSlowInEasing),
+                    label = "topBarTransY",
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(34.dp)
+                        .graphicsLayer {
+                            alpha = topBarAlpha
+                            translationY = topBarTransY
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    TopSourceOriginBar(
+                        source = source,
+                        accent = animPal.primary,
+                        onOpenSource = onOpenSource,
+                    )
+                }
+
+                // Escenario de 2 columnas (estilo Spotify Caelestia + fusion.html):
                 // Izquierda: Carátula cuadrada redondeada con controles hover + Título + Artista + Barra minimal
-                // Derecha: Origen de lista + Letras sincronizadas con difuminado suave
+                // Derecha: Letras sincronizadas palabra por palabra con máscara de fundido vertical
                 Row(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .padding(bottom = 24.dp),
+                        .padding(bottom = 18.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(64.dp),
+                    horizontalArrangement = Arrangement.spacedBy(68.dp),
                 ) {
                     Box(
                         modifier = Modifier.weight(0.44f).fillMaxHeight(),
@@ -302,38 +365,18 @@ fun DesktopStage(
                         )
                     }
 
-                    Column(
+                    // Columna de letra a pantalla completa con difuminado suave arriba/abajo
+                    Box(
                         modifier = Modifier.weight(0.56f).fillMaxHeight(),
-                        verticalArrangement = Arrangement.Top,
+                        contentAlignment = Alignment.CenterStart,
                     ) {
-                        // Pill superior con origen de reproducción (se oculta suavemente mientras hay un aviso activo)
-                        AnimatedVisibility(
-                            visible = cue == null,
-                            enter = fadeIn(tween(200)),
-                            exit = fadeOut(tween(120)),
-                        ) {
-                            TopSourceOriginBar(
-                                source = source,
-                                accent = animPal.primary,
-                                onOpenSource = onOpenSource,
-                            )
-                        }
-
-                        Spacer(Modifier.height(16.dp))
-
-                        // Columna de letra a pantalla completa con difuminado suave
-                        Box(
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                            contentAlignment = Alignment.CenterStart,
-                        ) {
-                            LyricsStageColumn(
-                                lyrics = lyrics,
-                                loading = lyricsLoading,
-                                positionMs = positionMs,
-                                palette = animPal,
-                                onSeek = onSeek,
-                            )
-                        }
+                        LyricsStageColumn(
+                            lyrics = lyrics,
+                            loading = lyricsLoading,
+                            positionMs = positionMs,
+                            palette = animPal,
+                            onSeek = onSeek,
+                        )
                     }
                 }
             }
@@ -460,51 +503,51 @@ fun DesktopStage(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun TopSourceOriginBar(
     source: Source?,
     accent: Color,
     onOpenSource: () -> Unit,
 ) {
+    var hovered by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (hovered) 1.03f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "sourceScale",
+    )
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Start,
+        modifier = Modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(CircleShape)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onPointerEvent(PointerEventType.Enter) { hovered = true }
+            .onPointerEvent(PointerEventType.Exit) { hovered = false }
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onOpenSource,
+            )
+            .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(
-            modifier = Modifier
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.05f))
-                .clickable(onClick = onOpenSource)
-                .padding(horizontal = 14.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Box(
-                Modifier
-                    .size(7.dp)
-                    .clip(CircleShape)
-                    .background(accent),
-            )
-            Text(
-                text = (source?.kind ?: "DESDE TU LISTA").uppercase(),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.6.sp,
-                color = Color.White.copy(alpha = 0.62f),
-            )
-            Text(
-                text = "·",
-                fontSize = 12.sp,
-                color = Color.White.copy(alpha = 0.40f),
-            )
-            Text(
-                text = source?.title ?: "Me gusta",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = accent,
-            )
-        }
+        Text(
+            text = (source?.kind ?: "DESDE TU LISTA").uppercase(),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 2.6.sp,
+            color = if (hovered) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.56f),
+        )
+        Text(
+            text = source?.title ?: "Me gusta",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (hovered) accent else Color(0xFFF3EEFF),
+        )
     }
 }
 
@@ -533,6 +576,22 @@ private fun SpotifyPlayerColumn(
     val isCoverActive = isHovered || manualHover
     var burstTrigger by remember { mutableLongStateOf(0L) }
 
+    // Inclinación 3D suave y reflejo especular al mover el ratón sobre la carátula (como en fusion.html)
+    var tiltX by remember { mutableFloatStateOf(0f) }
+    var tiltY by remember { mutableFloatStateOf(0f) }
+    var sheenX by remember { mutableFloatStateOf(0.5f) }
+    var sheenY by remember { mutableFloatStateOf(0.5f) }
+    val animTiltX by animateFloatAsState(
+        targetValue = if (isCoverActive) tiltX else 0f,
+        animationSpec = spring(dampingRatio = 0.78f, stiffness = 260f),
+        label = "tiltX",
+    )
+    val animTiltY by animateFloatAsState(
+        targetValue = if (isCoverActive) tiltY else 0f,
+        animationSpec = spring(dampingRatio = 0.78f, stiffness = 260f),
+        label = "tiltY",
+    )
+
     val controlsAlpha by animateFloatAsState(
         targetValue = if (isCoverActive) 1f else 0f,
         animationSpec = tween(220, easing = FastOutSlowInEasing),
@@ -553,18 +612,38 @@ private fun SpotifyPlayerColumn(
         horizontalAlignment = Alignment.Start,
         verticalArrangement = Arrangement.Center,
     ) {
-        // 1. Carátula cuadrada con bordes redondeados (estilo Spotify Caelestia)
+        // 1. Carátula cuadrada con bordes redondeados + 3D tilt + controles limpios en hover
         Box(
             modifier = Modifier
                 .size(coverSize)
                 .hoverable(coverInteraction)
                 .onPointerEvent(PointerEventType.Enter) { manualHover = true }
-                .onPointerEvent(PointerEventType.Move) { manualHover = true }
-                .onPointerEvent(PointerEventType.Exit) { manualHover = false }
+                .onPointerEvent(PointerEventType.Move) { ev ->
+                    manualHover = true
+                    val pos = ev.changes.firstOrNull()?.position
+                    if (pos != null) {
+                        val nx = (pos.x / 500f).coerceIn(0f, 1f)
+                        val ny = (pos.y / 500f).coerceIn(0f, 1f)
+                        sheenX = nx
+                        sheenY = ny
+                        tiltY = (nx - 0.5f) * 8f
+                        tiltX = (0.5f - ny) * 8f
+                    }
+                }
+                .onPointerEvent(PointerEventType.Exit) {
+                    manualHover = false
+                    tiltX = 0f
+                    tiltY = 0f
+                }
                 .onPointerEvent(PointerEventType.Scroll) { ev ->
                     val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                     if (dy < -0.1f) onAdjustVolume(0.04f)
                     else if (dy > 0.1f) onAdjustVolume(-0.04f)
+                }
+                .graphicsLayer {
+                    rotationX = animTiltX
+                    rotationY = animTiltY
+                    cameraDistance = 16f * density
                 }
                 .shadow(
                     elevation = 28.dp,
@@ -619,7 +698,7 @@ private fun SpotifyPlayerColumn(
                 }
             }
 
-            // Controles internos en la carátula visibles en hover
+            // Controles internos en la carátula visibles en hover (calcados de fusion.html)
             if (controlsAlpha > 0.001f || isCoverActive) {
                 Box(
                     modifier = Modifier
@@ -628,20 +707,31 @@ private fun SpotifyPlayerColumn(
                         .background(
                             Brush.radialGradient(
                                 colors = listOf(
-                                    Color.Black.copy(alpha = 0.58f),
-                                    Color.Black.copy(alpha = 0.32f),
+                                    Color(0xFF0A0810).copy(alpha = 0.58f),
+                                    Color(0xFF0A0810).copy(alpha = 0.28f),
                                 ),
                             ),
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
+                    // Reflejo especular suave que sigue el cursor sobre la carátula
+                    Canvas(Modifier.fillMaxSize()) {
+                        drawRect(
+                            brush = Brush.radialGradient(
+                                colors = listOf(Color.White.copy(alpha = 0.14f), Color.Transparent),
+                                center = Offset(size.width * sheenX, size.height * sheenY),
+                                radius = size.width * 0.55f,
+                            ),
+                        )
+                    }
+
                     Row(
                         modifier = Modifier.graphicsLayer {
                             scaleX = controlsScale
                             scaleY = controlsScale
                         },
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(26.dp),
                     ) {
                         CoverControlButton(
                             size = 48.dp,
@@ -652,8 +742,8 @@ private fun SpotifyPlayerColumn(
                             Icon(
                                 imageVector = Icons.Rounded.SkipPrevious,
                                 contentDescription = "Anterior",
-                                tint = Color.White,
-                                modifier = Modifier.size(24.dp),
+                                tint = Color(0xFFF3EEFF),
+                                modifier = Modifier.size(28.dp),
                             )
                         }
 
@@ -666,7 +756,7 @@ private fun SpotifyPlayerColumn(
                             Icon(
                                 imageVector = if (nowPlaying.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                 contentDescription = if (nowPlaying.playing) "Pausar" else "Reproducir",
-                                tint = Color(0xFF120D1D),
+                                tint = Color(0xFF15101E),
                                 modifier = Modifier.size(34.dp),
                             )
                         }
@@ -680,43 +770,30 @@ private fun SpotifyPlayerColumn(
                             Icon(
                                 imageVector = Icons.Rounded.SkipNext,
                                 contentDescription = "Siguiente",
-                                tint = Color.White,
-                                modifier = Modifier.size(24.dp),
+                                tint = Color(0xFFF3EEFF),
+                                modifier = Modifier.size(28.dp),
                             )
                         }
                     }
 
-                    // Botones en la esquina superior derecha: Guardar en lista + Me gusta
+                    // Píldora inferior centrada en hover: Me gusta + Guardar en lista (como .cover-like-pill en fusion.html)
                     Row(
                         modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 18.dp)
+                            .shadow(12.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.45f))
+                            .clip(CircleShape)
+                            .background(Color(0xFF12101A).copy(alpha = 0.68f))
+                            .border(1.dp, if (liked) palette.primary.copy(alpha = 0.48f) else Color.White.copy(alpha = 0.16f), CircleShape)
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(36.dp)
+                                .size(32.dp)
                                 .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.60f))
-                                .border(1.dp, Color.White.copy(alpha = 0.20f), CircleShape)
-                                .clickable(onClick = onSaveTo),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.PlaylistAdd,
-                                contentDescription = "Guardar en lista",
-                                tint = Color.White.copy(alpha = 0.85f),
-                                modifier = Modifier.size(19.dp),
-                            )
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.60f))
-                                .border(1.dp, Color.White.copy(alpha = 0.20f), CircleShape)
+                                .pointerHoverIcon(PointerIcon.Hand)
                                 .clickable(onClick = onToggleLike),
                             contentAlignment = Alignment.Center,
                         ) {
@@ -724,6 +801,21 @@ private fun SpotifyPlayerColumn(
                                 imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                                 contentDescription = if (liked) "Quitar de Me gusta" else "Añadir a Me gusta",
                                 tint = if (liked) palette.primary else Color.White.copy(alpha = 0.85f),
+                                modifier = Modifier.size(17.dp),
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable(onClick = onSaveTo),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.PlaylistAdd,
+                                contentDescription = "Guardar en lista",
+                                tint = Color.White.copy(alpha = 0.85f),
                                 modifier = Modifier.size(18.dp),
                             )
                         }
@@ -731,16 +823,16 @@ private fun SpotifyPlayerColumn(
                 }
             }
 
-            // Marca de guardado visible en la esquina inferior derecha cuando no hay hover si está guardada
+            // Marca discreta visible en reposo si está en Me gusta
             if (!isCoverActive && liked) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(14.dp)
-                        .size(32.dp)
+                        .size(30.dp)
                         .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.50f))
-                        .border(1.dp, palette.primary.copy(alpha = 0.50f), CircleShape)
+                        .background(Color.Black.copy(alpha = 0.46f))
+                        .border(1.dp, palette.primary.copy(alpha = 0.45f), CircleShape)
                         .clickable(onClick = onSaveTo),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -748,7 +840,7 @@ private fun SpotifyPlayerColumn(
                         imageVector = Icons.Rounded.Favorite,
                         contentDescription = "Guardado en Me gusta",
                         tint = palette.primary,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(15.dp),
                     )
                 }
             }
@@ -956,11 +1048,17 @@ private fun MinimalProgressBar(
             }
         }
 
-        Spacer(Modifier.height(4.dp))
-
-        // Fila de tiempos y calidad minimal
+        // Fila de tiempos y calidad minimal: oculta en reposo como en Spotify Caelestia, aparece suavemente en hover
+        val metaAlpha by animateFloatAsState(
+            targetValue = if (barHovered) 1f else 0f,
+            animationSpec = tween(180, easing = FastOutSlowInEasing),
+            label = "barMetaAlpha",
+        )
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp)
+                .graphicsLayer { alpha = metaAlpha },
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -969,27 +1067,28 @@ private fun MinimalProgressBar(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
-                color = Color.White.copy(alpha = 0.40f),
+                color = Color.White.copy(alpha = 0.52f),
             )
             Text(
                 text = quality?.toString()?.uppercase() ?: "OPUS",
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
-                letterSpacing = 0.6.sp,
+                letterSpacing = 0.8.sp,
                 fontWeight = FontWeight.Normal,
-                color = Color.White.copy(alpha = 0.30f),
+                color = Color.White.copy(alpha = 0.38f),
             )
             Text(
                 text = formatTimeMs(durationMs),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
-                color = Color.White.copy(alpha = 0.40f),
+                color = Color.White.copy(alpha = 0.52f),
             )
         }
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun CoverControlButton(
     size: androidx.compose.ui.unit.Dp,
@@ -998,23 +1097,35 @@ private fun CoverControlButton(
     onClick: () -> Unit,
     content: @Composable () -> Unit,
 ) {
+    var hovered by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (hovered) (if (isPrimary) 1.07f else 1.15f) else 1f,
+        animationSpec = spring(dampingRatio = 0.68f, stiffness = 420f),
+        label = "coverBtnScale",
+    )
     Box(
         modifier = Modifier
             .size(size)
-            .shadow(if (isPrimary) 18.dp else 8.dp, CircleShape)
-            .clip(CircleShape)
-            .background(
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .then(
                 if (isPrimary) {
-                    Brush.linearGradient(listOf(accent, Color.White))
+                    Modifier
+                        .shadow(22.dp, CircleShape, ambientColor = accent, spotColor = accent)
+                        .clip(CircleShape)
+                        .background(accent)
+                        .border(1.dp, Color.White.copy(alpha = 0.55f), CircleShape)
                 } else {
-                    Brush.linearGradient(listOf(Color.White.copy(alpha = 0.22f), Color.White.copy(alpha = 0.12f)))
+                    Modifier
+                        .clip(CircleShape)
+                        .background(if (hovered) Color.White.copy(alpha = 0.12f) else Color.Transparent)
                 },
             )
-            .border(
-                width = 1.dp,
-                color = if (isPrimary) Color.White.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.26f),
-                shape = CircleShape,
-            )
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onPointerEvent(PointerEventType.Enter) { hovered = true }
+            .onPointerEvent(PointerEventType.Exit) { hovered = false }
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -1036,21 +1147,35 @@ private fun LyricsStageColumn(
 ) {
     val listState = rememberLazyListState()
 
-    // Contenedor de letras sin capa offscreen pesada para evitar artefactos de Skia en escritorio
+    // Máscara vertical suave superior e inferior (idéntica a mask-image en core.css:590 y spicetify-caelestia:2410)
     BoxWithConstraints(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0.00f to Color.Transparent,
+                        0.13f to Color.Black,
+                        0.85f to Color.Black,
+                        1.00f to Color.Transparent,
+                    ),
+                    blendMode = BlendMode.DstIn,
+                )
+            },
     ) {
         val boxHeightPx = constraints.maxHeight.toFloat()
-        val anchorOffset = (boxHeightPx * 0.32f).toInt()
+        val anchorOffset = (boxHeightPx * 0.34f).toInt()
 
         when {
             loading -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
                     Text(
                         text = "Buscando letra sincronizada…",
-                        fontSize = 20.sp,
+                        fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
-                        color = palette.primary.copy(alpha = 0.75f),
+                        color = palette.primary.copy(alpha = 0.78f),
                     )
                 }
             }
@@ -1067,13 +1192,15 @@ private fun LyricsStageColumn(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = 90.dp, bottom = 120.dp),
-                    verticalArrangement = Arrangement.spacedBy(20.dp),
+                    contentPadding = PaddingValues(top = 110.dp, bottom = 140.dp),
+                    verticalArrangement = Arrangement.spacedBy(22.dp),
                 ) {
                     itemsIndexed(lines, key = { idx, l -> "${l.start}-$idx" }) { idx, line ->
                         val dist = idx - activeIdx
+                        val nextStart = lines.getOrNull(idx + 1)?.start ?: (line.start + 4500L)
                         SyncedLyricRow(
                             line = line,
+                            nextLineStart = nextStart,
                             dist = dist,
                             positionMs = positionMs,
                             palette = palette,
@@ -1085,34 +1212,34 @@ private fun LyricsStageColumn(
             lyrics is Lyrics.Plain && lyrics.lines.isNotEmpty() -> {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = 90.dp, bottom = 120.dp),
+                    contentPadding = PaddingValues(top = 110.dp, bottom = 140.dp),
                     verticalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
                     itemsIndexed(lyrics.lines) { _, line: String ->
                         Text(
                             text = line,
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 29.sp,
+                            fontWeight = FontWeight.Bold,
                             color = Color.White.copy(alpha = 0.78f),
-                            lineHeight = 38.sp,
+                            lineHeight = 40.sp,
                         )
                     }
                 }
             }
             else -> {
                 Column(
-                    modifier = Modifier.fillMaxWidth().padding(start = 12.dp, top = 80.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(start = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text(
-                        text = "Pura música instrumental o sin letra registrada",
-                        fontSize = 24.sp,
+                        text = "Instrumental o sin letra sincronizada",
+                        fontSize = 28.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White.copy(alpha = 0.75f),
+                        color = Color.White.copy(alpha = 0.78f),
                     )
                     Text(
-                        text = "Desliza la rueda del ratón hacia abajo o pulsa la píldora inferior para abrir tu música y explorar.",
-                        fontSize = 14.sp,
+                        text = "Desliza la rueda del ratón hacia abajo o pulsa Ctrl+K para abrir tu música y explorar.",
+                        fontSize = 15.sp,
                         color = Color.White.copy(alpha = 0.46f),
                     )
                 }
@@ -1124,6 +1251,7 @@ private fun LyricsStageColumn(
 @Composable
 private fun SyncedLyricRow(
     line: Line,
+    nextLineStart: Long,
     dist: Int,
     positionMs: Long,
     palette: ArtworkPalette,
@@ -1134,25 +1262,25 @@ private fun SyncedLyricRow(
     val isHovered by interactionSource.collectIsHoveredAsState()
 
     val scale by animateFloatAsState(
-        targetValue = if (isActive) 1.035f else if (isHovered) 1.018f else 1f,
-        animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
+        targetValue = if (isActive) 1.03f else if (isHovered) 1.015f else 1f,
+        animationSpec = spring(dampingRatio = 0.74f, stiffness = Spring.StiffnessMediumLow),
         label = "lyricScale",
     )
     val transX by animateFloatAsState(
         targetValue = if (isActive) 8f else if (isHovered) 5f else 0f,
-        animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
+        animationSpec = spring(dampingRatio = 0.74f, stiffness = Spring.StiffnessMediumLow),
         label = "lyricTransX",
     )
-    val absDist = kotlin.math.abs(dist)
+    val absDist = abs(dist)
     val baseAlpha = when {
         isActive -> 1f
-        dist == 1 -> 0.58f
-        dist == -1 -> 0.40f
-        absDist == 2 -> 0.28f
-        absDist == 3 -> 0.18f
-        else -> 0.10f
+        dist == 1 -> 0.44f
+        dist == -1 -> 0.34f
+        absDist == 2 -> 0.22f
+        absDist == 3 -> 0.14f
+        else -> 0.09f
     }
-    val targetAlpha = if (isHovered && !isActive) 0.88f else baseAlpha
+    val targetAlpha = if (isHovered && !isActive) 0.85f else baseAlpha
     val alpha by animateFloatAsState(
         targetValue = targetAlpha,
         animationSpec = tween(240, easing = FastOutSlowInEasing),
@@ -1160,9 +1288,11 @@ private fun SyncedLyricRow(
     )
     val blurRadius = when {
         isActive || isHovered || absDist <= 1 -> 0.dp
-        absDist == 2 -> 0.6.dp
-        else -> 1.4.dp
+        absDist == 2 -> 0.7.dp
+        else -> 1.5.dp
     }
+
+    val rawText = line.text.ifBlank { "♪" }
 
     Column(
         modifier = Modifier
@@ -1172,7 +1302,7 @@ private fun SyncedLyricRow(
                 scaleY = scale
                 translationX = transX
                 transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
-                this.alpha = alpha
+                this.alpha = if (isActive) 1f else alpha
             }
             .blur(blurRadius)
             .clip(RoundedCornerShape(12.dp))
@@ -1183,23 +1313,65 @@ private fun SyncedLyricRow(
                 indication = null,
                 onClick = onClick,
             )
-            .padding(vertical = 4.dp, horizontal = 6.dp),
+            .padding(vertical = 4.dp, horizontal = 4.dp),
     ) {
-        Text(
-            text = line.text.ifBlank { "♪" },
-            fontSize = if (isActive) 48.sp else 33.sp,
-            fontWeight = if (isActive) FontWeight.Black else FontWeight.Bold,
-            color = if (isActive) Color.White else Color.White.copy(alpha = alpha),
-            lineHeight = if (isActive) 60.sp else 44.sp,
-            style = if (isActive) {
-                TextStyle(
-                    shadow = Shadow(
-                        color = Color.White.copy(alpha = 0.85f),
-                        blurRadius = 36f,
-                    ),
-                )
-            } else TextStyle.Default,
-        )
+        if (isActive) {
+            // Karaoke palabra por palabra (como en Spotify Caelestia y core.js:388-401):
+            // Las palabras ya cantadas brillan en blanco puro con halo; las que faltan de la línea van al 44%.
+            val words = remember(rawText) { rawText.trim().split(Regex("\\s+")).filter { it.isNotEmpty() } }
+            val spanDur = (nextLineStart - line.start).coerceAtLeast(600L)
+            val lineProg = ((positionMs - line.start).toFloat() / spanDur.toFloat()).coerceIn(0f, 1f)
+            val exactWord = lineProg * words.size
+            val currentWordIdx = exactWord.toInt()
+            val wordSubProg = (exactWord - currentWordIdx).coerceIn(0f, 1f)
+
+            val annotated = buildAnnotatedString {
+                val isBeforeFirstLine = positionMs < line.start
+                words.forEachIndexed { idx, w ->
+                    if (idx > 0) append(" ")
+                    val wordAlpha = when {
+                        isBeforeFirstLine -> 0.94f
+                        idx < currentWordIdx -> 1f
+                        idx == currentWordIdx -> 0.92f + 0.08f * wordSubProg
+                        else -> 0.48f
+                    }
+                    val glowAlpha = when {
+                        isBeforeFirstLine -> 0.35f
+                        idx < currentWordIdx -> 0.60f
+                        idx == currentWordIdx -> 0.35f + 0.25f * wordSubProg
+                        else -> 0f
+                    }
+                    withStyle(
+                        SpanStyle(
+                            color = Color.White.copy(alpha = wordAlpha),
+                            shadow = if (glowAlpha > 0.02f) {
+                                Shadow(
+                                    color = Color.White.copy(alpha = glowAlpha),
+                                    blurRadius = 28f,
+                                )
+                            } else null,
+                        ),
+                    ) {
+                        append(w)
+                    }
+                }
+            }
+
+            Text(
+                text = annotated,
+                fontSize = 39.sp,
+                fontWeight = FontWeight.Bold,
+                lineHeight = 50.sp,
+            )
+        } else {
+            Text(
+                text = rawText,
+                fontSize = 32.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                lineHeight = 43.sp,
+            )
+        }
     }
 }
 

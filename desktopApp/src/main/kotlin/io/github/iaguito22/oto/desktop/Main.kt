@@ -142,8 +142,20 @@ fun main() {
         var menuTab by remember { mutableIntStateOf(0) } // 0 = Tu música, 1 = Explorar
         var savingTrack by remember { mutableStateOf<Heard?>(null) }
         var lastWheelToggleMs by remember { mutableLongStateOf(0L) }
+        var lastActivityMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+        var isIdle by remember { mutableStateOf(false) }
         var cue by remember { mutableStateOf<CueInfo?>(null) }
         var lastNonZeroVolume by remember { mutableFloatStateOf(0.8f) }
+
+        LaunchedEffect(lastActivityMs, menuOpen, savingTrack) {
+            if (menuOpen || savingTrack != null) {
+                isIdle = false
+            } else {
+                isIdle = false
+                delay(2600L)
+                isIdle = true
+            }
+        }
 
         LaunchedEffect(cue) {
             if (cue != null) {
@@ -158,6 +170,7 @@ fun main() {
             title = "Oto",
             onPreviewKeyEvent = { ev ->
                 if (ev.type == KeyEventType.KeyDown) {
+                    lastActivityMs = System.currentTimeMillis()
                     when {
                         ev.key == Key.Escape && savingTrack != null -> {
                             savingTrack = null
@@ -296,7 +309,14 @@ fun main() {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .onPointerEvent(PointerEventType.Move) {
+                        lastActivityMs = System.currentTimeMillis()
+                    }
+                    .onPointerEvent(PointerEventType.Press) {
+                        lastActivityMs = System.currentTimeMillis()
+                    }
                     .onPointerEvent(PointerEventType.Scroll) { ev ->
+                        lastActivityMs = System.currentTimeMillis()
                         val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                         val now = System.currentTimeMillis()
                         if (now - lastWheelToggleMs > 280L) {
@@ -322,6 +342,8 @@ fun main() {
                     lyricsLoading = lyricsLoading,
                     volume = volume,
                     cue = cue,
+                    isIdle = isIdle,
+                    menuOpen = menuOpen,
                     onTogglePlay = {
                         val willPlay = !player.state.value.playing
                         player.toggle()
@@ -372,6 +394,7 @@ fun main() {
 
                 DesktopMenuSheet(
                     open = menuOpen,
+                    isIdle = isIdle,
                     onToggleOpen = { menuOpen = it },
                     menu = menu,
                     prefs = prefs,

@@ -44,6 +44,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Album
@@ -155,6 +159,7 @@ private enum class MenuSubView { None, Settings, Queue }
 @Composable
 fun DesktopMenuSheet(
     open: Boolean,
+    isIdle: Boolean = false,
     onToggleOpen: (Boolean) -> Unit,
     menu: MenuController,
     prefs: Prefs,
@@ -193,87 +198,108 @@ fun DesktopMenuSheet(
     val scope = rememberCoroutineScope()
 
     var subView by remember { mutableStateOf(MenuSubView.None) }
+    var showAllLists by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(open) {
         if (!open) {
             subView = MenuSubView.None
+            showAllLists = false
         }
     }
 
+    val peekAlpha by animateFloatAsState(
+        targetValue = if (!open && !isIdle) 1f else 0f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "peekAlpha",
+    )
+    val peekTransY by animateFloatAsState(
+        targetValue = if (!open && !isIdle) 0f else 12f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "peekTransY",
+    )
+
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-        // Píldora inferior liquid glass cuando está cerrado
+        // Píldora inferior de asomo (.oto-peek-pill en core.css:650-673): se oculta sola en modo reposo (isIdle)
         AnimatedVisibility(
             visible = !open,
             enter = fadeIn() + slideInVertically { it / 2 },
             exit = fadeOut() + slideOutVertically { it / 2 },
-            modifier = Modifier.padding(bottom = 18.dp),
+            modifier = Modifier
+                .padding(bottom = 14.dp)
+                .graphicsLayer {
+                    alpha = peekAlpha
+                    translationY = peekTransY
+                },
         ) {
-            Row(
+            var peekHovered by remember { mutableStateOf(false) }
+            Column(
                 modifier = Modifier
-                    .shadow(24.dp, CircleShape, ambientColor = palette.primary.copy(alpha = 0.4f), spotColor = Color.Black)
+                    .widthIn(min = 340.dp, max = 480.dp)
+                    .height(46.dp)
+                    .shadow(24.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.55f), spotColor = Color.Black)
                     .clip(CircleShape)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color.White.copy(alpha = 0.16f),
-                                Color(0xC0171324),
-                            ),
-                        ),
-                    )
+                    .background(if (peekHovered) Color(0xE01C1826) else Color(0xBF14121C))
                     .border(
                         1.dp,
-                        Brush.verticalGradient(
-                            listOf(
-                                Color.White.copy(alpha = 0.50f),
-                                palette.primary.copy(alpha = 0.35f),
-                            ),
-                        ),
+                        if (peekHovered) Color.White.copy(alpha = 0.20f) else Color.White.copy(alpha = 0.11f),
                         CircleShape,
                     )
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .onPointerEvent(PointerEventType.Enter) { peekHovered = true }
+                    .onPointerEvent(PointerEventType.Exit) { peekHovered = false }
                     .clickable { onToggleOpen(true) }
                     .onPointerEvent(PointerEventType.Scroll) { ev ->
                         val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                         if (dy > 0.5f) {
                             onToggleOpen(true)
                         }
-                    }
-                    .padding(horizontal = 22.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.KeyboardArrowUp,
-                    contentDescription = "Abrir menú",
-                    tint = palette.primary,
-                    modifier = Modifier.size(18.dp),
+                Box(
+                    Modifier
+                        .size(width = 36.dp, height = 4.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.28f)),
                 )
-                Text(
-                    text = "Tu música · Explorar",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White.copy(alpha = 0.92f),
-                )
-                Text(
-                    text = "Scroll ↓ o Ctrl+K",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = palette.primary.copy(alpha = 0.85f),
-                )
+                Spacer(Modifier.height(5.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowUp,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.72f),
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Text(
+                        text = "Tu música · Explorar · Buscar",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.3.sp,
+                        color = Color.White.copy(alpha = 0.72f),
+                    )
+                }
             }
         }
 
-        // Fondo oscurecido y cajón desplegado desde abajo con estilo Liquid Glass
+        // Cajón desplegado desde abajo (.oto-sheet en core.css:675-710, Opción 1 · Cristal Caelestia)
         AnimatedVisibility(
             visible = open,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn() + slideInVertically(spring(dampingRatio = 0.84f, stiffness = 320f)) { it / 3 },
+            exit = fadeOut() + slideOutVertically { it / 3 },
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.50f))
-                    .clickable { onToggleOpen(false) }
+                    .background(Color.Black.copy(alpha = 0.38f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onToggleOpen(false) }
                     .onPointerEvent(PointerEventType.Scroll) { ev ->
                         val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                         if (dy < -0.5f) {
@@ -284,22 +310,22 @@ fun DesktopMenuSheet(
             ) {
                 Box(
                     modifier = Modifier
-                        .widthIn(max = 1180.dp)
+                        .widthIn(max = 1040.dp)
                         .fillMaxWidth()
-                        .fillMaxHeight(0.85f)
+                        .padding(horizontal = 20.dp)
+                        .fillMaxHeight(0.84f)
                         .shadow(
                             elevation = 48.dp,
                             shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
-                            ambientColor = palette.primary.copy(alpha = 0.45f),
+                            ambientColor = Color.Black.copy(alpha = 0.75f),
                             spotColor = Color.Black,
                         )
                         .clip(RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp))
                         .background(
                             Brush.verticalGradient(
                                 listOf(
-                                    Color(0x99171228),
-                                    Color(0xBE100B20),
-                                    Color(0xDE080514),
+                                    Color(0xEB15121D),
+                                    Color(0xF50E0C14),
                                 ),
                             ),
                         )
@@ -307,62 +333,45 @@ fun DesktopMenuSheet(
                             1.dp,
                             Brush.verticalGradient(
                                 listOf(
-                                    Color.White.copy(alpha = 0.75f),
-                                    palette.primary.copy(alpha = 0.52f),
-                                    Color.White.copy(alpha = 0.14f),
+                                    Color.White.copy(alpha = 0.16f),
+                                    Color.White.copy(alpha = 0.06f),
                                 ),
                             ),
                             RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
                         )
                         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
                 ) {
-                    // Reflejos cáusticos internos y orbes difusos de cristal líquido (Liquid Glass vivo)
+                    // Halo radial superior con el color de acento de la portada (idéntico a core.css:685)
                     Canvas(Modifier.fillMaxSize()) {
                         val w = size.width
                         val h = size.height
-                        // Orbe difuso de acento primario
-                        drawCircle(
+                        drawRect(
                             brush = Brush.radialGradient(
-                                listOf(palette.primary.copy(alpha = 0.22f), Color.Transparent),
-                                center = Offset(w * 0.20f, h * 0.12f),
-                                radius = w * 0.46f,
+                                colors = listOf(palette.primary.copy(alpha = 0.20f), Color.Transparent),
+                                center = Offset(w * 0.50f, 0f),
+                                radius = w * 0.65f,
                             ),
-                            radius = w * 0.46f,
-                            center = Offset(w * 0.20f, h * 0.12f),
                         )
-                        // Orbe secundario complementario
-                        drawCircle(
-                            brush = Brush.radialGradient(
-                                listOf(palette.secondary.copy(alpha = 0.15f), Color.Transparent),
-                                center = Offset(w * 0.82f, h * 0.26f),
-                                radius = w * 0.50f,
-                            ),
-                            radius = w * 0.50f,
-                            center = Offset(w * 0.82f, h * 0.26f),
-                        )
-                        // Destello especular de cristal en el labio superior
                         drawLine(
                             brush = Brush.horizontalGradient(
                                 listOf(
                                     Color.Transparent,
-                                    Color.White.copy(alpha = 0.70f),
-                                    palette.primary.copy(alpha = 0.75f),
-                                    Color.White.copy(alpha = 0.45f),
+                                    Color.White.copy(alpha = 0.22f),
+                                    palette.primary.copy(alpha = 0.35f),
+                                    Color.White.copy(alpha = 0.22f),
                                     Color.Transparent,
                                 ),
                             ),
-                            start = Offset(w * 0.05f, 1f),
-                            end = Offset(w * 0.95f, 1f),
-                            strokeWidth = 2.5f,
+                            start = Offset(w * 0.08f, 1f),
+                            end = Offset(w * 0.92f, 1f),
+                            strokeWidth = 1.5f,
                         )
                     }
 
                     Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 28.dp, vertical = 18.dp),
+                        modifier = Modifier.fillMaxSize(),
                     ) {
-                        // Tirador superior
+                        // Tirador superior (.sheet-grab en core.css:712-725)
                         Box(
                             Modifier
                                 .fillMaxWidth()
@@ -372,315 +381,339 @@ fun DesktopMenuSheet(
                                         onToggleOpen(false)
                                     }
                                 }
-                                .padding(vertical = 4.dp),
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) { onToggleOpen(false) }
+                                .padding(top = 10.dp, bottom = 6.dp),
                             contentAlignment = Alignment.Center,
                         ) {
                             Box(
                                 Modifier
-                                    .size(72.dp, 16.dp)
+                                    .size(width = 42.dp, height = 4.dp)
                                     .clip(CircleShape)
-                                    .clickable { onToggleOpen(false) },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Box(
-                                    Modifier
-                                        .size(44.dp, 4.dp)
-                                        .clip(CircleShape)
-                                        .background(Color.White.copy(alpha = 0.28f)),
-                                )
-                            }
-                        }
-
-                        Spacer(Modifier.height(14.dp))
-
-                    // Cabecera estilo móvil / prototipo: Selector Segmentado de 2 pestañas (o Botón Atrás + Título)
-                    // + Buscador YouTube Music + Botón Cola + Botón Ajustes + Botón Cerrar
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        val topPage = menuState.pages.lastOrNull()
-                        val isDeepNav = topPage != null || subView != MenuSubView.None || menuState.query.isNotBlank()
-
-                        if (isDeepNav) {
-                            // Sub-navegación: Botón Atrás + Título
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(CircleShape)
-                                        .background(Color.White.copy(alpha = 0.08f))
-                                        .clickable {
-                                            when {
-                                                topPage != null -> menu.closeDetail()
-                                                menuState.query.isNotBlank() -> menu.onQuery("")
-                                                else -> subView = MenuSubView.None
-                                            }
-                                        },
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Atrás", tint = Color.White, modifier = Modifier.size(19.dp))
-                                }
-                                Text(
-                                    text = when {
-                                        topPage is Page.Local -> if (topPage.id == LIKED_ID) "Me gusta" else (playlists.firstOrNull { it.id == topPage.id }?.name ?: "Lista")
-                                        topPage is Page.Remote -> topPage.item.title
-                                        menuState.query.isNotBlank() -> "Resultados de búsqueda"
-                                        subView == MenuSubView.Settings -> "Ajustes y Cuenta"
-                                        subView == MenuSubView.Queue -> "Cola de reproducción"
-                                        else -> ""
-                                    },
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                )
-                            }
-                        } else {
-                            // Selector segmentado de 2 pestañas: [ Tu música | Explorar ]
-                            DesktopSegmentedTabs(
-                                selectedPage = selectedTab,
-                                accent = palette.primary,
-                                onSelect = onSelectTab,
+                                    .background(Color.White.copy(alpha = 0.24f)),
                             )
                         }
 
-                        Spacer(Modifier.weight(1f))
-
-                        // Buscador de YouTube Music
+                        // Cabecera (.sheet-top-bar en core.css:728-853):
+                        // Píldora segmentada [Tu música | Explorar] siempre visible + Buscador central + Iconos circulares
                         Row(
                             modifier = Modifier
-                                .width(320.dp)
-                                .height(40.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.08f))
-                                .border(1.dp, palette.primary.copy(alpha = 0.22f), CircleShape)
-                                .clickable { searchFocusRequester.requestFocus() }
-                                .padding(horizontal = 14.dp),
+                                .fillMaxWidth()
+                                .padding(start = 28.dp, end = 28.dp, top = 6.dp, bottom = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
                         ) {
-                            Icon(Icons.Rounded.Search, null, tint = palette.primary, modifier = Modifier.size(18.dp))
-                            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                                if (menuState.query.isEmpty()) {
-                                    Text(
-                                        "Buscar canciones, álbumes, artistas…",
-                                        fontSize = 13.sp,
-                                        color = Color.White.copy(alpha = 0.42f),
-                                    )
-                                }
-                                BasicTextField(
-                                    value = menuState.query,
-                                    onValueChange = { menu.onQuery(it) },
-                                    singleLine = true,
-                                    textStyle = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium),
-                                    cursorBrush = SolidColor(palette.primary),
-                                    modifier = Modifier.fillMaxWidth().focusRequester(searchFocusRequester),
-                                )
-                            }
-                            if (menuState.query.isNotEmpty()) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Close,
-                                    contentDescription = "Limpiar",
-                                    tint = Color.White.copy(alpha = 0.6f),
-                                    modifier = Modifier.size(16.dp).clickable { menu.onQuery("") },
-                                )
-                            }
-                        }
+                            val topPage = menuState.pages.lastOrNull()
+                            val isDeepNav = topPage != null || subView != MenuSubView.None || menuState.query.isNotBlank() || showAllLists
 
-                        // Botón Cola de reproducción
-                        Box(
-                            modifier = Modifier
-                                .height(40.dp)
-                                .clip(CircleShape)
-                                .background(if (subView == MenuSubView.Queue) palette.primary.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
-                                .border(1.dp, if (subView == MenuSubView.Queue) palette.primary.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.12f), CircleShape)
-                                .clickable {
-                                    subView = if (subView == MenuSubView.Queue) MenuSubView.None else MenuSubView.Queue
-                                }
-                                .padding(horizontal = 12.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Cola", tint = if (subView == MenuSubView.Queue) palette.primary else Color.White.copy(alpha = 0.85f), modifier = Modifier.size(17.dp))
-                                if (queue.isNotEmpty()) {
-                                    Text(
-                                        text = "${queue.size}",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (subView == MenuSubView.Queue) palette.primary else Color.White.copy(alpha = 0.85f),
-                                    )
-                                }
-                            }
-                        }
-
-                        // Botón Ajustes
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(if (subView == MenuSubView.Settings) palette.primary.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
-                                .border(1.dp, if (subView == MenuSubView.Settings) palette.primary.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.12f), CircleShape)
-                                .clickable {
-                                    subView = if (subView == MenuSubView.Settings) MenuSubView.None else MenuSubView.Settings
+                            // Selector segmentado [ Tu música | Explorar ]: permanece en su sitio como en core.js:972
+                            Box(
+                                modifier = Modifier.graphicsLayer {
+                                    alpha = if (isDeepNav) 0.58f else 1f
                                 },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(Icons.Rounded.Settings, "Ajustes", tint = if (subView == MenuSubView.Settings) palette.primary else Color.White, modifier = Modifier.size(18.dp))
-                        }
-
-                        // Botón Cerrar
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.08f))
-                                .clickable { onToggleOpen(false) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(Icons.Rounded.Close, "Cerrar", tint = Color.White, modifier = Modifier.size(18.dp))
-                        }
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-
-                    // Cuerpo dinámico del cajón
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
-                        val topPage = menuState.pages.lastOrNull()
-                        when {
-                            topPage is Page.Local -> {
-                                val list = if (topPage.id == LIKED_ID) likedList else playlists.firstOrNull { it.id == topPage.id }
-                                if (list != null) {
-                                    LocalPlaylistDetailPane(
-                                        list = list,
-                                        palette = palette,
-                                        currentMediaId = currentMediaId,
-                                        onPlayIndex = { idx -> onPlayLocal(list, idx); onToggleOpen(false) },
-                                        onSaveTo = onSaveTrack,
-                                        onDeletePlaylist = if (list.id != LIKED_ID) {
-                                            {
-                                                scope.launch {
-                                                    prefs.deletePlaylist(list.id)
-                                                    menu.closeDetail()
-                                                }
-                                            }
-                                        } else null,
-                                        onRemoveSong = if (list.id != LIKED_ID) {
-                                            { songId ->
-                                                scope.launch {
-                                                    prefs.removeFromPlaylist(list.id, songId)
-                                                }
-                                            }
-                                        } else null,
-                                    )
-                                }
-                            }
-                            topPage is Page.Smart -> {
-                                LocalPlaylistDetailPane(
-                                    list = topPage.list,
-                                    palette = palette,
-                                    currentMediaId = currentMediaId,
-                                    onPlayIndex = { idx -> onPlayLocal(topPage.list, idx); onToggleOpen(false) },
-                                    onSaveTo = onSaveTrack,
-                                    onDeletePlaylist = null,
-                                    onRemoveSong = null,
-                                )
-                            }
-                            topPage is Page.Remote -> {
-                                RemoteDetailPane(
-                                    page = topPage,
-                                    palette = palette,
-                                    currentMediaId = currentMediaId,
-                                    onPlayAll = { songs, idx -> onPlayAll(songs, idx, topPage.item); onToggleOpen(false) },
-                                    onOpenItem = menu::open,
-                                    onSaveTo = onSaveTrack,
-                                )
-                            }
-                            menuState.query.isNotBlank() -> {
-                                SearchResultsPane(
-                                    query = menuState.query,
-                                    searching = menuState.searching,
-                                    filter = menuState.filter,
-                                    results = menuState.results,
-                                    error = menuState.searchError,
-                                    palette = palette,
-                                    currentMediaId = currentMediaId,
-                                    onFilter = menu::onFilter,
-                                    onPlaySong = { onPlaySong(it); onToggleOpen(false) },
-                                    onOpenItem = menu::open,
-                                    onSaveTo = onSaveTrack,
-                                )
-                            }
-                            subView == MenuSubView.Settings -> {
-                                SettingsAndAccountPane(
-                                    prefs = prefs,
-                                    importer = importer,
-                                    account = account,
-                                    cloud = cloud,
-                                    login = login,
-                                    session = session,
-                                    cloudState = cloudState,
-                                    importState = importState,
-                                    qualityMode = qualityMode,
-                                    dataSaver = dataSaver,
-                                    palette = palette,
-                                )
-                            }
-                            subView == MenuSubView.Queue -> {
-                                QueuePane(
-                                    queue = queue,
-                                    currentMediaId = currentMediaId,
-                                    shuffle = shuffle,
-                                    loop = loop,
-                                    palette = palette,
-                                    onToggleShuffle = { onSetShuffle(!shuffle) },
-                                    onToggleLoop = { onSetLoop(!loop) },
-                                    onMove = onMoveQueue,
-                                    onRemove = onRemoveQueue,
-                                    onClearQueue = onClearQueue,
-                                    onSkipTo = { idx -> onSkipToQueue(idx); onToggleOpen(false) },
-                                )
-                            }
-                            selectedTab == 0 -> {
-                                YourMusicPane(
-                                    likedList = likedList,
-                                    playlists = playlists,
-                                    history = history,
-                                    palette = palette,
-                                    currentMediaId = currentMediaId,
-                                    onOpenLocal = menu::openLocal,
-                                    onPlayLocal = { list, idx -> onPlayLocal(list, idx); onToggleOpen(false) },
-                                    onPlayDj = { onPlayDj(); onToggleOpen(false) },
-                                    onPlayHeard = { h -> onPlaySong(h.toSong()); onToggleOpen(false) },
-                                    onSaveTo = onSaveTrack,
-                                    onCreatePlaylist = { name ->
-                                        scope.launch {
-                                            val newId = prefs.createPlaylist(name)
-                                            menu.openLocal(newId)
+                            ) {
+                                DesktopSegmentedTabs(
+                                    selectedPage = selectedTab,
+                                    accent = palette.primary,
+                                    onSelect = { idx ->
+                                        onSelectTab(idx)
+                                        subView = MenuSubView.None
+                                        showAllLists = false
+                                        if (menuState.query.isNotBlank()) menu.onQuery("")
+                                        while (menu.state.value.pages.isNotEmpty()) {
+                                            menu.closeDetail()
                                         }
                                     },
                                 )
                             }
-                            else -> {
-                                ExplorePane(
-                                    shelves = menuState.shelves,
-                                    chips = menuState.chips,
-                                    selectedChip = menuState.chip,
-                                    error = menuState.homeError,
-                                    palette = palette,
-                                    currentMediaId = currentMediaId,
-                                    onChip = menu::onChip,
-                                    onRetry = menu::loadHome,
-                                    onPlaySong = { onPlaySong(it); onToggleOpen(false) },
-                                    onOpenItem = menu::open,
-                                    onSaveTo = onSaveTrack,
+
+                            // Botón circular Atrás cuando estamos dentro de una lista, búsqueda o subvista
+                            if (isDeepNav) {
+                                SheetCircleIconButton(
+                                    icon = Icons.AutoMirrored.Rounded.ArrowBack,
+                                    tooltip = "Volver",
+                                    active = false,
+                                    accent = palette.primary,
+                                    onClick = {
+                                        when {
+                                            topPage != null -> menu.closeDetail()
+                                            showAllLists -> showAllLists = false
+                                            menuState.query.isNotBlank() -> menu.onQuery("")
+                                            else -> subView = MenuSubView.None
+                                        }
+                                    },
                                 )
+                            }
+
+                            // Buscador central en píldora (.sheet-search en core.css:782-826)
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(42.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (menuState.query.isNotBlank()) Color.White.copy(alpha = 0.09f)
+                                        else Color.White.copy(alpha = 0.06f),
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (menuState.query.isNotBlank()) palette.primary.copy(alpha = 0.48f)
+                                        else Color.White.copy(alpha = 0.09f),
+                                        CircleShape,
+                                    )
+                                    .clickable { searchFocusRequester.requestFocus() }
+                                    .padding(horizontal = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Search,
+                                    contentDescription = null,
+                                    tint = Color.White.copy(alpha = 0.56f),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                                    if (menuState.query.isEmpty()) {
+                                        Text(
+                                            text = "Canciones, artistas, listas…",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = Color.White.copy(alpha = 0.42f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    BasicTextField(
+                                        value = menuState.query,
+                                        onValueChange = {
+                                            subView = MenuSubView.None
+                                            showAllLists = false
+                                            menu.onQuery(it)
+                                        },
+                                        singleLine = true,
+                                        textStyle = TextStyle(
+                                            color = Color.White,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium,
+                                        ),
+                                        cursorBrush = SolidColor(palette.primary),
+                                        modifier = Modifier.fillMaxWidth().focusRequester(searchFocusRequester),
+                                    )
+                                }
+                                if (menuState.query.isNotEmpty()) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Limpiar búsqueda",
+                                        tint = Color.White.copy(alpha = 0.65f),
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .pointerHoverIcon(PointerIcon.Hand)
+                                            .clickable { menu.onQuery("") },
+                                    )
+                                }
+                            }
+
+                            // Botones circulares de acción (.sheet-icon-btn en core.css:828-852)
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                SheetCircleIconButton(
+                                    icon = Icons.AutoMirrored.Rounded.QueueMusic,
+                                    tooltip = "Cola de reproducción",
+                                    active = subView == MenuSubView.Queue,
+                                    accent = palette.primary,
+                                    badge = if (queue.isNotEmpty()) "${queue.size}" else null,
+                                    onClick = {
+                                        subView = if (subView == MenuSubView.Queue) MenuSubView.None else MenuSubView.Queue
+                                    },
+                                )
+                                SheetCircleIconButton(
+                                    icon = Icons.Rounded.Settings,
+                                    tooltip = "Ajustes y cuenta",
+                                    active = subView == MenuSubView.Settings,
+                                    accent = palette.primary,
+                                    onClick = {
+                                        subView = if (subView == MenuSubView.Settings) MenuSubView.None else MenuSubView.Settings
+                                    },
+                                )
+                                SheetCircleIconButton(
+                                    icon = Icons.Rounded.Close,
+                                    tooltip = "Cerrar (Esc)",
+                                    active = false,
+                                    accent = palette.primary,
+                                    onClick = { onToggleOpen(false) },
+                                )
+                            }
+                        }
+
+                        // Cuerpo desplazable (.sheet-scroll en core.css:856-879)
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .padding(horizontal = 28.dp),
+                        ) {
+                            val topPage = menuState.pages.lastOrNull()
+                            when {
+                                topPage is Page.Local -> {
+                                    val list = if (topPage.id == LIKED_ID) likedList else playlists.firstOrNull { it.id == topPage.id }
+                                    if (list != null) {
+                                        LocalPlaylistDetailPane(
+                                            list = list,
+                                            palette = palette,
+                                            currentMediaId = currentMediaId,
+                                            onBack = menu::closeDetail,
+                                            onPlayIndex = { idx -> onPlayLocal(list, idx); onToggleOpen(false) },
+                                            onSaveTo = onSaveTrack,
+                                            onDeletePlaylist = if (list.id != LIKED_ID) {
+                                                {
+                                                    scope.launch {
+                                                        prefs.deletePlaylist(list.id)
+                                                        menu.closeDetail()
+                                                    }
+                                                }
+                                            } else null,
+                                            onRemoveSong = if (list.id != LIKED_ID) {
+                                                { songId ->
+                                                    scope.launch {
+                                                        prefs.removeFromPlaylist(list.id, songId)
+                                                    }
+                                                }
+                                            } else null,
+                                        )
+                                    }
+                                }
+                                topPage is Page.Smart -> {
+                                    LocalPlaylistDetailPane(
+                                        list = topPage.list,
+                                        palette = palette,
+                                        currentMediaId = currentMediaId,
+                                        onBack = menu::closeDetail,
+                                        onPlayIndex = { idx -> onPlayLocal(topPage.list, idx); onToggleOpen(false) },
+                                        onSaveTo = onSaveTrack,
+                                        onDeletePlaylist = null,
+                                        onRemoveSong = null,
+                                    )
+                                }
+                                topPage is Page.Remote -> {
+                                    RemoteDetailPane(
+                                        page = topPage,
+                                        palette = palette,
+                                        currentMediaId = currentMediaId,
+                                        onBack = menu::closeDetail,
+                                        onPlayAll = { songs, idx -> onPlayAll(songs, idx, topPage.item); onToggleOpen(false) },
+                                        onOpenItem = menu::open,
+                                        onSaveTo = onSaveTrack,
+                                    )
+                                }
+                                menuState.query.isNotBlank() -> {
+                                    SearchResultsPane(
+                                        query = menuState.query,
+                                        searching = menuState.searching,
+                                        filter = menuState.filter,
+                                        results = menuState.results,
+                                        error = menuState.searchError,
+                                        palette = palette,
+                                        currentMediaId = currentMediaId,
+                                        onFilter = menu::onFilter,
+                                        onPlaySong = { onPlaySong(it); onToggleOpen(false) },
+                                        onOpenItem = menu::open,
+                                        onSaveTo = onSaveTrack,
+                                    )
+                                }
+                                subView == MenuSubView.Settings -> {
+                                    SettingsAndAccountPane(
+                                        prefs = prefs,
+                                        importer = importer,
+                                        account = account,
+                                        cloud = cloud,
+                                        login = login,
+                                        session = session,
+                                        cloudState = cloudState,
+                                        importState = importState,
+                                        qualityMode = qualityMode,
+                                        dataSaver = dataSaver,
+                                        palette = palette,
+                                    )
+                                }
+                                subView == MenuSubView.Queue -> {
+                                    QueuePane(
+                                        queue = queue,
+                                        currentMediaId = currentMediaId,
+                                        shuffle = shuffle,
+                                        loop = loop,
+                                        palette = palette,
+                                        onToggleShuffle = { onSetShuffle(!shuffle) },
+                                        onToggleLoop = { onSetLoop(!loop) },
+                                        onMove = onMoveQueue,
+                                        onRemove = onRemoveQueue,
+                                        onClearQueue = onClearQueue,
+                                        onSkipTo = { idx -> onSkipToQueue(idx); onToggleOpen(false) },
+                                    )
+                                }
+                                showAllLists && selectedTab == 0 -> {
+                                    AllListsSubPane(
+                                        likedList = likedList,
+                                        playlists = playlists,
+                                        palette = palette,
+                                        onBack = { showAllLists = false },
+                                        onOpenLocal = { id ->
+                                            showAllLists = false
+                                            menu.openLocal(id)
+                                        },
+                                        onPlayLocal = { list ->
+                                            onPlayLocal(list, null)
+                                            onToggleOpen(false)
+                                        },
+                                        onCreatePlaylist = { name ->
+                                            scope.launch {
+                                                val newId = prefs.createPlaylist(name)
+                                                showAllLists = false
+                                                menu.openLocal(newId)
+                                            }
+                                        },
+                                    )
+                                }
+                                selectedTab == 0 -> {
+                                    YourMusicPane(
+                                        likedList = likedList,
+                                        playlists = playlists,
+                                        history = history,
+                                        palette = palette,
+                                        currentMediaId = currentMediaId,
+                                        onOpenLocal = menu::openLocal,
+                                        onOpenSmart = menu::openSmart,
+                                        onOpenAllLists = { showAllLists = true },
+                                        onPlayLocal = { list, idx -> onPlayLocal(list, idx); onToggleOpen(false) },
+                                        onPlayDj = { onPlayDj(); onToggleOpen(false) },
+                                        onPlayHeard = { h -> onPlaySong(h.toSong()); onToggleOpen(false) },
+                                        onSaveTo = onSaveTrack,
+                                        onCreatePlaylist = { name ->
+                                            scope.launch {
+                                                val newId = prefs.createPlaylist(name)
+                                                menu.openLocal(newId)
+                                            }
+                                        },
+                                    )
+                                }
+                                else -> {
+                                    ExplorePane(
+                                        shelves = menuState.shelves,
+                                        chips = menuState.chips,
+                                        selectedChip = menuState.chip,
+                                        error = menuState.homeError,
+                                        palette = palette,
+                                        currentMediaId = currentMediaId,
+                                        onChip = menu::onChip,
+                                        onRetry = menu::loadHome,
+                                        onPlaySong = { onPlaySong(it); onToggleOpen(false) },
+                                        onOpenItem = menu::open,
+                                        onSaveTo = onSaveTrack,
+                                    )
+                                }
                             }
                         }
                     }
@@ -689,8 +722,69 @@ fun DesktopMenuSheet(
         }
     }
 }
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun SheetCircleIconButton(
+    icon: ImageVector,
+    tooltip: String,
+    active: Boolean,
+    accent: Color,
+    badge: String? = null,
+    onClick: () -> Unit,
+) {
+    var hovered by remember { mutableStateOf(false) }
+    Box(
+        modifier = Modifier
+            .height(42.dp)
+            .widthIn(min = 42.dp)
+            .clip(CircleShape)
+            .background(
+                when {
+                    active -> accent.copy(alpha = 0.20f)
+                    hovered -> Color.White.copy(alpha = 0.11f)
+                    else -> Color.White.copy(alpha = 0.06f)
+                },
+            )
+            .border(
+                1.dp,
+                when {
+                    active -> accent.copy(alpha = 0.50f)
+                    hovered -> Color.White.copy(alpha = 0.16f)
+                    else -> Color.White.copy(alpha = 0.09f)
+                },
+                CircleShape,
+            )
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onPointerEvent(PointerEventType.Enter) { hovered = true }
+            .onPointerEvent(PointerEventType.Exit) { hovered = false }
+            .clickable(onClick = onClick)
+            .padding(horizontal = if (badge != null) 12.dp else 0.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = tooltip,
+                tint = if (active) accent else if (hovered) Color.White else Color.White.copy(alpha = 0.72f),
+                modifier = Modifier.size(18.dp),
+            )
+            if (badge != null) {
+                Text(
+                    text = badge,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (active) accent else Color.White.copy(alpha = 0.85f),
+                )
+            }
+        }
+    }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun MenuTabPill(
     label: String,
@@ -698,20 +792,39 @@ private fun MenuTabPill(
     accent: Color,
     onClick: () -> Unit,
 ) {
+    var hovered by remember { mutableStateOf(false) }
     Box(
         modifier = Modifier
+            .height(36.dp)
             .clip(CircleShape)
-            .background(if (selected) accent.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.05f))
-            .border(1.dp, if (selected) accent.copy(alpha = 0.45f) else Color.Transparent, CircleShape)
+            .background(
+                when {
+                    selected -> accent
+                    hovered -> Color.White.copy(alpha = 0.11f)
+                    else -> Color.White.copy(alpha = 0.06f)
+                },
+            )
+            .border(
+                1.dp,
+                when {
+                    selected -> accent
+                    hovered -> Color.White.copy(alpha = 0.15f)
+                    else -> Color.White.copy(alpha = 0.09f)
+                },
+                CircleShape,
+            )
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onPointerEvent(PointerEventType.Enter) { hovered = true }
+            .onPointerEvent(PointerEventType.Exit) { hovered = false }
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
             fontSize = 13.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color = if (selected) accent else Color.White.copy(alpha = 0.72f),
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+            color = if (selected) Color(0xFF101214) else if (hovered) Color.White else Color.White.copy(alpha = 0.72f),
         )
     }
 }
@@ -723,68 +836,38 @@ private fun DesktopSegmentedTabs(
     accent: Color,
     onSelect: (Int) -> Unit,
 ) {
+    // Idéntico a .oto-tabs en core.css:738-780
     Row(
         modifier = Modifier
+            .width(236.dp)
             .height(42.dp)
             .clip(CircleShape)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        Color.White.copy(alpha = 0.12f),
-                        Color.White.copy(alpha = 0.04f),
-                    ),
-                ),
-            )
-            .border(
-                1.dp,
-                Brush.verticalGradient(
-                    listOf(
-                        Color.White.copy(alpha = 0.38f),
-                        Color.White.copy(alpha = 0.10f),
-                    ),
-                ),
-                CircleShape,
-            )
+            .background(Color.White.copy(alpha = 0.06f))
+            .border(1.dp, Color.White.copy(alpha = 0.09f), CircleShape)
             .padding(4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         listOf("Tu música", "Explorar").forEachIndexed { idx, title ->
             val isSelected = selectedPage == idx
             var isHovered by remember { mutableStateOf(false) }
-            val tabBg = when {
-                isSelected -> Brush.verticalGradient(
-                    listOf(
-                        Color.White.copy(alpha = 0.24f),
-                        accent.copy(alpha = 0.32f),
-                    ),
-                )
-                isHovered -> Brush.verticalGradient(
-                    listOf(
-                        Color.White.copy(alpha = 0.14f),
-                        Color.White.copy(alpha = 0.06f),
-                    ),
-                )
-                else -> Brush.verticalGradient(
-                    listOf(
-                        Color.Transparent,
-                        Color.Transparent,
-                    ),
-                )
-            }
-            val tabBorder = when {
-                isSelected -> Color.White.copy(alpha = 0.40f)
-                isHovered -> Color.White.copy(alpha = 0.20f)
-                else -> Color.Transparent
-            }
-
             Box(
                 modifier = Modifier
-                    .width(116.dp)
+                    .weight(1f)
                     .fillMaxHeight()
                     .clip(CircleShape)
-                    .background(tabBg)
-                    .border(1.dp, tabBorder, CircleShape)
+                    .background(
+                        when {
+                            isSelected -> Color.White.copy(alpha = 0.12f)
+                            isHovered -> Color.White.copy(alpha = 0.05f)
+                            else -> Color.Transparent
+                        },
+                    )
+                    .border(
+                        1.dp,
+                        if (isSelected) Color.White.copy(alpha = 0.14f) else Color.Transparent,
+                        CircleShape,
+                    )
+                    .pointerHoverIcon(PointerIcon.Hand)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -795,15 +878,16 @@ private fun DesktopSegmentedTabs(
             ) {
                 Text(
                     text = title,
-                    fontSize = 13.5.sp,
-                    fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                    color = if (isSelected) Color.White else Color.White.copy(alpha = 0.70f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isSelected) Color(0xFFF3EEFF) else if (isHovered) Color.White else Color.White.copy(alpha = 0.66f),
                 )
             }
         }
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun YourMusicPane(
     likedList: LocalPlaylist,
@@ -812,6 +896,8 @@ private fun YourMusicPane(
     palette: ArtworkPalette,
     currentMediaId: String?,
     onOpenLocal: (String) -> Unit,
+    onOpenSmart: (LocalPlaylist) -> Unit,
+    onOpenAllLists: () -> Unit,
     onPlayLocal: (LocalPlaylist, Int?) -> Unit,
     onPlayDj: () -> Unit,
     onPlayHeard: (Heard) -> Unit,
@@ -829,63 +915,77 @@ private fun YourMusicPane(
         }
     }
 
+    // Si el usuario tiene menos de 2 listas creadas, completamos los 2 huecos del estante fijado de 4
+    // con mezclas inteligentes derivadas de su historial/Me gusta (para mantener siempre la rejilla de 4 de core.js:823).
+    val displayLists = remember(playlists, history, likedList) {
+        if (playlists.size >= 2) {
+            playlists
+        } else {
+            val pool = (history + likedList.songs).distinctBy { it.id }
+            val fallback1 = LocalPlaylist(
+                id = "__smart_recent__",
+                name = "En bucle",
+                songs = pool.take(12),
+            )
+            val fallback2 = LocalPlaylist(
+                id = "__smart_night__",
+                name = "Nocturna",
+                songs = pool.drop(2).take(12).ifEmpty { pool.take(8) },
+            )
+            (playlists + listOf(fallback1, fallback2)).take(maxOf(playlists.size, 2))
+        }
+    }
+    val pinnedTwo = displayLists.take(2)
+    val tileLists = playlists.drop(2).take(6)
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(22.dp),
-        contentPadding = PaddingValues(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+        contentPadding = PaddingValues(top = 8.dp, bottom = 36.dp),
     ) {
-        // 1. Estante fijado (Pinned Shelf): DJ + Me gusta + Listas fijadas + Nueva lista
-        item(key = "pinnedShelf") {
-            LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+        // 1. Cabecera "Tus listas" + botón píldora "+ Nueva" (idéntico a core.js:816-820)
+        item(key = "sectionHeadLists") {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                // DJ de Oto con vinilo interactivo giratorio
-                item(key = "djCard") {
-                    DjShelfCard(
-                        accent = palette.secondary,
-                        onClick = onPlayDj,
-                    )
-                }
-
-                // Me gusta con gradiente y corazón brillante
-                item(key = LIKED_ID) {
-                    MeGustaShelfCard(
-                        count = likedList.songs.size,
-                        accent = palette.primary,
-                        onClick = { onOpenLocal(LIKED_ID) },
-                        onPlayDirect = { onPlayLocal(likedList, null) },
-                    )
-                }
-
-                // Listas fijadas / primeras listas
-                items(playlists.take(6), key = { it.id }) { pl ->
-                    PlaylistShelfCard(
-                        playlist = pl,
-                        accent = palette.tertiary,
-                        onClick = { onOpenLocal(pl.id) },
-                        onPlayDirect = { onPlayLocal(pl, null) },
-                    )
-                }
-
-                // Tarjeta rápida para crear nueva lista
-                item(key = "newPlaylistCard") {
-                    NewPlaylistShelfCard(
-                        accent = palette.primary,
-                        onClick = { showCreateDialog = true },
-                    )
+                Text(
+                    text = "Tus listas",
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.4).sp,
+                    color = Color(0xFFF3EEFF),
+                )
+                var newHovered by remember { mutableStateOf(false) }
+                Row(
+                    modifier = Modifier
+                        .height(34.dp)
+                        .clip(CircleShape)
+                        .background(if (newHovered) Color.White.copy(alpha = 0.13f) else Color.White.copy(alpha = 0.08f))
+                        .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .onPointerEvent(PointerEventType.Enter) { newHovered = true }
+                        .onPointerEvent(PointerEventType.Exit) { newHovered = false }
+                        .clickable { showCreateDialog = !showCreateDialog }
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(Icons.Rounded.Add, null, tint = Color(0xFFF3EEFF), modifier = Modifier.size(15.dp))
+                    Text("Nueva", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF3EEFF))
                 }
             }
         }
 
-        // Fila de creación rápida de lista si está activada
+        // Creación inline de lista cuando se pulsa "+ Nueva"
         if (showCreateDialog) {
             item(key = "createPlaylistInline") {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(14.dp))
-                        .background(Color.White.copy(alpha = 0.08f))
+                        .background(Color.White.copy(alpha = 0.07f))
                         .border(1.dp, palette.primary.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -907,10 +1007,7 @@ private fun YourMusicPane(
                             .weight(1f)
                             .focusRequester(createFocusRequester)
                             .onPreviewKeyEvent { ev ->
-                                if (ev.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
-                                    ev.key == androidx.compose.ui.input.key.Key.Enter &&
-                                    newListName.isNotBlank()
-                                ) {
+                                if (ev.type == KeyEventType.KeyDown && ev.key == Key.Enter && newListName.isNotBlank()) {
                                     onCreatePlaylist(newListName.trim())
                                     newListName = ""
                                     showCreateDialog = false
@@ -922,6 +1019,7 @@ private fun YourMusicPane(
                         modifier = Modifier
                             .clip(CircleShape)
                             .background(palette.primary)
+                            .pointerHoverIcon(PointerIcon.Hand)
                             .clickable {
                                 if (newListName.isNotBlank()) {
                                     onCreatePlaylist(newListName.trim())
@@ -931,12 +1029,13 @@ private fun YourMusicPane(
                             }
                             .padding(horizontal = 14.dp, vertical = 6.dp),
                     ) {
-                        Text("Crear", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF130E1F))
+                        Text("Crear", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF101214))
                     }
                     Box(
                         modifier = Modifier
                             .clip(CircleShape)
                             .background(Color.White.copy(alpha = 0.08f))
+                            .pointerHoverIcon(PointerIcon.Hand)
                             .clickable { showCreateDialog = false; newListName = "" }
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     ) {
@@ -946,44 +1045,58 @@ private fun YourMusicPane(
             }
         }
 
-        // 2. Baldosas de 2 columnas para tus listas
-        item(key = "playlistsGridHeader") {
+        // 2. Estantería fijada de 4 tarjetas cuadradas limpias (.pinned-shelf en core.css:914-971):
+        // DJ + Me gusta + 2 listas fijadas, en una fila de 4 columnas iguales sin caja gris exterior.
+        item(key = "pinnedShelf4") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Text(
-                    text = "Tus listas",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                )
-                Row(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.08f))
-                        .clickable { showCreateDialog = true }
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(Icons.Rounded.Add, null, tint = palette.primary, modifier = Modifier.size(16.dp))
-                    Text("Nueva lista", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Box(Modifier.weight(1f)) {
+                    DjShelfCard(
+                        accent = palette.primary,
+                        onClick = onPlayDj,
+                    )
+                }
+                Box(Modifier.weight(1f)) {
+                    MeGustaShelfCard(
+                        count = likedList.songs.size,
+                        accent = palette.primary,
+                        accentDark = palette.secondary,
+                        onClick = { onOpenLocal(LIKED_ID) },
+                        onPlayDirect = { onPlayLocal(likedList, null) },
+                    )
+                }
+                pinnedTwo.forEach { pl ->
+                    Box(Modifier.weight(1f)) {
+                        PlaylistShelfCard(
+                            playlist = pl,
+                            accent = palette.primary,
+                            onClick = {
+                                if (pl.id.startsWith("__smart_")) onOpenSmart(pl)
+                                else onOpenLocal(pl.id)
+                            },
+                            onPlayDirect = { onPlayLocal(pl, null) },
+                        )
+                    }
+                }
+                repeat((2 - pinnedTwo.size).coerceAtLeast(0)) {
+                    Spacer(Modifier.weight(1f))
                 }
             }
         }
-        if (playlists.isNotEmpty()) {
-            item(key = "playlistsGrid") {
+
+        // 3. Cuadrícula de baldosas horizontales compactas (.tiles-grid en core.css:973-1024)
+        if (tileLists.isNotEmpty()) {
+            item(key = "tilesGrid") {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    val pairs = playlists.chunked(2)
-                    pairs.forEach { pair ->
+                    tileLists.chunked(3).forEach { rowLists ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            pair.forEach { pl ->
-                                Box(modifier = Modifier.weight(1f)) {
+                            rowLists.forEach { pl ->
+                                Box(Modifier.weight(1f)) {
                                     PlaylistTileDesktop(
                                         playlist = pl,
                                         accent = palette.primary,
@@ -992,7 +1105,7 @@ private fun YourMusicPane(
                                     )
                                 }
                             }
-                            if (pair.size == 1) {
+                            repeat((3 - rowLists.size).coerceAtLeast(0)) {
                                 Spacer(Modifier.weight(1f))
                             }
                         }
@@ -1001,13 +1114,64 @@ private fun YourMusicPane(
             }
         }
 
-        // 3. Oído hace poco
+        // 4. Botón píldora de ancho completo "Todas tus listas  N  >" (.all-lists-row en core.css:1027-1052)
+        item(key = "allListsRow") {
+            var allHovered by remember { mutableStateOf(false) }
+            val totalCount = playlists.size + 1 // +1 por Me gusta
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(if (allHovered) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.045f))
+                    .border(
+                        1.dp,
+                        if (allHovered) Color.White.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.07f),
+                        RoundedCornerShape(14.dp),
+                    )
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .onPointerEvent(PointerEventType.Enter) { allHovered = true }
+                    .onPointerEvent(PointerEventType.Exit) { allHovered = false }
+                    .clickable(onClick = onOpenAllLists)
+                    .padding(horizontal = 18.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Todas tus listas",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFF3EEFF),
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = "$totalCount",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White.copy(alpha = 0.62f),
+                    )
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.62f),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+
+        // 5. Cabecera "Oído hace poco" + Rejilla de 2 columnas sin bordes (core.js:856-860)
         item(key = "historyHeader") {
             Text(
                 text = "Oído hace poco",
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
+                fontSize = 21.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-0.4).sp,
+                color = Color(0xFFF3EEFF),
+                modifier = Modifier.padding(top = 8.dp),
             )
         }
 
@@ -1020,16 +1184,112 @@ private fun YourMusicPane(
                 )
             }
         } else {
-            items(history, key = { it.id }) { h ->
-                SongRowDesktop(
-                    title = h.title,
-                    subtitle = h.artist,
-                    thumbnail = h.artwork,
-                    isCurrent = h.id == currentMediaId,
+            val rowsOfTwo = history.take(16).chunked(2)
+            itemsIndexed(rowsOfTwo, key = { idx, pair -> "hist-$idx-${pair.first().id}" }) { _, pair ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    pair.forEach { h ->
+                        Box(Modifier.weight(1f)) {
+                            SongRowDesktop(
+                                title = h.title,
+                                subtitle = h.artist,
+                                thumbnail = h.artwork,
+                                isCurrent = h.id == currentMediaId,
+                                accent = palette.primary,
+                                onClick = { onPlayHeard(h) },
+                                onSaveTo = { onSaveTo(h) },
+                            )
+                        }
+                    }
+                    if (pair.size == 1) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun AllListsSubPane(
+    likedList: LocalPlaylist,
+    playlists: List<LocalPlaylist>,
+    palette: ArtworkPalette,
+    onBack: () -> Unit,
+    onOpenLocal: (String) -> Unit,
+    onPlayLocal: (LocalPlaylist) -> Unit,
+    onCreatePlaylist: (String) -> Unit,
+) {
+    var filterIdx by remember { mutableIntStateOf(0) }
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SheetCircleIconButton(
+                icon = Icons.AutoMirrored.Rounded.ArrowBack,
+                tooltip = "Volver",
+                active = false,
+                accent = palette.primary,
+                onClick = onBack,
+            )
+            Text(
+                text = "Todas tus listas",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFFF3EEFF),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("↑↓ Tu orden", "Listas", "Favoritas").forEachIndexed { idx, label ->
+                MenuTabPill(
+                    label = label,
+                    selected = filterIdx == idx,
                     accent = palette.primary,
-                    onClick = { onPlayHeard(h) },
-                    onSaveTo = { onSaveTo(h) },
+                    onClick = { filterIdx = idx },
                 )
+            }
+        }
+        val allItems = remember(likedList, playlists, filterIdx) {
+            val base = listOf(likedList) + playlists
+            when (filterIdx) {
+                1 -> playlists
+                2 -> listOf(likedList)
+                else -> base
+            }
+        }
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(bottom = 28.dp),
+        ) {
+            val pairs = allItems.chunked(2)
+            itemsIndexed(pairs) { _, pair ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    pair.forEach { pl ->
+                        Box(Modifier.weight(1f)) {
+                            PlaylistTileDesktop(
+                                playlist = pl,
+                                accent = palette.primary,
+                                onClick = { onOpenLocal(pl.id) },
+                                onPlayDirect = { onPlayLocal(pl) },
+                            )
+                        }
+                    }
+                    if (pair.size == 1) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
             }
         }
     }
@@ -1041,6 +1301,7 @@ private fun DjShelfCard(
     accent: Color,
     onClick: () -> Unit,
 ) {
+    // Idéntico a .dj-vinyl-box en core.css:932-960: cuadrado limpio sin marco envolvente
     var spinning by remember { mutableStateOf(false) }
     var isHovered by remember { mutableStateOf(false) }
     var angle by remember { mutableFloatStateOf(-35f) }
@@ -1054,77 +1315,78 @@ private fun DjShelfCard(
             }
         }
     }
+    val scale by animateFloatAsState(
+        targetValue = if (isHovered) 1.02f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "djScale",
+    )
 
     Column(
         modifier = Modifier
-            .width(148.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(if (isHovered) Color.White.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.06f))
-            .border(
-                1.dp,
-                if (isHovered) accent.copy(alpha = 0.55f) else accent.copy(alpha = 0.24f),
-                RoundedCornerShape(18.dp),
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
             )
-            .clickable(onClick = onClick)
             .onPointerEvent(PointerEventType.Enter) { spinning = true; isHovered = true }
-            .onPointerEvent(PointerEventType.Exit) { spinning = false; isHovered = false }
-            .padding(12.dp),
+            .onPointerEvent(PointerEventType.Exit) { spinning = false; isHovered = false },
     ) {
         Box(
             modifier = Modifier
-                .size(124.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(
-                    Brush.radialGradient(
-                        listOf(Color(0xFF261D38), Color(0xFF130E1F)),
-                    ),
-                ),
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .shadow(18.dp, RoundedCornerShape(16.dp), ambientColor = Color.Black.copy(alpha = 0.55f))
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xFF15161B))
+                .border(1.dp, if (isHovered) accent.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Canvas(Modifier.size(116.dp)) {
-                val r = size.minDimension * 0.44f
+            Canvas(Modifier.fillMaxSize().padding(14.dp)) {
+                val r = size.minDimension * 0.48f
                 val center = Offset(size.width / 2, size.height / 2)
-                drawCircle(Color.Black.copy(alpha = 0.45f), r * 1.02f, center + Offset(0f, r * 0.03f))
-                drawCircle(Color(0xFF121214), r, center)
-                // Surcos del vinilo
-                var g = 0.46f
+                drawCircle(Color.Black.copy(alpha = 0.55f), r * 1.03f, center + Offset(0f, r * 0.04f))
+                drawCircle(Color(0xFF0E0E12), r, center)
+                // Surcos concéntricos del vinilo
+                var g = 0.38f
                 while (g < 0.96f) {
-                    drawCircle(Color.White.copy(alpha = 0.05f), r * g, center, style = Stroke(width = r * 0.009f))
-                    g += 0.045f * (1.2f - g)
+                    drawCircle(Color.White.copy(alpha = 0.045f), r * g, center, style = Stroke(width = r * 0.011f))
+                    g += 0.048f
                 }
-                // Brillo de luz sobre el disco
-                for (start in listOf(-70f, 110f)) {
+                // Brillo especular sobre el vinilo
+                for (start in listOf(-65f, 115f)) {
                     drawArc(
-                        Brush.radialGradient(listOf(Color.White.copy(alpha = 0.12f), Color.Transparent), center, r),
-                        start, 34f, useCenter = true, topLeft = center - Offset(r, r), size = Size(r * 2, r * 2),
+                        Brush.radialGradient(listOf(Color.White.copy(alpha = 0.11f), Color.Transparent), center, r),
+                        start, 36f, useCenter = true, topLeft = center - Offset(r, r), size = Size(r * 2, r * 2),
                     )
                 }
-                // Galleta central
-                drawCircle(accent, r * 0.36f, center)
+                // Galleta central en color --accent
+                drawCircle(accent, r * 0.30f, center)
                 rotate(angle, center) {
-                    drawCircle(Color.White.copy(alpha = 0.90f), r * 0.05f, center + Offset(r * 0.22f, 0f))
-                    drawArc(
-                        Color.White.copy(alpha = 0.40f), -40f, 80f, useCenter = false,
-                        topLeft = center - Offset(r * 0.28f, r * 0.28f), size = Size(r * 0.56f, r * 0.56f),
-                        style = Stroke(width = r * 0.02f),
-                    )
+                    drawCircle(Color.White.copy(alpha = 0.85f), r * 0.04f, center + Offset(r * 0.19f, 0f))
                 }
-                drawCircle(Color(0xFF121214), r * 0.04f, center)
+                drawCircle(Color(0xFF101214), r * 0.065f, center)
             }
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "DJ de Oto",
+            text = "DJ",
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White,
+            color = Color(0xFFF3EEFF),
             maxLines = 1,
         )
         Text(
-            text = "Mezcla para ti",
+            text = "Pon música con un toque",
             fontSize = 12.sp,
-            color = Color.White.copy(alpha = 0.55f),
+            color = Color.White.copy(alpha = 0.58f),
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -1134,108 +1396,91 @@ private fun DjShelfCard(
 private fun MeGustaShelfCard(
     count: Int,
     accent: Color,
+    accentDark: Color,
     onClick: () -> Unit,
     onPlayDirect: () -> Unit,
 ) {
+    // Idéntico a .liked-heart-box en core.css:962-971: degradado vivo de acento + corazón oscuro central (#101214)
     var isHovered by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (isHovered) 1.02f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "likedScale",
+    )
     Column(
         modifier = Modifier
-            .width(148.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(
-                Brush.verticalGradient(
-                    if (isHovered) listOf(accent.copy(alpha = 0.40f), Color(0x55120E1F))
-                    else listOf(accent.copy(alpha = 0.28f), Color(0x33120E1F)),
-                ),
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
             )
-            .border(
-                1.dp,
-                if (isHovered) accent.copy(alpha = 0.65f) else accent.copy(alpha = 0.38f),
-                RoundedCornerShape(18.dp),
-            )
-            .clickable(onClick = onClick)
             .onPointerEvent(PointerEventType.Enter) { isHovered = true }
-            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
-            .padding(12.dp),
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false },
     ) {
         Box(
             modifier = Modifier
-                .size(124.dp)
-                .clip(RoundedCornerShape(14.dp))
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .shadow(18.dp, RoundedCornerShape(16.dp), ambientColor = accent.copy(alpha = 0.35f))
+                .clip(RoundedCornerShape(16.dp))
                 .background(
-                    Brush.radialGradient(
-                        listOf(accent.copy(alpha = 0.35f), Color(0x22120E1F)),
+                    Brush.linearGradient(
+                        colors = listOf(
+                            accent,
+                            accentDark.copy(alpha = 0.92f),
+                        ),
+                        start = Offset.Zero,
+                        end = Offset(400f, 400f),
                     ),
-                ),
+                )
+                .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(16.dp)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = Icons.Rounded.Favorite,
                 contentDescription = null,
-                tint = accent,
-                modifier = Modifier.size(46.dp),
+                tint = Color(0xFF101214).copy(alpha = 0.90f),
+                modifier = Modifier.size(64.dp),
             )
+            if (isHovered) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(10.dp)
+                        .size(40.dp)
+                        .shadow(10.dp, CircleShape)
+                        .clip(CircleShape)
+                        .background(Color(0xFF101214))
+                        .clickable(onClick = onPlayDirect),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.PlayArrow,
+                        contentDescription = "Reproducir Me gusta",
+                        tint = accent,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(8.dp))
         Text(
             text = "Me gusta",
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White,
+            color = Color(0xFFF3EEFF),
             maxLines = 1,
         )
         Text(
             text = "$count canciones",
             fontSize = 12.sp,
-            color = Color.White.copy(alpha = 0.55f),
-            maxLines = 1,
-        )
-    }
-}
-
-@Composable
-private fun PlaylistShelfCard(
-    playlist: LocalPlaylist,
-    accent: Color,
-    onClick: () -> Unit,
-    onPlayDirect: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .width(148.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(Color.White.copy(alpha = 0.06f))
-            .border(1.dp, accent.copy(alpha = 0.24f), RoundedCornerShape(18.dp))
-            .clickable(onClick = onClick)
-            .padding(12.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(124.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color.White.copy(alpha = 0.08f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
-                contentDescription = null,
-                tint = accent,
-                modifier = Modifier.size(42.dp),
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = playlist.name,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = "${playlist.songs.size} canciones",
-            fontSize = 12.sp,
-            color = Color.White.copy(alpha = 0.55f),
+            color = Color.White.copy(alpha = 0.58f),
             maxLines = 1,
         )
     }
@@ -1243,63 +1488,115 @@ private fun PlaylistShelfCard(
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun NewPlaylistShelfCard(
+private fun PlaylistShelfCard(
+    playlist: LocalPlaylist,
     accent: Color,
     onClick: () -> Unit,
+    onPlayDirect: () -> Unit,
 ) {
+    // Idéntico a .shelf-card en core.css:919-930: portada cuadrada limpia con sombra y texto debajo
     var isHovered by remember { mutableStateOf(false) }
+    val firstArt = playlist.songs.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork
+    var coverBmp by remember(firstArt) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(firstArt) {
+        if (!firstArt.isNullOrBlank()) {
+            coverBmp = ArtworkLoader.load(firstArt).first
+        }
+    }
+    val scale by animateFloatAsState(
+        targetValue = if (isHovered) 1.02f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "plScale",
+    )
+
     Column(
         modifier = Modifier
-            .width(148.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(if (isHovered) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.04f))
-            .border(
-                1.dp,
-                if (isHovered) accent.copy(alpha = 0.60f) else Color.White.copy(alpha = 0.12f),
-                RoundedCornerShape(18.dp),
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
             )
-            .clickable(onClick = onClick)
             .onPointerEvent(PointerEventType.Enter) { isHovered = true }
-            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
-            .padding(12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false },
     ) {
         Box(
             modifier = Modifier
-                .size(124.dp)
-                .clip(RoundedCornerShape(14.dp))
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .shadow(18.dp, RoundedCornerShape(16.dp), ambientColor = Color.Black.copy(alpha = 0.55f))
+                .clip(RoundedCornerShape(16.dp))
                 .background(
-                    Brush.radialGradient(
-                        listOf(accent.copy(alpha = 0.18f), Color.White.copy(alpha = 0.04f)),
+                    Brush.linearGradient(
+                        listOf(
+                            Color(0xFF221C32),
+                            Color(0xFF151220),
+                        ),
                     ),
                 )
-                .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(14.dp)),
+                .border(1.dp, if (isHovered) accent.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                imageVector = Icons.Rounded.Add,
-                contentDescription = "Nueva lista",
-                tint = accent,
-                modifier = Modifier.size(36.dp),
-            )
+            if (coverBmp != null) {
+                Image(
+                    bitmap = coverBmp!!,
+                    contentDescription = playlist.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                    contentDescription = null,
+                    tint = accent.copy(alpha = 0.75f),
+                    modifier = Modifier.size(48.dp),
+                )
+            }
+            if (isHovered) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(10.dp)
+                        .size(40.dp)
+                        .shadow(10.dp, CircleShape)
+                        .clip(CircleShape)
+                        .background(accent)
+                        .clickable(onClick = onPlayDirect),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.PlayArrow,
+                        contentDescription = "Reproducir",
+                        tint = Color(0xFF101214),
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Nueva lista",
+            text = playlist.name,
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White,
+            color = Color(0xFFF3EEFF),
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         Text(
-            text = "Crear lista propia",
+            text = "${playlist.songs.size} canciones",
             fontSize = 12.sp,
-            color = Color.White.copy(alpha = 0.50f),
+            color = Color.White.copy(alpha = 0.58f),
             maxLines = 1,
         )
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun PlaylistTileDesktop(
     playlist: LocalPlaylist,
@@ -1307,117 +1604,259 @@ private fun PlaylistTileDesktop(
     onClick: () -> Unit,
     onPlayDirect: () -> Unit,
 ) {
+    // Idéntico a .tile-card en core.css:979-1024
+    var isHovered by remember { mutableStateOf(false) }
+    val firstArt = playlist.songs.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork
+    var coverBmp by remember(firstArt) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(firstArt) {
+        if (!firstArt.isNullOrBlank()) {
+            coverBmp = ArtworkLoader.load(firstArt).first
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(68.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.White.copy(alpha = 0.05f))
-            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (isHovered) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.045f))
+            .border(
+                1.dp,
+                if (isHovered) Color.White.copy(alpha = 0.13f) else Color.White.copy(alpha = 0.07f),
+                RoundedCornerShape(14.dp),
+            )
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp),
+            .padding(6.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(46.dp)
+                .size(56.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(accent.copy(alpha = 0.16f)),
+                .background(
+                    if (playlist.id == LIKED_ID) {
+                        Brush.linearGradient(listOf(accent, accent.copy(alpha = 0.65f)))
+                    } else {
+                        Brush.linearGradient(listOf(Color(0xFF231D33), Color(0xFF161221)))
+                    },
+                ),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                imageVector = Icons.Rounded.LibraryMusic,
-                contentDescription = null,
-                tint = accent,
-                modifier = Modifier.size(24.dp),
-            )
+            when {
+                playlist.id == LIKED_ID -> {
+                    Icon(
+                        imageVector = Icons.Rounded.Favorite,
+                        contentDescription = null,
+                        tint = Color(0xFF101214),
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
+                coverBmp != null -> {
+                    Image(
+                        bitmap = coverBmp!!,
+                        contentDescription = playlist.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                else -> {
+                    Icon(
+                        imageVector = Icons.Rounded.LibraryMusic,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+            }
         }
         Column(Modifier.weight(1f)) {
             Text(
                 text = playlist.name,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White,
+                color = Color(0xFFF3EEFF),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "${playlist.songs.size} canciones · Lista propia",
+                text = "Lista · ${playlist.songs.size} canciones",
                 fontSize = 12.sp,
-                color = Color.White.copy(alpha = 0.50f),
+                color = Color.White.copy(alpha = 0.56f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .clip(CircleShape)
-                .background(accent.copy(alpha = 0.20f))
-                .clickable(onClick = onPlayDirect),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.PlayArrow,
-                contentDescription = "Reproducir lista",
-                tint = accent,
-                modifier = Modifier.size(18.dp),
-            )
+        if (isHovered) {
+            Box(
+                modifier = Modifier
+                    .padding(end = 6.dp)
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(accent)
+                    .clickable(onClick = onPlayDirect),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.PlayArrow,
+                    contentDescription = "Reproducir lista",
+                    tint = Color(0xFF101214),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun LocalPlaylistDetailPane(
     list: LocalPlaylist,
     palette: ArtworkPalette,
     currentMediaId: String?,
+    onBack: () -> Unit = {},
     onPlayIndex: (Int?) -> Unit,
     onSaveTo: (Heard) -> Unit = {},
     onDeletePlaylist: (() -> Unit)? = null,
     onRemoveSong: ((String) -> Unit)? = null,
 ) {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    // Idéntico a openPlaylistInSheet en core.js:608-643: cabecera con portada 116dp + botón píldora ▶ Reproducir + botón circular Aleatorio
+    val firstArt = list.songs.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork
+    var coverBmp by remember(firstArt) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(firstArt) {
+        if (!firstArt.isNullOrBlank()) {
+            coverBmp = ArtworkLoader.load(firstArt).first
+        }
+    }
+
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            Column {
-                Text(list.name, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
-                Text("${list.songs.size} canciones", fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (onDeletePlaylist != null) {
-                    Box(
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(Color(0xFFE53935).copy(alpha = 0.16f))
-                            .border(1.dp, Color(0xFFE53935).copy(alpha = 0.35f), CircleShape)
-                            .clickable(onClick = onDeletePlaylist)
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                    ) {
-                        Text("Eliminar lista", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFFF8A80))
+            Box(
+                modifier = Modifier
+                    .size(116.dp)
+                    .shadow(24.dp, RoundedCornerShape(20.dp), ambientColor = Color.Black.copy(alpha = 0.6f))
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        if (list.id == LIKED_ID) {
+                            Brush.linearGradient(listOf(palette.primary, palette.secondary))
+                        } else {
+                            Brush.linearGradient(listOf(Color(0xFF241E34), Color(0xFF151220)))
+                        },
+                    )
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                when {
+                    list.id == LIKED_ID -> {
+                        Icon(
+                            imageVector = Icons.Rounded.Favorite,
+                            contentDescription = null,
+                            tint = Color(0xFF101214),
+                            modifier = Modifier.size(54.dp),
+                        )
+                    }
+                    coverBmp != null -> {
+                        Image(
+                            bitmap = coverBmp!!,
+                            contentDescription = list.name,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    else -> {
+                        Icon(
+                            imageVector = Icons.Rounded.LibraryMusic,
+                            contentDescription = null,
+                            tint = palette.primary,
+                            modifier = Modifier.size(48.dp),
+                        )
                     }
                 }
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(palette.primary)
-                        .clickable { onPlayIndex(null) }
-                        .padding(horizontal = 18.dp, vertical = 9.dp),
+            }
+
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = list.name,
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.5).sp,
+                    color = Color(0xFFF3EEFF),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "Lista · ${list.songs.size} canciones",
+                    fontSize = 13.sp,
+                    color = Color.White.copy(alpha = 0.60f),
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Aleatoria", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF140E21))
+                    Row(
+                        modifier = Modifier
+                            .height(44.dp)
+                            .clip(CircleShape)
+                            .background(palette.primary)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { onPlayIndex(0) }
+                            .padding(horizontal = 24.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = null,
+                            tint = Color(0xFF101214),
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Text(
+                            text = "Reproducir",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color(0xFF101214),
+                        )
+                    }
+
+                    SheetCircleIconButton(
+                        icon = Icons.Rounded.Shuffle,
+                        tooltip = "Aleatorio",
+                        active = false,
+                        accent = palette.primary,
+                        onClick = { onPlayIndex(null) },
+                    )
+
+                    if (onDeletePlaylist != null) {
+                        SheetCircleIconButton(
+                            icon = Icons.Rounded.Delete,
+                            tooltip = "Eliminar lista",
+                            active = false,
+                            accent = Color(0xFFFF6E6E),
+                            onClick = onDeletePlaylist,
+                        )
+                    }
                 }
             }
         }
+
         if (list.songs.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text("Esta lista está vacía.", color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp)
             }
         } else {
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                contentPadding = PaddingValues(bottom = 28.dp),
+            ) {
                 itemsIndexed(list.songs, key = { idx, s -> "${s.id}-$idx" }) { idx, s ->
                     SongRowDesktop(
                         title = s.title,
@@ -1434,6 +1873,7 @@ private fun LocalPlaylistDetailPane(
                                         .size(28.dp)
                                         .clip(CircleShape)
                                         .background(Color.White.copy(alpha = 0.06f))
+                                        .pointerHoverIcon(PointerIcon.Hand)
                                         .clickable { onRemoveSong(s.id) },
                                     contentAlignment = Alignment.Center,
                                 ) {
@@ -1453,43 +1893,121 @@ private fun LocalPlaylistDetailPane(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun RemoteDetailPane(
     page: Page.Remote,
     palette: ArtworkPalette,
     currentMediaId: String?,
+    onBack: () -> Unit = {},
     onPlayAll: (List<SongItem>, Int?) -> Unit,
     onOpenItem: (YTItem) -> Unit,
     onSaveTo: (Heard) -> Unit = {},
 ) {
     val songs = page.songs
     val shelves = page.shelves
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    var coverBmp by remember(page.item.thumbnail) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(page.item.thumbnail) {
+        if (!page.item.thumbnail.isNullOrBlank()) {
+            coverBmp = ArtworkLoader.load(page.item.thumbnail).first
+        }
+    }
+
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(page.item.title, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                page.sub?.let { Text(it, fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f)) }
+            Box(
+                modifier = Modifier
+                    .size(116.dp)
+                    .shadow(24.dp, RoundedCornerShape(20.dp), ambientColor = Color.Black.copy(alpha = 0.6f))
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xFF1B1626))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (coverBmp != null) {
+                    Image(
+                        bitmap = coverBmp!!,
+                        contentDescription = page.item.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Rounded.Album,
+                        contentDescription = null,
+                        tint = palette.primary,
+                        modifier = Modifier.size(48.dp),
+                    )
+                }
             }
-            if (!songs.isNullOrEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(palette.primary)
-                        .clickable { onPlayAll(songs, null) }
-                        .padding(horizontal = 18.dp, vertical = 9.dp),
-                ) {
-                    Text("Reproducir", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF140E21))
+
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = page.item.title,
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.5).sp,
+                    color = Color(0xFFF3EEFF),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                page.sub?.let {
+                    Text(it, fontSize = 13.sp, color = Color.White.copy(alpha = 0.60f))
+                }
+                if (!songs.isNullOrEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .height(44.dp)
+                                .clip(CircleShape)
+                                .background(palette.primary)
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable { onPlayAll(songs, 0) }
+                                .padding(horizontal = 24.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.PlayArrow,
+                                contentDescription = null,
+                                tint = Color(0xFF101214),
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Text(
+                                text = "Reproducir",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFF101214),
+                            )
+                        }
+                        SheetCircleIconButton(
+                            icon = Icons.Rounded.Shuffle,
+                            tooltip = "Aleatorio",
+                            active = false,
+                            accent = palette.primary,
+                            onClick = { onPlayAll(songs.shuffled(), 0) },
+                        )
+                    }
                 }
             }
         }
+
         when {
             page.error != null -> Text("Error: ${page.error}", color = palette.secondary, fontSize = 14.sp)
             songs == null && shelves.isEmpty() -> Text("Cargando pistas de YouTube Music…", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
-            else -> LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            else -> LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = PaddingValues(bottom = 28.dp),
+            ) {
                 if (!songs.isNullOrEmpty()) {
                     itemsIndexed(songs, key = { i, s -> "${s.id}-$i" }) { idx, s ->
                         SongRowDesktop(
@@ -1505,11 +2023,11 @@ private fun RemoteDetailPane(
                 }
                 if (shelves.isNotEmpty()) {
                     items(shelves, key = { it.title }) { shelf ->
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(shelf.title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(shelf.title, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFF3EEFF))
                             LazyRow(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
                             ) {
                                 items(shelf.items, key = { it.id }) { item ->
                                     ExploreShelfCard(
@@ -1544,14 +2062,15 @@ private fun ExplorePane(
     onOpenItem: (YTItem) -> Unit,
     onSaveTo: (Heard) -> Unit = {},
 ) {
+    // Idéntico a renderExploreTab en core.js:865-895 y .quick-picks-grid en core.css:1134-1147
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (chips.isNotEmpty()) {
             LazyRow(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 items(chips, key = { it.title }) { chip ->
-                    MenuTabPill(chip.title, selectedChip == chip.title, palette.secondary) {
+                    MenuTabPill(chip.title, selectedChip == chip.title, palette.primary) {
                         onChip(chip.title)
                     }
                 }
@@ -1565,7 +2084,6 @@ private fun ExplorePane(
                 }
             }
             shelves == null -> {
-                // Skeleton loading placeholder
                 LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(22.dp)) {
                     items(2) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1574,11 +2092,11 @@ private fun ExplorePane(
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(Color.White.copy(alpha = 0.08f)),
                             )
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                items(5) {
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                items(4) {
                                     Box(
-                                        Modifier.size(136.dp)
-                                            .clip(RoundedCornerShape(14.dp))
+                                        Modifier.size(180.dp)
+                                            .clip(RoundedCornerShape(16.dp))
                                             .background(Color.White.copy(alpha = 0.05f)),
                                     )
                                 }
@@ -1589,29 +2107,35 @@ private fun ExplorePane(
             }
             else -> LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(24.dp),
-                contentPadding = PaddingValues(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(26.dp),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 36.dp),
             ) {
                 items(shelves, key = { it.title }) { shelf ->
                     val allSongs = shelf.items.all { it is SongItem }
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(
                             text = shelf.title,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
+                            fontSize = 21.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = (-0.4).sp,
+                            color = Color(0xFFF3EEFF),
                         )
                         if (allSongs && shelf.items.size > 3) {
-                            // Columnas compactas de 3 canciones en carrusel horizontal
-                            val cols = shelf.items.filterIsInstance<SongItem>().chunked(3)
+                            // Columnas de 4 canciones envueltas en tarjeta sutil (.quick-picks-col en core.css:1139-1147)
+                            val cols = shelf.items.filterIsInstance<SongItem>().chunked(4)
                             LazyRow(
                                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 items(cols) { colSongs ->
                                     Column(
-                                        modifier = Modifier.width(310.dp),
-                                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier
+                                            .width(420.dp)
+                                            .clip(RoundedCornerShape(18.dp))
+                                            .background(Color.White.copy(alpha = 0.03f))
+                                            .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(18.dp))
+                                            .padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
                                     ) {
                                         colSongs.forEach { song ->
                                             SongRowDesktop(
@@ -1628,9 +2152,9 @@ private fun ExplorePane(
                                 }
                             }
                         } else {
-                            // Carrusel horizontal de tarjetas con portada
+                            // Estantería de álbumes/listas con portadas cuadradas limpias
                             LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 items(shelf.items, key = { it.id }) { item ->
@@ -1659,6 +2183,7 @@ private fun ExploreShelfCard(
     accent: Color,
     onClick: () -> Unit,
 ) {
+    // Idéntico a buildCoverCardHTML en core.js:750-758: portada cuadrada limpia con sombra y botón play flotante
     var thumbBmp by remember(item.thumbnail) { mutableStateOf<ImageBitmap?>(null) }
     var isHovered by remember { mutableStateOf(false) }
 
@@ -1670,25 +2195,38 @@ private fun ExploreShelfCard(
 
     val isArtist = item is ArtistItem
     val shape = if (isArtist) CircleShape else RoundedCornerShape(16.dp)
+    val scale by animateFloatAsState(
+        targetValue = if (isHovered) 1.02f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "expScale",
+    )
 
     Column(
         modifier = Modifier
-            .width(148.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
+            .width(184.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
             .onPointerEvent(PointerEventType.Enter) { isHovered = true }
-            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
-            .padding(4.dp),
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false },
         horizontalAlignment = if (isArtist) Alignment.CenterHorizontally else Alignment.Start,
     ) {
         Box(
             modifier = Modifier
-                .size(140.dp)
+                .size(184.dp)
+                .shadow(18.dp, shape, ambientColor = Color.Black.copy(alpha = 0.55f))
                 .clip(shape)
-                .background(Color.White.copy(alpha = 0.05f))
+                .background(Color(0xFF181522))
                 .border(
-                    width = if (isHovered) 1.5.dp else 1.dp,
-                    color = if (isHovered) accent.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.10f),
+                    width = 1.dp,
+                    color = if (isHovered) accent.copy(alpha = 0.50f) else Color.White.copy(alpha = 0.08f),
                     shape = shape,
                 ),
             contentAlignment = Alignment.Center,
@@ -1705,24 +2243,26 @@ private fun ExploreShelfCard(
                     imageVector = if (isArtist) Icons.Rounded.Person else Icons.Rounded.Album,
                     contentDescription = null,
                     tint = Color.White.copy(alpha = 0.40f),
-                    modifier = Modifier.size(44.dp),
+                    modifier = Modifier.size(48.dp),
                 )
             }
 
             if (isHovered) {
                 Box(
                     modifier = Modifier
-                        .size(44.dp)
+                        .align(if (isArtist) Alignment.Center else Alignment.BottomEnd)
+                        .padding(if (isArtist) 0.dp else 10.dp)
+                        .size(40.dp)
+                        .shadow(12.dp, CircleShape)
                         .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.65f))
-                        .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape),
+                        .background(accent),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.PlayArrow,
                         contentDescription = "Reproducir",
-                        tint = accent,
-                        modifier = Modifier.size(24.dp),
+                        tint = Color(0xFF101214),
+                        modifier = Modifier.size(22.dp),
                     )
                 }
             }
@@ -1732,10 +2272,10 @@ private fun ExploreShelfCard(
 
         Text(
             text = item.title,
-            fontSize = 13.5.sp,
+            fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White,
-            maxLines = if (isArtist) 1 else 2,
+            color = Color(0xFFF3EEFF),
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = if (isArtist) TextAlign.Center else TextAlign.Start,
         )
@@ -1743,15 +2283,15 @@ private fun ExploreShelfCard(
         val sub = when (item) {
             is SongItem -> item.artists.joinToString { it.name }
             is AlbumItem -> listOfNotNull("Álbum", item.year?.toString()).joinToString(" · ")
-            is PlaylistItem -> item.author?.name ?: "Playlist"
+            is PlaylistItem -> item.author?.name ?: "Lista"
             is ArtistItem -> "Artista"
             else -> ""
         }
         if (sub.isNotBlank()) {
             Text(
                 text = sub,
-                fontSize = 11.5.sp,
-                color = Color.White.copy(alpha = 0.52f),
+                fontSize = 12.sp,
+                color = Color.White.copy(alpha = 0.58f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = if (isArtist) TextAlign.Center else TextAlign.Start,
@@ -1760,6 +2300,7 @@ private fun ExploreShelfCard(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun SearchResultsPane(
     query: String,
@@ -1774,8 +2315,12 @@ private fun SearchResultsPane(
     onOpenItem: (YTItem) -> Unit,
     onSaveTo: (Heard) -> Unit = {},
 ) {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    // Idéntico a renderSearchView en core.js:897-945 y .top-result-card en core.css:1150-1204
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(
+            modifier = Modifier.padding(top = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Filter.entries.forEach { f ->
                 MenuTabPill(f.label, filter == f, palette.primary) { onFilter(f) }
             }
@@ -1784,26 +2329,174 @@ private fun SearchResultsPane(
             error != null -> Text("La búsqueda falló: $error", color = palette.secondary, fontSize = 13.sp)
             searching && results.isEmpty() -> Text("Buscando «$query» en YouTube Music…", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
             results.isEmpty() -> Text("Sin resultados para «$query».", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
-            else -> LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(results, key = { it.id }) { item ->
-                    val sub = when (item) {
-                        is SongItem -> "Canción · " + item.artists.joinToString { it.name }
-                        is AlbumItem -> "Álbum · " + item.artists?.joinToString { it.name }.orEmpty()
-                        is ArtistItem -> "Artista"
-                        is PlaylistItem -> "Lista · " + (item.author?.name ?: "")
-                        else -> ""
+            else -> {
+                val topItem = results.first()
+                val restItems = results.drop(1)
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    contentPadding = PaddingValues(bottom = 32.dp),
+                ) {
+                    item(key = "topResultHeader") {
+                        Text(
+                            text = "Resultado principal",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color(0xFFF3EEFF),
+                        )
                     }
-                    SongRowDesktop(
-                        title = item.title,
-                        subtitle = sub,
-                        thumbnail = item.thumbnail,
-                        isCurrent = item.id == currentMediaId,
-                        accent = palette.primary,
-                        onClick = { if (item is SongItem) onPlaySong(item) else onOpenItem(item) },
-                        onSaveTo = if (item is SongItem) { { onSaveTo(item.toHeard()) } } else null,
-                    )
+                    item(key = "topResultCard-${topItem.id}") {
+                        TopResultCard(
+                            item = topItem,
+                            accent = palette.primary,
+                            onClick = { if (topItem is SongItem) onPlaySong(topItem) else onOpenItem(topItem) },
+                        )
+                    }
+                    if (restItems.isNotEmpty()) {
+                        item(key = "moreResultsHeader") {
+                            Text(
+                                text = "Canciones y más",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFFF3EEFF),
+                                modifier = Modifier.padding(top = 6.dp),
+                            )
+                        }
+                        val pairs = restItems.chunked(2)
+                        itemsIndexed(pairs, key = { idx, p -> "sr-$idx-${p.first().id}" }) { _, pair ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                pair.forEach { item ->
+                                    val sub = when (item) {
+                                        is SongItem -> "Canción · " + item.artists.joinToString { it.name }
+                                        is AlbumItem -> "Álbum · " + item.artists?.joinToString { it.name }.orEmpty()
+                                        is ArtistItem -> "Artista"
+                                        is PlaylistItem -> "Lista · " + (item.author?.name ?: "")
+                                        else -> ""
+                                    }
+                                    Box(Modifier.weight(1f)) {
+                                        SongRowDesktop(
+                                            title = item.title,
+                                            subtitle = sub,
+                                            thumbnail = item.thumbnail,
+                                            isCurrent = item.id == currentMediaId,
+                                            accent = palette.primary,
+                                            onClick = { if (item is SongItem) onPlaySong(item) else onOpenItem(item) },
+                                            onSaveTo = if (item is SongItem) { { onSaveTo(item.toHeard()) } } else null,
+                                        )
+                                    }
+                                }
+                                if (pair.size == 1) {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun TopResultCard(
+    item: YTItem,
+    accent: Color,
+    onClick: () -> Unit,
+) {
+    // Idéntico a .top-result-card en core.css:1150-1204
+    var thumbBmp by remember(item.thumbnail) { mutableStateOf<ImageBitmap?>(null) }
+    var isHovered by remember { mutableStateOf(false) }
+    LaunchedEffect(item.thumbnail) {
+        if (!item.thumbnail.isNullOrBlank()) {
+            thumbBmp = ArtworkLoader.load(item.thumbnail).first
+        }
+    }
+    val sub = when (item) {
+        is SongItem -> "Canción · " + item.artists.joinToString { it.name }
+        is AlbumItem -> "Álbum · " + item.artists?.joinToString { it.name }.orEmpty()
+        is ArtistItem -> "Artista · YouTube Music"
+        is PlaylistItem -> "Lista · " + (item.author?.name ?: "YouTube Music")
+        else -> ""
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(if (isHovered) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.05f))
+            .border(
+                1.dp,
+                if (isHovered) Color.White.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.09f),
+                RoundedCornerShape(22.dp),
+            )
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
+            .clickable(onClick = onClick)
+            .padding(18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(88.dp)
+                .shadow(16.dp, RoundedCornerShape(16.dp))
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xFF1C1726)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (thumbBmp != null) {
+                Image(
+                    bitmap = thumbBmp!!,
+                    contentDescription = item.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Rounded.MusicNote,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(36.dp),
+                )
+            }
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = item.title,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-0.5).sp,
+                color = Color(0xFFF3EEFF),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = sub,
+                fontSize = 14.sp,
+                color = Color.White.copy(alpha = 0.62f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(50.dp)
+                .shadow(16.dp, CircleShape, ambientColor = accent, spotColor = accent)
+                .clip(CircleShape)
+                .background(accent),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.PlayArrow,
+                contentDescription = "Reproducir",
+                tint = Color(0xFF101214),
+                modifier = Modifier.size(26.dp),
+            )
         }
     }
 }
@@ -2250,50 +2943,46 @@ private fun SongRowDesktop(
         }
     }
 
+    // Idéntico a .song-row en core.css:1054-1131: sin caja ni borde en reposo; barra lateral 3dp en color acento cuando suena
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(
-                if (isCurrent) Brush.horizontalGradient(
-                    listOf(
-                        accent.copy(alpha = 0.32f),
-                        accent.copy(alpha = 0.14f),
-                    ),
-                )
-                else if (isHovered) Brush.horizontalGradient(
-                    listOf(
-                        Color.White.copy(alpha = 0.12f),
-                        Color.White.copy(alpha = 0.05f),
-                    ),
-                )
-                else SolidColor(Color.White.copy(alpha = 0.03f)),
-            )
-            .border(
-                1.dp,
-                if (isCurrent) accent.copy(alpha = 0.50f)
-                else if (isHovered) Color.White.copy(alpha = 0.20f)
-                else Color.Transparent,
-                RoundedCornerShape(12.dp),
+                when {
+                    isCurrent -> accent.copy(alpha = 0.13f)
+                    isHovered -> Color.White.copy(alpha = 0.06f)
+                    else -> Color.Transparent
+                },
             )
             .pointerHoverIcon(PointerIcon.Hand)
             .clickable(onClick = onClick)
             .onPointerEvent(PointerEventType.Enter) { isHovered = true }
-            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
-            .padding(horizontal = 14.dp, vertical = 7.dp),
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false },
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        // Barra vertical izquierda de 3.dp cuando está sonando (box-shadow: inset 3px 0 0 var(--accent))
+        if (isCurrent) {
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(accent),
+            )
+        }
         Row(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Box(
                 modifier = Modifier
-                    .size(38.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.White.copy(alpha = 0.07f)),
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF191622)),
                 contentAlignment = Alignment.Center,
             ) {
                 if (thumbBmp != null) {
@@ -2303,68 +2992,68 @@ private fun SongRowDesktop(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
                     )
-                }
-                if (isCurrent) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.50f)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.GraphicEq,
-                            contentDescription = "Sonando",
-                            tint = accent,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                } else if (thumbBmp == null) {
+                } else {
                     Icon(
                         imageVector = Icons.Rounded.MusicNote,
                         contentDescription = null,
                         tint = Color.White.copy(alpha = 0.45f),
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(20.dp),
                     )
+                }
+                if (isCurrent || isHovered) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.48f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = if (isCurrent && !isHovered) Icons.Rounded.GraphicEq else Icons.Rounded.PlayArrow,
+                            contentDescription = "Reproducir",
+                            tint = if (isCurrent) accent else Color.White,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
             }
             Column(Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    fontSize = 14.sp,
-                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.SemiBold,
-                    color = if (isCurrent) accent else Color.White,
+                    fontSize = 14.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isCurrent) accent else Color(0xFFF3EEFF),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 if (subtitle.isNotBlank()) {
                     Text(
                         text = subtitle,
-                        fontSize = 12.sp,
-                        color = Color.White.copy(alpha = 0.56f),
+                        fontSize = 12.5.sp,
+                        color = Color.White.copy(alpha = 0.58f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
-        }
-        if (trailing != null) {
-            trailing()
-        }
-        if (onSaveTo != null) {
-            IconButton(
-                onClick = onSaveTo,
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(if (isHovered) Color.White.copy(alpha = 0.12f) else Color.Transparent)
-                    .border(1.dp, if (isHovered) Color.White.copy(alpha = 0.20f) else Color.Transparent, CircleShape),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.MoreVert,
-                    contentDescription = "Guardar en...",
-                    tint = if (isHovered) Color.White else Color.White.copy(alpha = 0.40f),
-                    modifier = Modifier.size(18.dp),
-                )
+            if (trailing != null) {
+                trailing()
+            }
+            if (onSaveTo != null) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(if (isHovered) Color.White.copy(alpha = 0.10f) else Color.Transparent)
+                        .clickable(onClick = onSaveTo),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.MoreVert,
+                        contentDescription = "Guardar en lista",
+                        tint = if (isHovered) Color.White else Color.White.copy(alpha = 0.36f),
+                        modifier = Modifier.size(17.dp),
+                    )
+                }
             }
         }
     }
