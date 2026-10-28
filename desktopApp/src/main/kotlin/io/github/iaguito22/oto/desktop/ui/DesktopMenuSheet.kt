@@ -1563,9 +1563,7 @@ private fun YourMusicPane(
             ) {
                 Text(
                     text = "Tus listas",
-                    fontSize = 21.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = (-0.4).sp,
+                    style = OtoType.section,
                     color = Color(0xFFFFFFFF),
                 )
                 Row(
@@ -1751,9 +1749,7 @@ private fun YourMusicPane(
             item(key = "foldersTitle") {
                 Text(
                     text = "Carpetas",
-                    fontSize = 21.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = (-0.4).sp,
+                    style = OtoType.section,
                     color = Color(0xFFFFFFFF),
                     modifier = Modifier.padding(top = 6.dp),
                 )
@@ -1922,9 +1918,7 @@ private fun YourMusicPane(
         item(key = "historyHeader") {
             Text(
                 text = "Oído hace poco",
-                fontSize = 21.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = (-0.4).sp,
+                style = OtoType.section,
                 color = Color(0xFFFFFFFF),
                 modifier = Modifier.padding(top = 8.dp),
             )
@@ -2007,8 +2001,7 @@ private fun AllListsSubPane(
             }
             Text(
                 text = "Todas tus listas",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.ExtraBold,
+                style = OtoType.title,
                 color = Color(0xFFFFFFFF),
             )
         }
@@ -2222,15 +2215,14 @@ private fun DjShelfCard(
         Spacer(Modifier.height(8.dp))
         Text(
             text = "DJ",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
+            style = OtoType.rowTitle,
             color = Color(0xFFFFFFFF),
             maxLines = 1,
         )
         Text(
             text = "Pon música con un toque",
-            fontSize = 12.sp,
-            color = Color.White.copy(alpha = 0.58f),
+            style = OtoType.rowSub,
+            color = Color.White.copy(alpha = 0.62f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -2318,15 +2310,14 @@ private fun MeGustaShelfCard(
         Spacer(Modifier.height(8.dp))
         Text(
             text = "Me gusta",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
+            style = OtoType.rowTitle,
             color = Color(0xFFFFFFFF),
             maxLines = 1,
         )
         Text(
             text = "$count canciones",
-            fontSize = 12.sp,
-            color = Color.White.copy(alpha = 0.58f),
+            style = OtoType.rowSub,
+            color = Color.White.copy(alpha = 0.62f),
             maxLines = 1,
         )
     }
@@ -2407,8 +2398,8 @@ private fun FolderShelfCard(
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text(name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(folderSubtitle(lists), fontSize = 12.sp, color = Color.White.copy(alpha = 0.58f), maxLines = 1)
+        Text(name, style = OtoType.rowTitle, color = Color(0xFFFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(folderSubtitle(lists), style = OtoType.rowSub, color = Color.White.copy(alpha = 0.62f), maxLines = 1)
     }
 }
 
@@ -2507,16 +2498,15 @@ private fun PlaylistShelfCard(
         Spacer(Modifier.height(8.dp))
         Text(
             text = playlist.name,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
+            style = OtoType.rowTitle,
             color = Color(0xFFFFFFFF),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         Text(
             text = "${playlist.songs.size} canciones",
-            fontSize = 12.sp,
-            color = Color.White.copy(alpha = 0.58f),
+            style = OtoType.rowSub,
+            color = Color.White.copy(alpha = 0.62f),
             maxLines = 1,
         )
     }
@@ -2856,9 +2846,7 @@ private fun FolderDetailPane(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
                         text = name,
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = (-0.5).sp,
+                        style = OtoType.title,
                         color = Color(0xFFFFFFFF),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -3241,9 +3229,7 @@ private fun LocalPlaylistDetailPane(
                 ) {
                     Text(
                         text = list.name,
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = (-0.5).sp,
+                        style = OtoType.title,
                         color = Color(0xFFFFFFFF),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -3856,9 +3842,7 @@ private fun ExplorePane(
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(
                             text = shelf.title,
-                            fontSize = 21.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = (-0.4).sp,
+                            style = OtoType.section,
                             color = Color(0xFFFFFFFF),
                         )
                         if (allSongs && shelf.items.size > 3) {
@@ -4013,8 +3997,7 @@ private fun ExploreShelfCard(
 
         Text(
             text = item.title,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
+            style = OtoType.rowTitle,
             color = Color(0xFFFFFFFF),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -4081,8 +4064,7 @@ private fun SearchResultsPane(
                     item(key = "topResultHeader") {
                         Text(
                             text = "Resultado principal",
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.ExtraBold,
+                            style = OtoType.section,
                             color = Color(0xFFFFFFFF),
                         )
                     }
