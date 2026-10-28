@@ -12,6 +12,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -61,6 +63,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
@@ -68,6 +71,8 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.ui.zIndex
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -80,6 +85,27 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material.icons.rounded.DragHandle
+import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import io.github.iaguito22.oto.importer.SourceList
+import io.github.iaguito22.oto.importer.SourceTrack
+import io.github.iaguito22.oto.OtoDirs
+import io.github.iaguito22.oto.playback.NowPlaying
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -89,6 +115,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -159,7 +186,7 @@ import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
 
-private enum class MenuSubView { None, Settings, Queue }
+private enum class MenuSubView { None, Settings, Queue, Import }
 
 /**
  * Cajón inferior (`Sheet` estilo prototipo 2 + `fusion.html`):
@@ -193,12 +220,18 @@ fun DesktopMenuSheet(
     onClearQueue: () -> Unit = {},
     onPlaySong: (SongItem) -> Unit,
     onPlayAll: (List<SongItem>, Int?, YTItem?) -> Unit,
-    onPlayLocal: (LocalPlaylist, Int?) -> Unit,
+    onPlayLocal: (LocalPlaylist, Int?, Boolean) -> Unit,
     onPlayDj: () -> Unit,
     onSkipToQueue: (Int) -> Unit,
     selectedTab: Int = 0,
     onSelectTab: (Int) -> Unit = {},
     onSaveTrack: (Heard) -> Unit = {},
+    nowPlaying: NowPlaying? = null,
+    liked: Boolean = false,
+    onTogglePlay: () -> Unit = {},
+    onPrev: () -> Unit = {},
+    onNext: () -> Unit = {},
+    onToggleLike: () -> Unit = {},
 ) {
     val menuState by menu.state.collectAsState()
     val likedList by prefs.likedList.collectAsState(initial = LocalPlaylist(LIKED_ID, "Me gusta", emptyList()))
@@ -226,7 +259,7 @@ fun DesktopMenuSheet(
 
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         val openTargetW = (maxWidth - 36.dp).coerceAtMost(1040.dp).coerceAtLeast(320.dp)
-        val openTargetH = ((maxHeight - 32.dp) * 0.84f).coerceAtLeast(280.dp)
+        val openTargetH = (maxHeight - 56.dp).coerceAtLeast(360.dp)
         val closedPillH = if (!open && pillHovered) 28.dp else 24.dp
 
         val morphSpec = spring<androidx.compose.ui.unit.Dp>(
@@ -254,7 +287,7 @@ fun DesktopMenuSheet(
             label = "pillIdleY",
         )
 
-        // Capa exterior para cerrar al hacer clic o rueda arriba fuera de la isla cuando está abierta
+        // Capa exterior para cerrar al hacer clic fuera de la isla cuando está abierta
         if (open) {
             Box(
                 modifier = Modifier
@@ -263,13 +296,7 @@ fun DesktopMenuSheet(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                    ) { onToggleOpen(false) }
-                    .onPointerEvent(PointerEventType.Scroll) { ev ->
-                        val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
-                        if (dy < -0.5f) {
-                            onToggleOpen(false)
-                        }
-                    },
+                    ) { onToggleOpen(false) },
             )
         }
 
@@ -287,26 +314,40 @@ fun DesktopMenuSheet(
                 }
                 .size(width = openTargetW, height = currentHeight)
                 .shadow(
-                    elevation = if (open) 42.dp else 18.dp,
+                    elevation = if (open) 42.dp else 4.dp,
                     shape = sheetShape,
-                    ambientColor = Color.Black.copy(alpha = 0.62f),
-                    spotColor = Color.Black,
+                    ambientColor = Color.Black.copy(alpha = if (open) 0.62f else 0.25f),
+                    spotColor = Color.Black.copy(alpha = if (open) 1f else 0.45f),
                 )
                 .clip(sheetShape)
                 .background(
-                    Brush.verticalGradient(
-                        0.00f to Color.White.copy(alpha = if (open) 0.14f else 0.16f),
-                        0.28f to Color(0x82101218),
-                        1.00f to Color(0x9E0C0D12),
-                    ),
+                    if (open) {
+                        Brush.verticalGradient(
+                            0.00f to Color.White.copy(alpha = 0.14f),
+                            0.28f to Color(0x82101218),
+                            1.00f to Color(0x9E0C0D12),
+                        )
+                    } else {
+                        Brush.verticalGradient(
+                            0.00f to Color.White.copy(alpha = if (pillHovered) 0.08f else 0.04f),
+                            1.00f to Color(0x600C0D12),
+                        )
+                    },
                 )
                 .border(
                     1.dp,
-                    Brush.verticalGradient(
-                        0.00f to Color.White.copy(alpha = if (!open && pillHovered) 0.56f else 0.42f),
-                        0.35f to Color.White.copy(alpha = 0.30f),
-                        1.00f to palette.primary.copy(alpha = 0.26f),
-                    ),
+                    if (open) {
+                        Brush.verticalGradient(
+                            0.00f to Color.White.copy(alpha = 0.42f),
+                            0.35f to Color.White.copy(alpha = 0.30f),
+                            1.00f to palette.primary.copy(alpha = 0.26f),
+                        )
+                    } else {
+                        Brush.verticalGradient(
+                            0.00f to Color.White.copy(alpha = if (pillHovered) 0.18f else 0.08f),
+                            1.00f to Color.White.copy(alpha = if (pillHovered) 0.08f else 0.04f),
+                        )
+                    },
                     sheetShape,
                 )
                 .onPointerEvent(PointerEventType.Enter) { pillHovered = true }
@@ -315,8 +356,6 @@ fun DesktopMenuSheet(
                     val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                     if (!open && dy > 0.3f) {
                         onToggleOpen(true)
-                    } else if (open && dy < -0.5f && !isExpanded) {
-                        onToggleOpen(false)
                     }
                 }
                 .then(
@@ -402,36 +441,142 @@ fun DesktopMenuSheet(
                         .requiredWidth(openTargetW)
                         .requiredHeight(openTargetH),
                 ) {
-                    // Tirador superior (.sheet-grab en core.css:712-725)
-                    Box(
-                        Modifier
+                    // Tirador superior con mini-controles de reproducción en vivo (.sheet-grab)
+                    Row(
+                        modifier = Modifier
                             .fillMaxWidth()
-                            .onPointerEvent(PointerEventType.Scroll) { ev ->
-                                val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
-                                if (dy < -0.5f) {
-                                    onToggleOpen(false)
+                            .padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        // 1. Info mini del tema que suena
+                        if (nowPlaying != null && !nowPlaying.title.isNullOrBlank()) {
+                            Row(
+                                modifier = Modifier.weight(1f, fill = false),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                var miniArtBmp by remember(nowPlaying.artwork) { mutableStateOf<ImageBitmap?>(null) }
+                                LaunchedEffect(nowPlaying.artwork) {
+                                    if (!nowPlaying.artwork.isNullOrBlank()) miniArtBmp = ArtworkLoader.load(nowPlaying.artwork).first
+                                }
+                                if (miniArtBmp != null) {
+                                    Image(
+                                        bitmap = miniArtBmp!!,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)),
+                                    )
+                                }
+                                Column(modifier = Modifier.widthIn(max = 240.dp)) {
+                                    Text(
+                                        text = nowPlaying.title,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFF3EEFF),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = nowPlaying.artist,
+                                        fontSize = 10.sp,
+                                        color = Color.White.copy(alpha = 0.55f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
                                 }
                             }
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                            ) { onToggleOpen(false) }
-                            .padding(top = 10.dp, bottom = 6.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        } else {
+                            Spacer(Modifier.width(1.dp))
+                        }
+
+                        // 2. Tirador central
+                        Box(
+                            modifier = Modifier
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) { onToggleOpen(false) }
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            Box(
-                                Modifier
-                                    .size(width = 42.dp, height = 4.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.26f)),
-                            )
-                            if (isPlaying) {
-                                MiniEqualizerBars(accent = palette.primary)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Box(
+                                    Modifier
+                                        .size(width = 38.dp, height = 4.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White.copy(alpha = 0.28f)),
+                                )
+                                if (isPlaying) {
+                                    MiniEqualizerBars(accent = palette.primary)
+                                }
                             }
+                        }
+
+                        // 3. Mini controles para accionar mientras estás en el menú
+                        if (nowPlaying != null && !nowPlaying.title.isNullOrBlank()) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .clickable(onClick = onPrev),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(Icons.Rounded.SkipPrevious, contentDescription = "Anterior", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp))
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .clip(CircleShape)
+                                        .background(palette.primary)
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .clickable(onClick = onTogglePlay),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                        contentDescription = if (isPlaying) "Pausar" else "Reproducir",
+                                        tint = Color(0xFF101214),
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .clickable(onClick = onNext),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(Icons.Rounded.SkipNext, contentDescription = "Siguiente", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp))
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .clickable(onClick = onToggleLike),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                        contentDescription = "Me gusta",
+                                        tint = if (liked) palette.primary else Color.White.copy(alpha = 0.75f),
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
+                        } else {
+                            Spacer(Modifier.width(1.dp))
                         }
                     }
 
@@ -468,22 +613,32 @@ fun DesktopMenuSheet(
                                 )
                             }
 
-                            // Botón circular Atrás cuando estamos dentro de una lista, búsqueda o subvista
-                            if (isDeepNav) {
-                                SheetCircleIconButton(
-                                    icon = Icons.AutoMirrored.Rounded.ArrowBack,
-                                    tooltip = "Volver",
-                                    active = false,
-                                    accent = palette.primary,
-                                    onClick = {
-                                        when {
-                                            topPage != null -> menu.closeDetail()
-                                            showAllLists -> showAllLists = false
-                                            menuState.query.isNotBlank() -> menu.onQuery("")
-                                            else -> subView = MenuSubView.None
-                                        }
-                                    },
-                                )
+                            // Botón Atrás cuando estamos en subvista o búsqueda activa (en listas y álbumes va arriba a la derecha junto al título)
+                            val showTopBack = isDeepNav && topPage == null
+                            if (showTopBack) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .clickable {
+                                            when {
+                                                subView == MenuSubView.Import -> subView = MenuSubView.Settings
+                                                subView != MenuSubView.None -> subView = MenuSubView.None
+                                                showAllLists -> showAllLists = false
+                                                menuState.query.isNotBlank() -> menu.onQuery("")
+                                                else -> onToggleOpen(false)
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                        contentDescription = "Volver",
+                                        tint = Color.White.copy(alpha = 0.85f),
+                                        modifier = Modifier.size(22.dp),
+                                    )
+                                }
                             }
 
                             // Buscador central en píldora (.sheet-search en core.css:782-826)
@@ -601,6 +756,53 @@ fun DesktopMenuSheet(
                         ) {
                             val topPage = menuState.pages.lastOrNull()
                             when {
+                                subView == MenuSubView.Import -> {
+                                    ImportPane(
+                                        importer = importer,
+                                        prefs = prefs,
+                                        palette = palette,
+                                        onBack = { subView = MenuSubView.Settings },
+                                        onLists = {
+                                            subView = MenuSubView.None
+                                            onSelectTab(0)
+                                        },
+                                    )
+                                }
+                                subView == MenuSubView.Settings -> {
+                                    SettingsAndAccountPane(
+                                        prefs = prefs,
+                                        importer = importer,
+                                        account = account,
+                                        cloud = cloud,
+                                        login = login,
+                                        session = session,
+                                        cloudState = cloudState,
+                                        importState = importState,
+                                        qualityMode = qualityMode,
+                                        dataSaver = dataSaver,
+                                        shuffle = shuffle,
+                                        loop = loop,
+                                        onSetShuffle = onSetShuffle,
+                                        onSetLoop = onSetLoop,
+                                        palette = palette,
+                                        onOpenImport = { subView = MenuSubView.Import },
+                                    )
+                                }
+                                subView == MenuSubView.Queue -> {
+                                    QueuePane(
+                                        queue = queue,
+                                        currentMediaId = currentMediaId,
+                                        shuffle = shuffle,
+                                        loop = loop,
+                                        palette = palette,
+                                        onToggleShuffle = { onSetShuffle(!shuffle) },
+                                        onToggleLoop = { onSetLoop(!loop) },
+                                        onMove = onMoveQueue,
+                                        onRemove = onRemoveQueue,
+                                        onClearQueue = onClearQueue,
+                                        onSkipTo = { idx -> onSkipToQueue(idx); onToggleOpen(false) },
+                                    )
+                                }
                                 topPage is Page.Local -> {
                                     val list = if (topPage.id == LIKED_ID) likedList else playlists.firstOrNull { it.id == topPage.id }
                                     if (list != null) {
@@ -609,7 +811,7 @@ fun DesktopMenuSheet(
                                             palette = palette,
                                             currentMediaId = currentMediaId,
                                             onBack = menu::closeDetail,
-                                            onPlayIndex = { idx -> onPlayLocal(list, idx); onToggleOpen(false) },
+                                            onPlayIndex = { idx, newest -> onPlayLocal(list, idx, newest); onToggleOpen(false) },
                                             onSaveTo = onSaveTrack,
                                             onDeletePlaylist = if (list.id != LIKED_ID) {
                                                 {
@@ -626,6 +828,7 @@ fun DesktopMenuSheet(
                                                     }
                                                 }
                                             } else null,
+                                            prefs = prefs,
                                         )
                                     }
                                 }
@@ -635,10 +838,11 @@ fun DesktopMenuSheet(
                                         palette = palette,
                                         currentMediaId = currentMediaId,
                                         onBack = menu::closeDetail,
-                                        onPlayIndex = { idx -> onPlayLocal(topPage.list, idx); onToggleOpen(false) },
+                                        onPlayIndex = { idx, newest -> onPlayLocal(topPage.list, idx, newest); onToggleOpen(false) },
                                         onSaveTo = onSaveTrack,
                                         onDeletePlaylist = null,
                                         onRemoveSong = null,
+                                        prefs = prefs,
                                     )
                                 }
                                 topPage is Page.Remote -> {
@@ -667,36 +871,6 @@ fun DesktopMenuSheet(
                                         onSaveTo = onSaveTrack,
                                     )
                                 }
-                                subView == MenuSubView.Settings -> {
-                                    SettingsAndAccountPane(
-                                        prefs = prefs,
-                                        importer = importer,
-                                        account = account,
-                                        cloud = cloud,
-                                        login = login,
-                                        session = session,
-                                        cloudState = cloudState,
-                                        importState = importState,
-                                        qualityMode = qualityMode,
-                                        dataSaver = dataSaver,
-                                        palette = palette,
-                                    )
-                                }
-                                subView == MenuSubView.Queue -> {
-                                    QueuePane(
-                                        queue = queue,
-                                        currentMediaId = currentMediaId,
-                                        shuffle = shuffle,
-                                        loop = loop,
-                                        palette = palette,
-                                        onToggleShuffle = { onSetShuffle(!shuffle) },
-                                        onToggleLoop = { onSetLoop(!loop) },
-                                        onMove = onMoveQueue,
-                                        onRemove = onRemoveQueue,
-                                        onClearQueue = onClearQueue,
-                                        onSkipTo = { idx -> onSkipToQueue(idx); onToggleOpen(false) },
-                                    )
-                                }
                                 showAllLists && selectedTab == 0 -> {
                                     AllListsSubPane(
                                         likedList = likedList,
@@ -708,7 +882,7 @@ fun DesktopMenuSheet(
                                             menu.openLocal(id)
                                         },
                                         onPlayLocal = { list ->
-                                            onPlayLocal(list, null)
+                                            onPlayLocal(list, null, list.id == LIKED_ID)
                                             onToggleOpen(false)
                                         },
                                         onCreatePlaylist = { name ->
@@ -730,7 +904,7 @@ fun DesktopMenuSheet(
                                         onOpenLocal = menu::openLocal,
                                         onOpenSmart = menu::openSmart,
                                         onOpenAllLists = { showAllLists = true },
-                                        onPlayLocal = { list, idx -> onPlayLocal(list, idx); onToggleOpen(false) },
+                                        onPlayLocal = { list, idx -> onPlayLocal(list, idx, list.id == LIKED_ID); onToggleOpen(false) },
                                         onPlayDj = { onPlayDj(); onToggleOpen(false) },
                                         onPlayHeard = { h -> onPlaySong(h.toSong()); onToggleOpen(false) },
                                         onSaveTo = onSaveTrack,
@@ -1323,13 +1497,21 @@ private fun AllListsSubPane(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SheetCircleIconButton(
-                icon = Icons.AutoMirrored.Rounded.ArrowBack,
-                tooltip = "Volver",
-                active = false,
-                accent = palette.primary,
-                onClick = onBack,
-            )
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(onClick = onBack),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "Volver",
+                    tint = Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(22.dp),
+                )
+            }
             Text(
                 text = "Todas tus listas",
                 fontSize = 22.sp,
@@ -1431,34 +1613,52 @@ private fun DjShelfCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .shadow(18.dp, RoundedCornerShape(16.dp), ambientColor = Color.Black.copy(alpha = 0.55f))
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xFF15161B))
-                .border(1.dp, if (isHovered) accent.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp)),
+                .shadow(22.dp, RoundedCornerShape(18.dp), ambientColor = Color.Black.copy(alpha = 0.65f))
+                .clip(RoundedCornerShape(18.dp))
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFF33274A),
+                            Color(0xFF1E172C),
+                            Color(0xFF120E1C),
+                        ),
+                        center = Offset.Unspecified,
+                        radius = 280f,
+                    ),
+                )
+                .border(
+                    1.dp,
+                    if (isHovered) accent.copy(alpha = 0.65f)
+                    else Color.White.copy(alpha = 0.14f),
+                    RoundedCornerShape(18.dp),
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Canvas(Modifier.fillMaxSize().padding(14.dp)) {
                 val r = size.minDimension * 0.48f
                 val center = Offset(size.width / 2, size.height / 2)
-                drawCircle(Color.Black.copy(alpha = 0.55f), r * 1.03f, center + Offset(0f, r * 0.04f))
-                drawCircle(Color(0xFF0E0E12), r, center)
-                // Surcos concéntricos del vinilo
+                // Sombra suave bajo el vinilo
+                drawCircle(Color.Black.copy(alpha = 0.65f), r * 1.04f, center + Offset(0f, r * 0.05f))
+                // Borde exterior biselado brillante del vinilo
+                drawCircle(Color(0xFF2B2B36), r, center)
+                drawCircle(Color(0xFF0C0C10), r * 0.985f, center)
+                // Surcos concéntricos del vinilo con brillo
                 var g = 0.38f
                 while (g < 0.96f) {
-                    drawCircle(Color.White.copy(alpha = 0.045f), r * g, center, style = Stroke(width = r * 0.011f))
+                    drawCircle(Color.White.copy(alpha = 0.055f), r * g, center, style = Stroke(width = r * 0.012f))
                     g += 0.048f
                 }
                 // Brillo especular sobre el vinilo
                 for (start in listOf(-65f, 115f)) {
                     drawArc(
-                        Brush.radialGradient(listOf(Color.White.copy(alpha = 0.11f), Color.Transparent), center, r),
-                        start, 36f, useCenter = true, topLeft = center - Offset(r, r), size = Size(r * 2, r * 2),
+                        Brush.radialGradient(listOf(Color.White.copy(alpha = 0.16f), Color.Transparent), center, r),
+                        start, 38f, useCenter = true, topLeft = center - Offset(r, r), size = Size(r * 2, r * 2),
                     )
                 }
                 // Galleta central en color --accent
                 drawCircle(accent, r * 0.30f, center)
                 rotate(angle, center) {
-                    drawCircle(Color.White.copy(alpha = 0.85f), r * 0.04f, center + Offset(r * 0.19f, 0f))
+                    drawCircle(Color.White.copy(alpha = 0.90f), r * 0.04f, center + Offset(r * 0.19f, 0f))
                 }
                 drawCircle(Color(0xFF101214), r * 0.065f, center)
             }
@@ -1801,6 +2001,40 @@ private fun PlaylistTileDesktop(
     }
 }
 
+@Composable
+private fun SortRow(newest: Boolean, onFlip: () -> Unit) {
+    val turn by animateFloatAsState(
+        targetValue = if (newest) 0f else 180f,
+        animationSpec = spring(dampingRatio = 0.7f, stiffness = 500f),
+        label = "sortTurn",
+    )
+    Row(
+        modifier = Modifier
+            .padding(bottom = 6.dp)
+            .clip(CircleShape)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(onClick = onFlip)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            imageVector = Icons.AutoMirrored.Rounded.Sort,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.65f),
+            modifier = Modifier.size(18.dp).graphicsLayer { rotationX = turn },
+        )
+        AnimatedContent(newest, label = "sortLabel") { n ->
+            Text(
+                text = if (n) "Lo último que añadiste, arriba" else "Lo primero que añadiste, arriba",
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color.White.copy(alpha = 0.65f),
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun LocalPlaylistDetailPane(
@@ -1808,12 +2042,21 @@ private fun LocalPlaylistDetailPane(
     palette: ArtworkPalette,
     currentMediaId: String?,
     onBack: () -> Unit = {},
-    onPlayIndex: (Int?) -> Unit,
+    onPlayIndex: (Int?, Boolean) -> Unit,
     onSaveTo: (Heard) -> Unit = {},
     onDeletePlaylist: (() -> Unit)? = null,
     onRemoveSong: ((String) -> Unit)? = null,
+    prefs: Prefs? = null,
 ) {
-    // Idéntico a openPlaylistInSheet en core.js:608-643: cabecera con portada 116dp + botón píldora ▶ Reproducir + botón circular Aleatorio
+    val scope = rememberCoroutineScope()
+    val sortFlipped by prefs?.sortFlipped?.collectAsState(initial = emptySet()) ?: remember { mutableStateOf(emptySet()) }
+    val normal = list.id == LIKED_ID
+    val flipped = list.id in sortFlipped
+    val newest = if (normal) !flipped else flipped
+    val shownSongs = remember(list.songs, newest) {
+        if (newest) list.songs.reversed() else list.songs
+    }
+
     val firstArt = list.songs.firstOrNull { !it.artwork.isNullOrBlank() }?.artwork
     var coverBmp by remember(firstArt) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(firstArt) {
@@ -1872,15 +2115,38 @@ private fun LocalPlaylistDetailPane(
             }
 
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = list.name,
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = (-0.5).sp,
-                    color = Color(0xFFF3EEFF),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = list.name,
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = (-0.5).sp,
+                        color = Color(0xFFF3EEFF),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    // Botón ATRÁS desnudo (sin fondo ni borde, solo la flechita) a la altura del título arriba derecha
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable(onClick = onBack),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = "Volver",
+                            tint = Color.White.copy(alpha = 0.85f),
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
+                }
                 Text(
                     text = "Lista · ${list.songs.size} canciones",
                     fontSize = 13.sp,
@@ -1897,7 +2163,7 @@ private fun LocalPlaylistDetailPane(
                             .clip(CircleShape)
                             .background(palette.primary)
                             .pointerHoverIcon(PointerIcon.Hand)
-                            .clickable { onPlayIndex(0) }
+                            .clickable { onPlayIndex(0, newest) }
                             .padding(horizontal = 24.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1921,17 +2187,36 @@ private fun LocalPlaylistDetailPane(
                         tooltip = "Aleatorio",
                         active = false,
                         accent = palette.primary,
-                        onClick = { onPlayIndex(null) },
+                        onClick = { onPlayIndex(null, newest) },
                     )
 
                     if (onDeletePlaylist != null) {
-                        SheetCircleIconButton(
-                            icon = Icons.Rounded.Delete,
-                            tooltip = "Eliminar lista",
-                            active = false,
-                            accent = Color(0xFFFF6E6E),
-                            onClick = onDeletePlaylist,
-                        )
+                        var showPlaylistMenu by remember { mutableStateOf(false) }
+                        Box {
+                            SheetCircleIconButton(
+                                icon = Icons.Rounded.MoreVert,
+                                tooltip = "Opciones de lista",
+                                active = showPlaylistMenu,
+                                accent = palette.primary,
+                                onClick = { showPlaylistMenu = true },
+                            )
+                            DropdownMenu(
+                                expanded = showPlaylistMenu,
+                                onDismissRequest = { showPlaylistMenu = false },
+                                modifier = Modifier
+                                    .background(Color(0xFF1B1726))
+                                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Eliminar playlist", color = Color(0xFFFF6E6E), fontWeight = FontWeight.Bold, fontSize = 13.sp) },
+                                    leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
+                                    onClick = {
+                                        showPlaylistMenu = false
+                                        onDeletePlaylist()
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1947,35 +2232,73 @@ private fun LocalPlaylistDetailPane(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
                 contentPadding = PaddingValues(bottom = 28.dp),
             ) {
-                itemsIndexed(list.songs, key = { idx, s -> "${s.id}-$idx" }) { idx, s ->
+                if (list.songs.size > 1) {
+                    item(key = "sort") {
+                        SortRow(
+                            newest = newest,
+                            onFlip = {
+                                scope.launch { prefs?.flipSort(list.id) }
+                            },
+                        )
+                    }
+                }
+                itemsIndexed(shownSongs, key = { idx, s -> "${s.id}-$idx" }) { idx, s ->
                     SongRowDesktop(
                         title = s.title,
                         subtitle = s.artist,
                         thumbnail = s.artwork,
                         isCurrent = s.id == currentMediaId,
                         accent = palette.primary,
-                        onClick = { onPlayIndex(idx) },
+                        leadingIndex = idx + 1,
+                        onClick = { onPlayIndex(idx, newest) },
                         onSaveTo = { onSaveTo(s) },
-                        trailing = if (onRemoveSong != null) {
-                            {
+                        trailing = {
+                            var showSongMenu by remember { mutableStateOf(false) }
+                            Box {
                                 Box(
                                     modifier = Modifier
                                         .size(28.dp)
                                         .clip(CircleShape)
-                                        .background(Color.White.copy(alpha = 0.06f))
+                                        .background(Color.White.copy(alpha = 0.05f))
                                         .pointerHoverIcon(PointerIcon.Hand)
-                                        .clickable { onRemoveSong(s.id) },
+                                        .clickable { showSongMenu = true },
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Rounded.Close,
-                                        contentDescription = "Quitar",
-                                        tint = Color.White.copy(alpha = 0.55f),
-                                        modifier = Modifier.size(15.dp),
+                                        imageVector = Icons.Rounded.MoreVert,
+                                        contentDescription = "Opciones",
+                                        tint = Color.White.copy(alpha = 0.65f),
+                                        modifier = Modifier.size(16.dp),
                                     )
                                 }
+                                DropdownMenu(
+                                    expanded = showSongMenu,
+                                    onDismissRequest = { showSongMenu = false },
+                                    modifier = Modifier
+                                        .background(Color(0xFF1B1726))
+                                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Guardar en otra lista…", color = Color(0xFFF3EEFF), fontSize = 13.sp) },
+                                        leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(18.dp)) },
+                                        onClick = {
+                                            showSongMenu = false
+                                            onSaveTo(s)
+                                        },
+                                    )
+                                    if (onRemoveSong != null) {
+                                        DropdownMenuItem(
+                                            text = { Text("Quitar de esta lista", color = Color(0xFFFF6E6E), fontSize = 13.sp) },
+                                            leadingIcon = { Icon(Icons.Rounded.DeleteOutline, contentDescription = null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
+                                            onClick = {
+                                                showSongMenu = false
+                                                onRemoveSong(s.id)
+                                            },
+                                        )
+                                    }
+                                }
                             }
-                        } else null,
+                        },
                     )
                 }
             }
@@ -1996,6 +2319,8 @@ private fun RemoteDetailPane(
 ) {
     val songs = page.songs
     val shelves = page.shelves
+    val isArtist = page.item is ArtistItem
+    val shape = if (isArtist) CircleShape else RoundedCornerShape(20.dp)
     var coverBmp by remember(page.item.thumbnail) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(page.item.thumbnail) {
         if (!page.item.thumbnail.isNullOrBlank()) {
@@ -2007,15 +2332,19 @@ private fun RemoteDetailPane(
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(20.dp),
+            horizontalArrangement = Arrangement.spacedBy(22.dp),
         ) {
             Box(
                 modifier = Modifier
-                    .size(116.dp)
-                    .shadow(24.dp, RoundedCornerShape(20.dp), ambientColor = Color.Black.copy(alpha = 0.6f))
-                    .clip(RoundedCornerShape(20.dp))
+                    .size(if (isArtist) 130.dp else 116.dp)
+                    .shadow(24.dp, shape, ambientColor = Color.Black.copy(alpha = 0.6f))
+                    .clip(shape)
                     .background(Color(0xFF1B1626))
-                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp)),
+                    .border(
+                        if (isArtist) 2.dp else 1.dp,
+                        if (isArtist) Brush.sweepGradient(listOf(palette.primary, palette.secondary, palette.primary)) else SolidColor(Color.White.copy(alpha = 0.12f)),
+                        shape,
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 if (coverBmp != null) {
@@ -2027,41 +2356,90 @@ private fun RemoteDetailPane(
                     )
                 } else {
                     Icon(
-                        imageVector = Icons.Rounded.Album,
+                        imageVector = if (isArtist) Icons.Rounded.Person else Icons.Rounded.Album,
                         contentDescription = null,
                         tint = palette.primary,
-                        modifier = Modifier.size(48.dp),
+                        modifier = Modifier.size(if (isArtist) 54.dp else 48.dp),
                     )
                 }
             }
 
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (isArtist) {
+                        Row(
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(palette.primary.copy(alpha = 0.16f))
+                                .border(1.dp, palette.primary.copy(alpha = 0.40f), CircleShape)
+                                .padding(horizontal = 10.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Person,
+                                contentDescription = null,
+                                tint = palette.primary,
+                                modifier = Modifier.size(12.dp),
+                            )
+                            Text(
+                                text = "ARTISTA",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 1.2.sp,
+                                color = palette.primary,
+                            )
+                        }
+                    } else {
+                        Spacer(Modifier.width(1.dp))
+                    }
+                    // Botón ATRÁS desnudo (sin fondo ni borde, solo la flechita) a la altura del título arriba derecha
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable(onClick = onBack),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = "Volver",
+                            tint = Color.White.copy(alpha = 0.85f),
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
+                }
                 Text(
                     text = page.item.title,
-                    fontSize = 26.sp,
+                    fontSize = if (isArtist) 30.sp else 26.sp,
                     fontWeight = FontWeight.ExtraBold,
                     letterSpacing = (-0.5).sp,
                     color = Color(0xFFF3EEFF),
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 page.sub?.let {
-                    Text(it, fontSize = 13.sp, color = Color.White.copy(alpha = 0.60f))
+                    Text(it, fontSize = 13.sp, color = Color.White.copy(alpha = 0.65f))
                 }
                 if (!songs.isNullOrEmpty()) {
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(4.dp))
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Row(
                             modifier = Modifier
-                                .height(44.dp)
+                                .height(42.dp)
                                 .clip(CircleShape)
                                 .background(palette.primary)
                                 .pointerHoverIcon(PointerIcon.Hand)
                                 .clickable { onPlayAll(songs, 0) }
-                                .padding(horizontal = 24.dp),
+                                .padding(horizontal = 22.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
@@ -2095,10 +2473,21 @@ private fun RemoteDetailPane(
             songs == null && shelves.isEmpty() -> Text("Cargando pistas de YouTube Music…", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
             else -> LazyColumn(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(bottom = 28.dp),
             ) {
                 if (!songs.isNullOrEmpty()) {
+                    if (isArtist) {
+                        item {
+                            Text(
+                                text = "Canciones populares",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFF3EEFF),
+                                modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                            )
+                        }
+                    }
                     itemsIndexed(songs, key = { i, s -> "${s.id}-$i" }) { idx, s ->
                         SongRowDesktop(
                             title = s.title,
@@ -2106,6 +2495,7 @@ private fun RemoteDetailPane(
                             thumbnail = s.thumbnail,
                             isCurrent = s.id == currentMediaId,
                             accent = palette.primary,
+                            leadingIndex = idx + 1,
                             onClick = { onPlayAll(songs, idx) },
                             onSaveTo = { onSaveTo(s.toHeard()) },
                         )
@@ -2622,21 +3012,23 @@ private fun QueuePane(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (queue.size > 1) {
                     MenuTabPill(
-                        label = "Vaciar cola",
+                        label = "Vaciar",
                         selected = false,
                         accent = Color(0xFFFF5252),
                         onClick = onClearQueue,
                     )
                 }
-                MenuTabPill(
-                    label = if (shuffle) "Aleatorio: Sí" else "Aleatorio: No",
-                    selected = shuffle,
+                SheetCircleIconButton(
+                    icon = Icons.Rounded.Shuffle,
+                    tooltip = if (shuffle) "Aleatorio activo" else "Activar aleatorio",
+                    active = shuffle,
                     accent = palette.primary,
                     onClick = onToggleShuffle,
                 )
-                MenuTabPill(
-                    label = if (loop) "Repetir: Sí" else "Repetir: No",
-                    selected = loop,
+                SheetCircleIconButton(
+                    icon = Icons.Rounded.Repeat,
+                    tooltip = if (loop) "Bucle activo" else "Activar bucle",
+                    active = loop,
                     accent = palette.secondary,
                     onClick = onToggleLoop,
                 )
@@ -2681,6 +3073,9 @@ private fun QueueRowDesktop(
 ) {
     var thumbBmp by remember(artwork) { mutableStateOf<ImageBitmap?>(null) }
     var isHovered by remember { mutableStateOf(false) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
+
     LaunchedEffect(artwork) {
         if (!artwork.isNullOrBlank()) {
             thumbBmp = ArtworkLoader.load(artwork).first
@@ -2690,6 +3085,11 @@ private fun QueueRowDesktop(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .zIndex(if (isDragging) 10f else 0f)
+            .graphicsLayer {
+                translationY = dragOffsetY
+                shadowElevation = if (isDragging) 12f else 0f
+            }
             .clip(RoundedCornerShape(12.dp))
             .background(
                 if (isCurrent) Brush.horizontalGradient(
@@ -2774,6 +3174,38 @@ private fun QueueRowDesktop(
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .pointerHoverIcon(PointerIcon(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.MOVE_CURSOR)))
+                    .pointerInput(canMoveUp, canMoveDown) {
+                        detectVerticalDragGestures(
+                            onDragStart = { isDragging = true },
+                            onDragEnd = { isDragging = false; dragOffsetY = 0f },
+                            onDragCancel = { isDragging = false; dragOffsetY = 0f },
+                        ) { change, dragAmount ->
+                            change.consume()
+                            dragOffsetY += dragAmount
+                            val step = 44f
+                            if (dragOffsetY > step && canMoveDown) {
+                                onMoveDown()
+                                dragOffsetY -= step
+                            } else if (dragOffsetY < -step && canMoveUp) {
+                                onMoveUp()
+                                dragOffsetY += step
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.DragHandle,
+                    contentDescription = "Mover manteniendo",
+                    tint = if (isDragging) accent else Color.White.copy(alpha = 0.55f),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
             if (canMoveUp) {
                 Box(
                     modifier = Modifier
@@ -2826,13 +3258,39 @@ private fun SettingsAndAccountPane(
     importState: ImportState,
     qualityMode: QualityMode,
     dataSaver: Boolean,
+    shuffle: Boolean,
+    loop: Boolean,
+    onSetShuffle: (Boolean) -> Unit,
+    onSetLoop: (Boolean) -> Unit,
     palette: ArtworkPalette,
+    onOpenImport: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val crossfade by prefs.crossfade.collectAsState(initial = 3)
-    var importError by remember { mutableStateOf<String?>(null) }
+    val showRemaining by prefs.showRemaining.collectAsState(initial = false)
+    val romanize by prefs.romanize.collectAsState(initial = true)
+    val coverBeat by prefs.coverBeat.collectAsState(initial = true)
+
+    var loginMode by remember { mutableIntStateOf(0) } // 0 = Navegador / Consola, 1 = Pegar cookie / cURL
+    var cookieInput by remember { mutableStateOf("") }
+    var cookieFeedback by remember { mutableStateOf<String?>(null) }
+    var connectingCookie by remember { mutableStateOf(false) }
+    var snippetCopied by remember { mutableStateOf(false) }
+
+    var cacheSizeBytes by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val f = OtoDirs.cacheDir
+            cacheSizeBytes = f.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        }
+    }
+    val cacheFormatted = remember(cacheSizeBytes) {
+        val mb = cacheSizeBytes / (1024L * 1024L)
+        if (mb >= 1024L) "%.1f GB".format(mb / 1024f) else "$mb MB"
+    }
 
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        // 1. CUENTA DE YOUTUBE MUSIC
         item {
             Column(
                 modifier = Modifier
@@ -2841,47 +3299,186 @@ private fun SettingsAndAccountPane(
                     .background(Color.White.copy(alpha = 0.05f))
                     .border(1.dp, palette.primary.copy(alpha = 0.2f), RoundedCornerShape(18.dp))
                     .padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(Icons.Rounded.CloudDone, null, tint = palette.primary)
                     Text("Cuenta de YouTube Music", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
+
                 if (session != null) {
-                    Text("Conectado como ${session.name.ifBlank { session.email ?: "tu cuenta" }}", fontSize = 13.sp, color = palette.primary)
-                    Text(
-                        when (cloudState) {
-                            CloudState.Off -> "Copia en la nube: apagada"
-                            is CloudState.Working -> "Sincronizando: ${cloudState.what}"
-                            is CloudState.Done -> "Sincronizado: ${cloudState.lists} listas"
-                            is CloudState.Failed -> "Error de copia: ${cloudState.why}"
-                        },
-                        fontSize = 12.sp,
-                        color = Color.White.copy(alpha = 0.65f),
-                    )
-                    MenuTabPill("Cerrar sesión", false, palette.secondary) {
-                        scope.launch { account.signOut(); cloud.forget() }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color.White.copy(alpha = 0.04f))
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(palette.primary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Rounded.Person, null, tint = palette.primary, modifier = Modifier.size(24.dp))
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(session.name.ifBlank { "Conectado" }, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            session.email?.let {
+                                Text(it, fontSize = 12.sp, color = Color.White.copy(alpha = 0.65f))
+                            }
+                            Text(
+                                when (cloudState) {
+                                    CloudState.Off -> "Copia en la nube: desactivada"
+                                    is CloudState.Working -> "Sincronizando: ${cloudState.what}…"
+                                    is CloudState.Done -> "Guardadas en tu cuenta (${if (cloudState.lists == 1) "1 lista" else "${cloudState.lists} listas"} privadas)"
+                                    is CloudState.Failed -> "No se pudo sincronizar: ${cloudState.why}"
+                                },
+                                fontSize = 11.sp,
+                                color = palette.primary.copy(alpha = 0.85f),
+                            )
+                        }
+                        MenuTabPill("Cerrar sesión", false, palette.secondary) {
+                            scope.launch { account.signOut(); cloud.forget() }
+                        }
                     }
                 } else {
-                    val loginState by login.state.collectAsState()
                     Text(
-                        "Se abre music.youtube.com en tu navegador y la sesión llega sola a Oto (solo a 127.0.0.1).",
+                        "Explorar y la radio salen de tus gustos, lo que oigas cuenta en tu historial de YouTube y lo que te guste en Oto también le gustará a YouTube Music.",
                         fontSize = 12.sp,
                         color = Color.White.copy(alpha = 0.65f),
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        MenuTabPill("Iniciar sesión", true, palette.primary) { login.start() }
-                        MenuTabPill("Instalar extensión (una vez)", false, palette.secondary) { login.extractExtension() }
+
+                    // Selector de método de inicio de sesión
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MenuTabPill("Navegador + Consola (F12)", loginMode == 0, palette.primary) { loginMode = 0 }
+                        MenuTabPill("Pegar Cookie o cURL", loginMode == 1, palette.primary) { loginMode = 1 }
                     }
-                    when (val ls = loginState) {
-                        LoginState.Waiting -> Text("Esperando al navegador… inicia sesión en la pestaña que se ha abierto.", fontSize = 12.sp, color = palette.primary)
-                        is LoginState.Failed -> Text(ls.why, fontSize = 12.sp, color = palette.secondary)
-                        LoginState.Done, LoginState.Idle -> Unit
+
+                    if (loginMode == 0) {
+                        val loginState by login.state.collectAsState()
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            MenuTabPill("1. Abrir YouTube Music en navegador", true, palette.primary) {
+                                snippetCopied = false
+                                login.start()
+                            }
+                            MenuTabPill("Instalar extensión si la usas", false, palette.secondary) { login.extractExtension() }
+                        }
+
+                        when (val ls = loginState) {
+                            LoginState.Waiting -> {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(palette.primary.copy(alpha = 0.08f))
+                                        .border(1.dp, palette.primary.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                                        .padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(
+                                        "Paso 2: En la pestaña de music.youtube.com abierta, pulsa F12 → Consola y pega este comando:",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color.White,
+                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        MenuTabPill(
+                                            if (snippetCopied) "✓ Comando copiado al portapapeles" else "📋 Copiar comando de 1 línea para consola (F12)",
+                                            snippetCopied,
+                                            palette.primary,
+                                        ) {
+                                            val snippet = login.getConsoleSnippet()
+                                            if (snippet != null) {
+                                                val sel = StringSelection(snippet)
+                                                Toolkit.getDefaultToolkit().systemClipboard.setContents(sel, sel)
+                                                snippetCopied = true
+                                            }
+                                        }
+                                        MenuTabPill("Cancelar", false, palette.secondary) {
+                                            login.cancel()
+                                        }
+                                    }
+                                    if (snippetCopied) {
+                                        Text(
+                                            "¡Listo! Pégalo en la consola de YouTube Music y pulsa Enter. Oto detectará tu sesión en el acto.",
+                                            fontSize = 11.5.sp,
+                                            color = palette.primary,
+                                        )
+                                    }
+                                }
+                            }
+                            is LoginState.Failed -> {
+                                Text(ls.why, fontSize = 12.sp, color = palette.secondary)
+                            }
+                            LoginState.Done, LoginState.Idle -> Unit
+                        }
+                    } else {
+                        // Método 1: Pegar cookie o cURL
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                "En music.youtube.com con tu sesión: F12 → Red (Network) → clic en cualquier petición → Copiar como cURL (o copiar valor de Cookie) y pégalo abajo:",
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.65f),
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color.White.copy(alpha = 0.06f))
+                                    .border(1.dp, if (cookieFeedback != null) palette.secondary.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                BasicTextField(
+                                    value = cookieInput,
+                                    onValueChange = { cookieInput = it; cookieFeedback = null },
+                                    singleLine = true,
+                                    textStyle = TextStyle(fontFamily = OtoFontFamily, color = Color.White, fontSize = 13.sp),
+                                    cursorBrush = SolidColor(palette.primary),
+                                    decorationBox = { inner ->
+                                        if (cookieInput.isBlank()) {
+                                            Text("Pega aquí las cookies (con SAPISID) o el comando cURL…", color = Color.White.copy(alpha = 0.4f), fontSize = 13.sp)
+                                        }
+                                        inner()
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                )
+                                MenuTabPill(if (connectingCookie) "Conectando…" else "Conectar", true, palette.primary) {
+                                    if (cookieInput.isNotBlank() && !connectingCookie) {
+                                        connectingCookie = true
+                                        cookieFeedback = null
+                                        scope.launch {
+                                            login.signInWithCookie(cookieInput)
+                                                .onSuccess {
+                                                    cookieInput = ""
+                                                    connectingCookie = false
+                                                }
+                                                .onFailure {
+                                                    cookieFeedback = it.message ?: "No se pudo conectar"
+                                                    connectingCookie = false
+                                                }
+                                        }
+                                    }
+                                }
+                            }
+                            cookieFeedback?.let {
+                                Text(it, fontSize = 12.sp, color = palette.secondary)
+                            }
+                        }
                     }
                 }
             }
         }
 
+        // 2. IMPORTAR DE SPOTIFY
         item {
             Column(
                 modifier = Modifier
@@ -2894,29 +3491,22 @@ private fun SettingsAndAccountPane(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(Icons.Rounded.FileUpload, null, tint = palette.secondary)
-                    Text("Importar biblioteca (oto-spotify.json)", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Importar de Spotify", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
+                Text(
+                    importSummary(importState),
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.65f),
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    MenuTabPill("Elegir archivo JSON…", true, palette.secondary) {
-                        val fd = FileDialog(null as Frame?, "Seleccionar oto-spotify.json", FileDialog.LOAD)
-                        fd.isVisible = true
-                        val file = fd.file?.let { File(fd.directory, it) }
-                        if (file != null && file.exists()) {
-                            runCatching { Spotify.parseExport(file.readText()) }
-                                .onSuccess { importError = null; importer.start(it) }
-                                .onFailure { importError = it.message }
-                        }
-                    }
-                    importError?.let { Text("Error: $it", fontSize = 12.sp, color = palette.secondary) }
-                    when (val st = importState) {
-                        is ImportState.Running -> Text("Importando ${st.done}/${st.total} (${st.list})…", fontSize = 12.sp, color = palette.primary)
-                        is ImportState.Done -> Text("Importadas ${st.songs} canciones en ${st.lists} listas.", fontSize = 12.sp, color = palette.primary)
-                        ImportState.Idle -> Unit
+                    MenuTabPill("Abrir importador completo…", true, palette.secondary) {
+                        onOpenImport()
                     }
                 }
             }
         }
 
+        // 3. AUDIO Y CALIDAD
         item {
             Column(
                 modifier = Modifier
@@ -2938,6 +3528,12 @@ private fun SettingsAndAccountPane(
                         scope.launch { prefs.setDataSaver(!dataSaver) }
                     }
                 }
+                Text(
+                    if (qualityMode == QualityMode.Auto) "La mejor calidad que aguante tu conexión. Se elige al empezar cada canción."
+                    else "Siempre la mejor calidad disponible (Opus 256/160k).",
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.55f),
+                )
                 Spacer(Modifier.height(4.dp))
                 Text("Fundido entre canciones (crossfade)", fontSize = 13.sp, color = Color.White.copy(alpha = 0.70f))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2950,6 +3546,112 @@ private fun SettingsAndAccountPane(
             }
         }
 
+        // 4. REPRODUCCIÓN (SHUFFLE Y LOOP)
+        item {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Color.White.copy(alpha = 0.05f))
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Reproducción", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MenuTabPill(if (shuffle) "Aleatorio: activo" else "Aleatorio: apagado", shuffle, palette.primary) {
+                        onSetShuffle(!shuffle)
+                    }
+                    MenuTabPill(if (loop) "Repetir: activo" else "Repetir: apagado", loop, palette.primary) {
+                        onSetLoop(!loop)
+                    }
+                }
+                Text(
+                    if (loop) "Al acabar la lista o cola de reproducción, vuelve a empezar desde la primera."
+                    else "Al acabar la lista, continúan recomendaciones automáticas parecidas.",
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.55f),
+                )
+            }
+        }
+
+        // 5. PANTALLA Y VISUALIZACIÓN
+        item {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Color.White.copy(alpha = 0.05f))
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Pantalla y visualización", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MenuTabPill(
+                        if (showRemaining) "Tiempo: restante (-1:23)" else "Tiempo: total (3:45)",
+                        showRemaining,
+                        palette.primary,
+                    ) {
+                        scope.launch { prefs.setShowRemaining(!showRemaining) }
+                    }
+                    MenuTabPill(
+                        if (romanize) "Romanización de letras: sí" else "Romanización: no",
+                        romanize,
+                        palette.secondary,
+                    ) {
+                        scope.launch { prefs.setRomanize(!romanize) }
+                    }
+                    MenuTabPill(
+                        if (coverBeat) "Carátula al ritmo: sí" else "Carátula al ritmo: no",
+                        coverBeat,
+                        palette.tertiary,
+                    ) {
+                        scope.launch { prefs.setCoverBeat(!coverBeat) }
+                    }
+                }
+                Text(
+                    "Personaliza cómo se muestran los tiempos en la barra de progreso y la pronunciación en canciones en japonés, coreano o chino.",
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.55f),
+                )
+            }
+        }
+
+        // 6. ALMACENAMIENTO Y CACHÉ
+        item {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Color.White.copy(alpha = 0.05f))
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Icon(Icons.Rounded.DeleteOutline, null, tint = palette.primary)
+                    Text("Almacenamiento y caché", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column {
+                        Text("Caché de canciones y carátulas:", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f))
+                        Text(cacheFormatted, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = palette.primary)
+                    }
+                    MenuTabPill("Limpiar caché", false, palette.secondary) {
+                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            runCatching {
+                                OtoDirs.cacheDir.listFiles()?.forEach { it.deleteRecursively() }
+                                cacheSizeBytes = 0L
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 7. ATAJOS DE TECLADO
         item {
             Column(
                 modifier = Modifier
@@ -3010,6 +3712,439 @@ private fun SettingsAndAccountPane(
                 }
             }
         }
+
+        // 8. ACERCA DE OTO
+        item {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    "Oto 1.2.0 · GPL-3.0",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White.copy(alpha = 0.50f),
+                )
+                Text(
+                    "Con InnerTubeX y partes de Metrolist. Letras de lyricsplus, NetEase, LRCLIB y YouTube Music.\ngithub.com/iaguito22/oto",
+                    fontSize = 11.sp,
+                    color = Color.White.copy(alpha = 0.35f),
+                )
+            }
+        }
+    }
+}
+
+private fun importSummary(s: ImportState): String = when (s) {
+    ImportState.Idle -> "Trae tus listas públicas, privadas y «Canciones que te gustan» desde Spotify."
+    is ImportState.Running -> "Importando: ${if (s.total > 0) (s.done * 100 / s.total) else 0}% · lista ${s.index + 1} de ${s.lists} (${s.list})"
+    is ImportState.Done -> if (s.stopped) "Parado a medias: ${s.songs} canciones guardadas" else "Hecho: ${s.lists} listas y ${s.songs} canciones importadas"
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ImportPane(
+    importer: Importer,
+    prefs: Prefs,
+    palette: ArtworkPalette,
+    onBack: () -> Unit,
+    onLists: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val importState by importer.state.collectAsState()
+    val playlists by prefs.playlists.collectAsState(initial = emptyList())
+    val importedFromIds = remember(playlists) { playlists.mapNotNull { it.from }.toSet() }
+
+    var loaded by remember { mutableStateOf<List<SourceList>?>(null) }
+    var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var reading by remember { mutableStateOf(false) }
+    var linkText by remember { mutableStateOf("") }
+
+    val step = when {
+        importState is ImportState.Running -> 2
+        loaded != null -> 1
+        importState is ImportState.Done -> 3
+        else -> 0
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        when (step) {
+            0 -> {
+                // PASO 0: FUENTE (ENLACE O ARCHIVO)
+                LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    item {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(Color.White.copy(alpha = 0.05f))
+                                .border(1.dp, palette.primary.copy(alpha = 0.2f), RoundedCornerShape(18.dp))
+                                .padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text("Una lista o un álbum de Spotify", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text(
+                                "Pega su enlace público (Compartir → Copiar enlace). Sin sesión en Spotify, se leen hasta 100 canciones.",
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.65f),
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color.White.copy(alpha = 0.06f))
+                                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                BasicTextField(
+                                    value = linkText,
+                                    onValueChange = { linkText = it; error = null },
+                                    singleLine = true,
+                                    textStyle = TextStyle(fontFamily = OtoFontFamily, color = Color.White, fontSize = 13.sp),
+                                    cursorBrush = SolidColor(palette.primary),
+                                    decorationBox = { inner ->
+                                        if (linkText.isBlank()) {
+                                            Text("open.spotify.com/playlist/…", color = Color.White.copy(alpha = 0.4f), fontSize = 13.sp)
+                                        }
+                                        inner()
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                )
+                                MenuTabPill(if (reading) "Leyendo…" else "Cargar enlace", true, palette.primary) {
+                                    if (linkText.isNotBlank() && !reading) {
+                                        reading = true
+                                        error = null
+                                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                            Spotify.fromLink(linkText.trim())
+                                                .onSuccess {
+                                                    loaded = listOf(it)
+                                                    picked = setOf(it.id)
+                                                    reading = false
+                                                }
+                                                .onFailure {
+                                                    error = it.message ?: "No se pudo leer el enlace de Spotify"
+                                                    reading = false
+                                                }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(Color.White.copy(alpha = 0.05f))
+                                .border(1.dp, palette.secondary.copy(alpha = 0.2f), RoundedCornerShape(18.dp))
+                                .padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text("Todas tus listas (archivo oto-spotify.json)", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text(
+                                "1. En el navegador o en Spotify con la extensión «Exportar a Oto», descarga tu archivo oto-spotify.json.\n" +
+                                "2. Selecciónalo aquí para importar todas tus listas privadas, públicas y «Canciones que te gustan».",
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.65f),
+                            )
+                            MenuTabPill("Elegir archivo oto-spotify.json…", true, palette.secondary) {
+                                val fd = FileDialog(null as Frame?, "Seleccionar oto-spotify.json", FileDialog.LOAD)
+                                fd.isVisible = true
+                                val file = fd.file?.let { File(fd.directory, it) }
+                                if (file != null && file.exists()) {
+                                    reading = true
+                                    error = null
+                                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                        runCatching { Spotify.parseExport(file.readText()) }
+                                            .onSuccess { lists ->
+                                                loaded = lists
+                                                picked = lists.filter { it.own || it.liked }.mapTo(HashSet()) { it.id }
+                                                reading = false
+                                            }
+                                            .onFailure {
+                                                error = "El archivo no es un oto-spotify.json válido (${it.message})"
+                                                reading = false
+                                            }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (error != null) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(palette.secondary.copy(alpha = 0.15f))
+                                    .border(1.dp, palette.secondary.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                                    .padding(14.dp),
+                            ) {
+                                Text(error!!, color = Color.White, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            1 -> {
+                // PASO 1: ELEGIR QUÉ LISTAS TRAER (PICK)
+                val lists = loaded.orEmpty()
+                val chosen = lists.filter { it.id in picked }
+                val uniqueCount = remember(lists, picked) {
+                    picked.flatMap { id ->
+                        lists.firstOrNull { it.id == id }?.tracks?.map { "${it.title}|${it.artists.firstOrNull()}" } ?: emptyList()
+                    }.toSet().size
+                }
+                val estMinutes = remember(uniqueCount) {
+                    val m = (uniqueCount / 9 / 60) + 1
+                    if (m <= 1) "menos de 1 min" else "unos $m min"
+                }
+
+                Column(Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "ELIGE QUÉ TRAER (${lists.size} listas)",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White.copy(alpha = 0.60f),
+                        )
+                        val allPicked = picked.size == lists.size
+                        MenuTabPill(if (allPicked) "Ninguna" else "Todas", false, palette.primary) {
+                            picked = if (allPicked) emptySet() else lists.mapTo(HashSet()) { it.id }
+                        }
+                    }
+
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(lists, key = { it.id }) { l ->
+                            val isChecked = l.id in picked
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(if (isChecked) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.03f))
+                                    .border(
+                                        1.dp,
+                                        if (isChecked) palette.primary.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.08f),
+                                        RoundedCornerShape(14.dp),
+                                    )
+                                    .clickable {
+                                        picked = if (isChecked) picked - l.id else picked + l.id
+                                    }
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isChecked) palette.primary else Color.White.copy(alpha = 0.15f)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (isChecked) {
+                                        Icon(Icons.Rounded.Check, null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        if (l.liked) "Canciones que te gustan" else l.name,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.White,
+                                    )
+                                    val subParts = listOfNotNull(
+                                        "${l.tracks.size} canciones",
+                                        "a Me gusta".takeIf { l.liked },
+                                        "la sigues".takeIf { !l.own && !l.liked },
+                                        "ya importada".takeIf { l.id in importedFromIds },
+                                        "solo las primeras 100".takeIf { l.partial },
+                                    ).joinToString(" · ")
+                                    Text(subParts, fontSize = 12.sp, color = Color.White.copy(alpha = 0.55f))
+                                }
+                            }
+                        }
+                    }
+
+                    // Barra inferior de confirmación
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column {
+                            Text("$uniqueCount canciones distintas", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                            Text(estMinutes, fontSize = 12.sp, color = Color.White.copy(alpha = 0.55f))
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            MenuTabPill("Atrás", false, palette.secondary) {
+                                loaded = null
+                            }
+                            MenuTabPill(
+                                if (chosen.isEmpty()) "Marca alguna lista" else "Importar (${chosen.size})",
+                                chosen.isNotEmpty(),
+                                palette.primary,
+                            ) {
+                                if (chosen.isNotEmpty()) {
+                                    importer.start(chosen)
+                                    loaded = null
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            2 -> {
+                // PASO 2: PROGRESO EN VIVO (RUNNING)
+                val s = importState as? ImportState.Running
+                if (s != null) {
+                    val progressFrac = if (s.total > 0) s.done.toFloat() / s.total.toFloat() else 0f
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 20.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            "LISTA ${s.index + 1} DE ${s.lists}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = palette.primary,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            s.list,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(24.dp))
+
+                        // Barra de progreso
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(10.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.12f)),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(progressFrac.coerceIn(0f, 1f))
+                                    .fillMaxHeight()
+                                    .clip(CircleShape)
+                                    .background(palette.primary),
+                            )
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text("${s.done} de ${s.total} canciones", fontSize = 13.sp, color = Color.White.copy(alpha = 0.75f))
+                            Text("${(progressFrac * 100).toInt()}%", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = palette.primary)
+                        }
+                        if (s.missing > 0) {
+                            Text("${s.missing} sin encontrar en YouTube Music", fontSize = 12.sp, color = palette.secondary)
+                        }
+                        Spacer(Modifier.height(28.dp))
+                        Text(
+                            "Cada lista se guarda en cuanto acaba. Puedes cerrar el Menú y seguir oyendo música mientras tanto.",
+                            fontSize = 12.5.sp,
+                            color = Color.White.copy(alpha = 0.55f),
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(20.dp))
+                        MenuTabPill("Parar importación", false, palette.secondary) {
+                            importer.stop()
+                        }
+                    }
+                }
+            }
+
+            3 -> {
+                // PASO 3: RESUMEN FINAL (DONE)
+                val s = importState as? ImportState.Done
+                if (s != null) {
+                    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .background(Color.White.copy(alpha = 0.05f))
+                                    .border(1.dp, palette.primary.copy(alpha = 0.3f), RoundedCornerShape(18.dp))
+                                    .padding(20.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Text(
+                                    if (s.stopped) "Parado a medias" else "¡Importación completada!",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                )
+                                Text(
+                                    "${s.lists} listas y ${s.songs} canciones guardadas en Tus listas." +
+                                        if (s.missing.isEmpty()) " No faltó ninguna canción."
+                                        else " ${s.missing.size} canciones no se encontraron en YouTube Music.",
+                                    fontSize = 13.sp,
+                                    color = Color.White.copy(alpha = 0.70f),
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    MenuTabPill("Ver Tus listas", true, palette.primary) {
+                                        importer.dismiss()
+                                        onLists()
+                                    }
+                                    MenuTabPill("Importar más", false, palette.secondary) {
+                                        importer.dismiss()
+                                    }
+                                }
+                            }
+                        }
+
+                        if (s.missing.isNotEmpty()) {
+                            item {
+                                Text(
+                                    "NO ENCONTRADAS (${s.missing.size})",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White.copy(alpha = 0.50f),
+                                )
+                            }
+                            items(s.missing) { m ->
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color.White.copy(alpha = 0.03f))
+                                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                                ) {
+                                    Text(m.track.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                                    Text("${m.track.artists.joinToString()} · ${m.list}", fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.50f))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -3021,6 +4156,7 @@ private fun SongRowDesktop(
     thumbnail: String? = null,
     isCurrent: Boolean,
     accent: Color,
+    leadingIndex: Int? = null,
     onClick: () -> Unit,
     onSaveTo: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
@@ -3068,6 +4204,17 @@ private fun SongRowDesktop(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            if (leadingIndex != null) {
+                Text(
+                    text = "$leadingIndex",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    color = if (isCurrent) accent else Color.White.copy(alpha = 0.45f),
+                    modifier = Modifier.width(22.dp),
+                    textAlign = TextAlign.Center,
+                )
+            }
             Box(
                 modifier = Modifier
                     .size(48.dp)

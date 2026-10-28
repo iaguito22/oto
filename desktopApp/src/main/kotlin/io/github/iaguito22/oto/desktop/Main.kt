@@ -289,6 +289,7 @@ fun main() {
             val nowPlaying by player.state.collectAsState()
             val source by player.source.collectAsState()
             val queue by player.queue.collectAsState()
+            val previousEntry by player.previousEntry.collectAsState()
             val shuffle by player.shuffle.collectAsState()
             val loop by player.loop.collectAsState()
             val lyrics by player.lyrics.collectAsState()
@@ -299,6 +300,10 @@ fun main() {
             val likedIds by prefs.likedIds.collectAsState(initial = emptySet())
             val likedList by prefs.likedList.collectAsState(initial = LocalPlaylist(LIKED_ID, "Me gusta", emptyList()))
             val playlists by prefs.playlists.collectAsState(initial = emptyList())
+            val showRemaining by prefs.showRemaining.collectAsState(initial = false)
+            val coverBeat by prefs.coverBeat.collectAsState(initial = true)
+            val nextArtwork = queue.getOrNull(nowPlaying.index + 1)?.artwork
+            val prevArtwork = previousEntry?.artwork ?: queue.getOrNull(nowPlaying.index - 1)?.artwork
             val uiScope = rememberCoroutineScope()
 
             var artwork by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -331,9 +336,6 @@ fun main() {
                             if (!menuOpen && dy > 0.5f) {
                                 menuOpen = true
                                 lastWheelToggleMs = now
-                            } else if (menuOpen && dy < -0.7f) {
-                                menuOpen = false
-                                lastWheelToggleMs = now
                             }
                         }
                     },
@@ -352,6 +354,13 @@ fun main() {
                     cue = cue,
                     isIdle = isIdle,
                     menuOpen = menuOpen,
+                    showRemaining = showRemaining,
+                    onToggleShowRemaining = {
+                        uiScope.launch { prefs.setShowRemaining(!showRemaining) }
+                    },
+                    coverBeat = coverBeat,
+                    nextArtwork = nextArtwork,
+                    prevArtwork = prevArtwork,
                     onTogglePlay = {
                         val willPlay = !player.state.value.playing
                         player.toggle()
@@ -424,12 +433,36 @@ fun main() {
                     onClearQueue = player::clearQueue,
                     onPlaySong = player::play,
                     onPlayAll = { songs, i, item -> player.playAll(songs, i, item) },
-                    onPlayLocal = { list, idx -> player.playLocal(list, idx, list.id == LIKED_ID) },
+                    onPlayLocal = { list, idx, newest -> player.playLocal(list, idx, newest) },
                     onPlayDj = { player.playDj {} },
                     onSkipToQueue = player::skipTo,
                     selectedTab = menuTab,
                     onSelectTab = { menuTab = it },
                     onSaveTrack = { savingTrack = it },
+                    nowPlaying = nowPlaying,
+                    liked = isLiked,
+                    onTogglePlay = {
+                        val willPlay = !player.state.value.playing
+                        player.toggle()
+                        cue = if (willPlay) CueInfo(Icons.Rounded.PlayArrow, "Reanudado") else CueInfo(Icons.Rounded.Pause, "Pausado")
+                    },
+                    onPrev = {
+                        player.previous()
+                        cue = CueInfo(Icons.Rounded.SkipPrevious, "Anterior")
+                    },
+                    onNext = {
+                        player.next()
+                        cue = CueInfo(Icons.Rounded.SkipNext, "Siguiente")
+                    },
+                    onToggleLike = {
+                        val id = nowPlaying.id ?: return@DesktopMenuSheet
+                        val heard = Heard(id, nowPlaying.title, nowPlaying.artist, nowPlaying.artwork)
+                        val willBeLiked = !isLiked
+                        uiScope.launch {
+                            prefs.setLiked(heard, willBeLiked)
+                            cue = if (willBeLiked) CueInfo(Icons.Rounded.Favorite, "Guardado en Me gusta") else CueInfo(Icons.Rounded.FavoriteBorder, "Retirado de Me gusta")
+                        }
+                    },
                 )
 
                 // Modal emergente de guardado en listas (accesible desde Stage, Menú y atajo de teclado B)

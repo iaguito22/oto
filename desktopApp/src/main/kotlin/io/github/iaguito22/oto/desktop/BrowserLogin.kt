@@ -1,5 +1,6 @@
 package io.github.iaguito22.oto.desktop
 
+import com.metrolist.innertube.YouTube
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import io.github.iaguito22.oto.OtoDirs
@@ -38,10 +39,46 @@ class BrowserLogin(private val account: Account, private val scope: CoroutineSco
 
     private var server: HttpServer? = null
     private var timeout: Job? = null
+    var currentToken: String? = null
+        private set
+
+    val currentPort: Int? get() = server?.address?.port
+
+    fun getConsoleSnippet(): String? {
+        val p = currentPort ?: return null
+        val t = currentToken ?: return null
+        return """fetch("http://127.0.0.1:$p/session?token=$t",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({cookie:document.cookie,v:window.yt?.config_?.VISITOR_DATA||"",d:window.yt?.config_?.DATASYNC_ID||"",u:String(window.yt?.config_?.SESSION_INDEX||0)})}).then(r=>alert(r.ok?"¡Sesión conectada con Oto!":"Error: "+r.status));"""
+    }
+
+    suspend fun signInWithCookie(rawText: String): Result<Unit> = runCatching {
+        val text = rawText.trim()
+        val cookieStr = when {
+            "-H 'cookie:" in text.lowercase() -> {
+                Regex("(?i)-H\\s+['\"]cookie:\\s*([^'\"]+)['\"]").find(text)?.groupValues?.get(1) ?: text
+            }
+            "-b '" in text -> {
+                Regex("-b\\s+['\"]([^'\"]+)['\"]").find(text)?.groupValues?.get(1) ?: text
+            }
+            else -> text
+        }
+        if ("SAPISID" !in cookieStr) {
+            throw IllegalArgumentException("Falta la cookie SAPISID. Copia las cookies desde una pestaña donde tengas la sesión abierta en music.youtube.com.")
+        }
+        val visitor = YouTube.visitorData ?: ""
+        val session = Session(
+            cookie = cookieStr,
+            visitorData = visitor,
+            dataSyncId = "",
+            authUser = "0",
+        )
+        account.signIn(session)
+        _state.value = LoginState.Done
+    }
 
     fun start() {
         cancel()
         val token = ByteArray(18).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+        currentToken = token
         val http = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         http.createContext("/session") { ex -> handle(ex, token) }
         http.start()
@@ -50,7 +87,7 @@ class BrowserLogin(private val account: Account, private val scope: CoroutineSco
         timeout = scope.launch {
             delay(TIMEOUT_MS)
             if (_state.value == LoginState.Waiting) {
-                _state.value = LoginState.Failed("Sin respuesta del navegador: instala la extension de Oto y vuelve a intentarlo")
+                _state.value = LoginState.Failed("Sin respuesta del navegador: pega el comando en la consola (F12) o pega tu cookie directamente.")
                 close()
             }
         }
@@ -62,6 +99,7 @@ class BrowserLogin(private val account: Account, private val scope: CoroutineSco
     fun cancel() {
         timeout?.cancel()
         close()
+        currentToken = null
         _state.value = LoginState.Idle
     }
 
