@@ -825,6 +825,7 @@ private fun SpotifyPlayerColumn(
                             color = if (artHover) Color.White else Color.White.copy(alpha = 0.65f),
                             textDecoration = if (artHover) TextDecoration.Underline else TextDecoration.None,
                             modifier = Modifier
+                                .pointerHoverIcon(PointerIcon.Hand)
                                 .onPointerEvent(PointerEventType.Enter) { artHover = true }
                                 .onPointerEvent(PointerEventType.Exit) { artHover = false }
                                 .clickable { onOpenArtist(id, name) },
@@ -840,13 +841,20 @@ private fun SpotifyPlayerColumn(
                     }
                 }
             } else {
+                var artHover by remember { mutableStateOf(false) }
                 Text(
                     text = fallbackArtist.ifBlank { "Oto · YouTube Music" },
                     fontSize = 23.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color.White.copy(alpha = 0.65f),
+                    color = if (artHover) Color.White else Color.White.copy(alpha = 0.65f),
+                    textDecoration = if (artHover) TextDecoration.Underline else TextDecoration.None,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .onPointerEvent(PointerEventType.Enter) { artHover = true }
+                        .onPointerEvent(PointerEventType.Exit) { artHover = false }
+                        .clickable { onOpenArtist(null, fallbackArtist) },
                 )
             }
         }

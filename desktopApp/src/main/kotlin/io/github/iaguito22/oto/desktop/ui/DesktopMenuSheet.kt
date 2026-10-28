@@ -99,7 +99,9 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -2158,17 +2160,29 @@ private fun SongRowDesktop(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                if (isCurrent) accent.copy(alpha = 0.22f)
-                else if (isHovered) Color.White.copy(alpha = 0.08f)
-                else Color.White.copy(alpha = 0.03f),
+                if (isCurrent) Brush.horizontalGradient(
+                    listOf(
+                        accent.copy(alpha = 0.32f),
+                        accent.copy(alpha = 0.14f),
+                    ),
+                )
+                else if (isHovered) Brush.horizontalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.12f),
+                        Color.White.copy(alpha = 0.05f),
+                    ),
+                )
+                else SolidColor(Color.White.copy(alpha = 0.03f)),
             )
             .border(
                 1.dp,
-                if (isCurrent) accent.copy(alpha = 0.45f)
-                else if (isHovered) Color.White.copy(alpha = 0.15f)
+                if (isCurrent) accent.copy(alpha = 0.50f)
+                else if (isHovered) Color.White.copy(alpha = 0.20f)
                 else Color.Transparent,
                 RoundedCornerShape(12.dp),
             )
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(onClick = onClick)
             .onPointerEvent(PointerEventType.Enter) { isHovered = true }
             .onPointerEvent(PointerEventType.Exit) { isHovered = false }
             .padding(horizontal = 14.dp, vertical = 7.dp),
@@ -2176,9 +2190,7 @@ private fun SongRowDesktop(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(
-            modifier = Modifier
-                .weight(1f)
-                .clickable(onClick = onClick),
+            modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
