@@ -358,8 +358,8 @@ fun DesktopMenuSheet(
                                         .background(Color.White.copy(alpha = 0.08f))
                                         .clickable {
                                             when {
-                                                menuState.query.isNotBlank() -> menu.onQuery("")
                                                 topPage != null -> menu.closeDetail()
+                                                menuState.query.isNotBlank() -> menu.onQuery("")
                                                 else -> subView = MenuSubView.None
                                             }
                                         },
@@ -369,9 +369,9 @@ fun DesktopMenuSheet(
                                 }
                                 Text(
                                     text = when {
-                                        menuState.query.isNotBlank() -> "Resultados de búsqueda"
                                         topPage is Page.Local -> if (topPage.id == LIKED_ID) "Me gusta" else (playlists.firstOrNull { it.id == topPage.id }?.name ?: "Lista")
                                         topPage is Page.Remote -> topPage.item.title
+                                        menuState.query.isNotBlank() -> "Resultados de búsqueda"
                                         subView == MenuSubView.Settings -> "Ajustes y Cuenta"
                                         subView == MenuSubView.Queue -> "Cola de reproducción"
                                         else -> ""
@@ -496,21 +496,6 @@ fun DesktopMenuSheet(
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         val topPage = menuState.pages.lastOrNull()
                         when {
-                            menuState.query.isNotBlank() -> {
-                                SearchResultsPane(
-                                    query = menuState.query,
-                                    searching = menuState.searching,
-                                    filter = menuState.filter,
-                                    results = menuState.results,
-                                    error = menuState.searchError,
-                                    palette = palette,
-                                    currentMediaId = currentMediaId,
-                                    onFilter = menu::onFilter,
-                                    onPlaySong = { onPlaySong(it); onToggleOpen(false) },
-                                    onOpenItem = menu::open,
-                                    onSaveTo = onSaveTrack,
-                                )
-                            }
                             topPage is Page.Local -> {
                                 val list = if (topPage.id == LIKED_ID) likedList else playlists.firstOrNull { it.id == topPage.id }
                                 if (list != null) {
@@ -555,6 +540,21 @@ fun DesktopMenuSheet(
                                     palette = palette,
                                     currentMediaId = currentMediaId,
                                     onPlayAll = { songs, idx -> onPlayAll(songs, idx, topPage.item); onToggleOpen(false) },
+                                    onOpenItem = menu::open,
+                                    onSaveTo = onSaveTrack,
+                                )
+                            }
+                            menuState.query.isNotBlank() -> {
+                                SearchResultsPane(
+                                    query = menuState.query,
+                                    searching = menuState.searching,
+                                    filter = menuState.filter,
+                                    results = menuState.results,
+                                    error = menuState.searchError,
+                                    palette = palette,
+                                    currentMediaId = currentMediaId,
+                                    onFilter = menu::onFilter,
+                                    onPlaySong = { onPlaySong(it); onToggleOpen(false) },
                                     onOpenItem = menu::open,
                                     onSaveTo = onSaveTrack,
                                 )
