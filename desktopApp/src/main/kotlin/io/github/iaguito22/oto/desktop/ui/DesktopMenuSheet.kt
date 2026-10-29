@@ -1358,8 +1358,7 @@ internal fun MenuTabPill(
     ) {
         Text(
             text = label,
-            fontSize = 13.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+            style = OtoType.rowTitle.copy(fontSize = 14.sp),
             color = if (selected) Color(0xFF101010) else if (hovered) Color.White else Color.White.copy(alpha = 0.72f),
         )
     }
@@ -1414,8 +1413,7 @@ private fun DesktopSegmentedTabs(
             ) {
                 Text(
                     text = title,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
+                    style = OtoType.rowTitle.copy(fontSize = 14.sp),
                     color = if (isSelected) Color(0xFFFFFFFF) else if (isHovered) Color.White else Color.White.copy(alpha = 0.66f),
                 )
             }
@@ -4144,16 +4142,14 @@ private fun TopResultCard(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 text = item.title,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = (-0.5).sp,
+                style = OtoType.title,
                 color = Color(0xFFFFFFFF),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = sub,
-                fontSize = 14.sp,
+                style = OtoType.rowSub,
                 color = Color.White.copy(alpha = 0.62f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -4539,7 +4535,7 @@ private fun SettingsAndAccountPane(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(MobileIcons.accountCircle, null, tint = palette.primary)
-                    Text("Cuenta de YouTube Music", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Cuenta de YouTube Music", style = OtoType.rowTitle, color = Color.White)
                 }
 
                 if (session != null) {
@@ -4562,9 +4558,9 @@ private fun SettingsAndAccountPane(
                             Icon(MobileIcons.person, null, tint = palette.primary, modifier = Modifier.size(24.dp))
                         }
                         Column(Modifier.weight(1f)) {
-                            Text(session.name.ifBlank { "Conectado" }, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text(session.name.ifBlank { "Conectado" }, style = OtoType.rowTitle, color = Color.White)
                             session.email?.let {
-                                Text(it, fontSize = 12.sp, color = Color.White.copy(alpha = 0.65f))
+                                Text(it, style = OtoType.rowSub, color = Color.White.copy(alpha = 0.65f))
                             }
                             Text(
                                 when (cloudState) {
@@ -4584,7 +4580,7 @@ private fun SettingsAndAccountPane(
                 } else {
                     Text(
                         "Explorar y la radio salen de tus gustos, lo que oigas cuenta en tu historial de YouTube y lo que te guste en Oto también le gustará a YouTube Music.",
-                        fontSize = 12.sp,
+                        style = OtoType.rowSub,
                         color = Color.White.copy(alpha = 0.65f),
                     )
 
@@ -4618,8 +4614,7 @@ private fun SettingsAndAccountPane(
                                         } else {
                                             "Se ha abierto el navegador. Pega el comando de abajo en la consola (F12) o instala la extensión."
                                         },
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium,
+                                        style = OtoType.rowSub,
                                         color = Color.White,
                                     )
                                     if (!ls.automated) {
@@ -4648,7 +4643,7 @@ private fun SettingsAndAccountPane(
                                 }
                             }
                             is LoginState.Failed -> {
-                                Text(ls.why, fontSize = 12.sp, color = palette.secondary)
+                                Text(ls.why, style = OtoType.rowSub, color = palette.secondary)
                             }
                             LoginState.Done, LoginState.Idle -> Unit
                         }
@@ -4657,7 +4652,7 @@ private fun SettingsAndAccountPane(
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
                                 "En music.youtube.com con tu sesión: F12 → Red (Network) → clic en cualquier petición → Copiar como cURL (o copiar valor de Cookie) y pégalo abajo:",
-                                fontSize = 12.sp,
+                                style = OtoType.rowSub,
                                 color = Color.White.copy(alpha = 0.65f),
                             )
                             Row(
@@ -4703,7 +4698,7 @@ private fun SettingsAndAccountPane(
                                 }
                             }
                             cookieFeedback?.let {
-                                Text(it, fontSize = 12.sp, color = palette.secondary)
+                                Text(it, style = OtoType.rowSub, color = palette.secondary)
                             }
                         }
                     }
@@ -4724,11 +4719,11 @@ private fun SettingsAndAccountPane(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(MobileIcons.libraryMusic, null, tint = palette.secondary)
-                    Text("Importar de Spotify", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Importar de Spotify", style = OtoType.rowTitle, color = Color.White)
                 }
                 Text(
                     importSummary(importState),
-                    fontSize = 12.sp,
+                    style = OtoType.rowSub,
                     color = Color.White.copy(alpha = 0.65f),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -4749,7 +4744,7 @@ private fun SettingsAndAccountPane(
                     .padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("Audio y calidad", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Audio y calidad", style = OtoType.rowTitle, color = Color.White)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MenuTabPill("Auto", qualityMode == QualityMode.Auto, palette.primary) {
                         scope.launch { prefs.setQuality(QualityMode.Auto) }
@@ -4764,11 +4759,11 @@ private fun SettingsAndAccountPane(
                 Text(
                     if (qualityMode == QualityMode.Auto) "La mejor calidad que aguante tu conexión. Se elige al empezar cada canción."
                     else "Siempre la mejor calidad disponible (Opus 256/160k).",
-                    fontSize = 12.sp,
+                    style = OtoType.rowSub,
                     color = Color.White.copy(alpha = 0.55f),
                 )
                 Spacer(Modifier.height(4.dp))
-                Text("Fundido entre canciones (crossfade)", fontSize = 13.sp, color = Color.White.copy(alpha = 0.70f))
+                Text("Fundido entre canciones (crossfade)", style = OtoType.rowSub, color = Color.White.copy(alpha = 0.70f))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(0 to "Sin fundido", 3 to "3s", 6 to "6s", 10 to "10s").forEach { (secs, label) ->
                         MenuTabPill(label, crossfade == secs, palette.secondary) {
@@ -4789,7 +4784,7 @@ private fun SettingsAndAccountPane(
                     .padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("Reproducción", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Reproducción", style = OtoType.rowTitle, color = Color.White)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MenuTabPill(if (shuffle) "Aleatorio: activo" else "Aleatorio: apagado", shuffle, palette.primary) {
                         onSetShuffle(!shuffle)
@@ -4801,7 +4796,7 @@ private fun SettingsAndAccountPane(
                 Text(
                     if (loop) "Al acabar la lista o cola de reproducción, vuelve a empezar desde la primera."
                     else "Al acabar la lista, continúan recomendaciones automáticas parecidas.",
-                    fontSize = 12.sp,
+                    style = OtoType.rowSub,
                     color = Color.White.copy(alpha = 0.55f),
                 )
             }
@@ -4817,7 +4812,7 @@ private fun SettingsAndAccountPane(
                     .padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("Pantalla y visualización", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Pantalla y visualización", style = OtoType.rowTitle, color = Color.White)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MenuTabPill(
                         if (showRemaining) "Tiempo: restante (-1:23)" else "Tiempo: total (3:45)",
@@ -4843,7 +4838,7 @@ private fun SettingsAndAccountPane(
                 }
                 Text(
                     "Personaliza cómo se muestran los tiempos en la barra de progreso y la pronunciación en canciones en japonés, coreano o chino.",
-                    fontSize = 12.sp,
+                    style = OtoType.rowSub,
                     color = Color.White.copy(alpha = 0.55f),
                 )
             }
@@ -4861,7 +4856,7 @@ private fun SettingsAndAccountPane(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(MobileIcons.downloadOffline, null, tint = palette.primary)
-                    Text("Almacenamiento y caché", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Almacenamiento y caché", style = OtoType.rowTitle, color = Color.White)
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -4869,8 +4864,8 @@ private fun SettingsAndAccountPane(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Column {
-                        Text("Caché de canciones y carátulas:", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f))
-                        Text(cacheFormatted, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = palette.primary)
+                        Text("Caché de canciones y carátulas:", style = OtoType.rowSub, color = Color.White.copy(alpha = 0.8f))
+                        Text(cacheFormatted, style = OtoType.rowTitle, color = palette.primary)
                     }
                     MenuTabPill("Limpiar caché", false, palette.secondary) {
                         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -4899,7 +4894,7 @@ private fun SettingsAndAccountPane(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(Icons.Rounded.Tune, null, tint = palette.primary)
-                    Text("Atajos de teclado en el escritorio", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Atajos de teclado en el escritorio", style = OtoType.rowTitle, color = Color.White)
                 }
                 val shortcuts = listOf(
                     "Espacio" to "Reproducir / Pausar",
@@ -5074,7 +5069,7 @@ private fun ImportPane(
                             Text("Una lista o un álbum de Spotify", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
                             Text(
                                 "Pega su enlace público (Compartir → Copiar enlace). Sin sesión en Spotify, se leen hasta 100 canciones.",
-                                fontSize = 12.sp,
+                                style = OtoType.rowSub,
                                 color = Color.White.copy(alpha = 0.65f),
                             )
                             Row(
@@ -5137,7 +5132,7 @@ private fun ImportPane(
                             Text(
                                 "1. En el navegador o en Spotify con la extensión «Exportar a Oto», descarga tu archivo oto-spotify.json.\n" +
                                 "2. Selecciónalo aquí para importar todas tus listas privadas, públicas y «Canciones que te gustan».",
-                                fontSize = 12.sp,
+                                style = OtoType.rowSub,
                                 color = Color.White.copy(alpha = 0.65f),
                             )
                             MenuTabPill("Elegir archivo oto-spotify.json…", true, palette.secondary) {
@@ -5544,8 +5539,7 @@ private fun SongRowDesktop(
             Column(Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    fontSize = 14.5.sp,
-                    fontWeight = FontWeight.Bold,
+                    style = OtoType.rowTitle,
                     color = if (isCurrent) accent else Color(0xFFFFFFFF),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -5553,7 +5547,7 @@ private fun SongRowDesktop(
                 if (subtitle.isNotBlank()) {
                     Text(
                         text = subtitle,
-                        fontSize = 12.5.sp,
+                        style = OtoType.rowSub,
                         color = Color.White.copy(alpha = 0.58f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
