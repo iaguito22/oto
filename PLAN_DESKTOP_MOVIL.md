@@ -51,8 +51,9 @@ Hechas y probadas en ejecución, con un commit por fase:
 9. Iconos vectoriales del móvil (`MobileIcons`, leídos de los XML copiados).
 10. Empaquetado Linux con `desktopApp/package-linux.sh`.
 
-Pendiente de acabado visual: extender `OtoType`/`Radius`/`Space`/`Motion` a descargas,
-detalle de lista y ajustes.
+`OtoType` cubre ya escenario, menú, pestañas, filas de canción, detalle, descargas y ajustes.
+Quedan con tamaños propios solo las vistas menores (importación, guardar en lista) y los
+atajos de teclado, que son exclusivos del escritorio.
 
 ## Empaquetar en Linux
 
