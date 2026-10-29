@@ -20,6 +20,9 @@ import kotlin.math.min
 /** El acento de reserva del móvil mientras no hay carátula (o si no tiene color). */
 val DefaultAccent = Color(0xFF8FD3DB)
 
+/** El rojo suave del móvil para borrar y para los avisos de error. */
+val Danger = Color(0xFFFF8A80)
+
 /**
  * Tokens de color de Oto Desktop, los mismos roles que `OtoColors` en el móvil: fondo casi negro, blancos con alfa y
  * **un solo acento** que sale de la carátula que suena.

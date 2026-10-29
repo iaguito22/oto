@@ -118,7 +118,7 @@ internal fun DownloadsPane(
                     Text(
                         "Suenan sin conexión. ${parts.joinToString(" · ")}",
                         style = OtoType.rowSub,
-                        color = Color.White.copy(alpha = 0.58f),
+                        color = Color.White.copy(alpha = 0.62f),
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     )
                 }
@@ -149,7 +149,7 @@ internal fun DownloadsPane(
                     Text(
                         "En una lista, abre ··· y elige «Descargar». Una canción suelta: su ··· → «Descargar».",
                         style = OtoType.rowSub,
-                        color = Color.White.copy(alpha = 0.5f),
+                        color = Color.White.copy(alpha = 0.62f),
                         modifier = Modifier.padding(horizontal = 40.dp, vertical = 6.dp),
                     )
                 }
@@ -225,7 +225,7 @@ private fun SectionLabel(text: String) {
     Text(
         text.uppercase(),
         style = OtoType.label,
-        color = Color.White.copy(alpha = 0.45f),
+        color = Color.White.copy(alpha = 0.36f),
         modifier = Modifier.padding(start = 12.dp, top = 18.dp, bottom = 6.dp),
     )
 }
@@ -284,7 +284,7 @@ private fun ListRow(
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(name, style = OtoType.rowTitle, color = Color(0xFFFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(status, style = OtoType.rowSub, color = Color.White.copy(alpha = 0.58f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(status, style = OtoType.rowSub, color = Color.White.copy(alpha = 0.62f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (total > 0 && done < total) {
             Icon(MobileIcons.download, null, Modifier.size(18.dp), tint = Color.White.copy(alpha = 0.5f))
@@ -347,7 +347,7 @@ private fun SongDownloadRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text("${heard.artist} · $status", style = OtoType.rowSub, color = Color.White.copy(alpha = 0.58f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${heard.artist} · $status", style = OtoType.rowSub, color = Color.White.copy(alpha = 0.62f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         RemoveButton(onRemove)
     }

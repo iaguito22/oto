@@ -630,7 +630,7 @@ private fun TopSourceOriginBar(
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 2.6.sp,
-            color = if (hovered) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.56f),
+            color = if (hovered) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.62f),
         )
         Text(
             text = source?.title ?: "Me gusta",
@@ -1134,7 +1134,7 @@ private fun SpotifyPlayerColumn(
                                 text = "·",
                                 fontSize = 23.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color.White.copy(alpha = 0.40f),
+                                color = Color.White.copy(alpha = 0.36f),
                             )
                         }
                     }
@@ -1279,7 +1279,7 @@ private fun MinimalProgressBar(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
-                color = Color.White.copy(alpha = 0.52f),
+                color = Color.White.copy(alpha = 0.62f),
             )
             Text(
                 text = quality?.toString()?.uppercase() ?: "OPUS",
@@ -1287,7 +1287,7 @@ private fun MinimalProgressBar(
                 fontSize = 10.sp,
                 letterSpacing = 0.8.sp,
                 fontWeight = FontWeight.Normal,
-                color = Color.White.copy(alpha = 0.38f),
+                color = Color.White.copy(alpha = 0.36f),
             )
             val durationText = if (showRemaining && durationMs > 0L) {
                 val rem = (durationMs - positionMs).coerceAtLeast(0L)
@@ -1300,7 +1300,7 @@ private fun MinimalProgressBar(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
-                color = Color.White.copy(alpha = 0.52f),
+                color = Color.White.copy(alpha = 0.62f),
                 modifier = Modifier
                     .pointerHoverIcon(PointerIcon.Hand)
                     .clickable(

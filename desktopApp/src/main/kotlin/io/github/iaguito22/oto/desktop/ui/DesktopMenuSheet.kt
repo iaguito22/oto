@@ -492,7 +492,7 @@ fun DesktopMenuSheet(
                                     Text(
                                         text = nowPlaying.artist,
                                         fontSize = 10.sp,
-                                        color = Color.White.copy(alpha = 0.55f),
+                                        color = Color.White.copy(alpha = 0.62f),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
@@ -1175,7 +1175,7 @@ private fun MenuSearchBar(
                 Text(
                     text = "Canciones, artistas, listas…",
                     style = OtoType.rowTitle,
-                    color = Color.White.copy(alpha = 0.42f),
+                    color = Color.White.copy(alpha = 0.36f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1582,7 +1582,7 @@ private fun YourMusicPane(
                         cursorBrush = SolidColor(palette.primary),
                         decorationBox = { innerTextField ->
                             if (newListName.isBlank()) {
-                                Text("Nombre de la nueva lista…", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+                                Text("Nombre de la nueva lista…", color = Color.White.copy(alpha = 0.36f), fontSize = 14.sp)
                             }
                             innerTextField()
                         },
@@ -1622,7 +1622,7 @@ private fun YourMusicPane(
                             .clickable { showCreateDialog = false; newListName = "" }
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     ) {
-                        Text("Cancelar", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.70f))
+                        Text("Cancelar", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.62f))
                     }
                 }
             }
@@ -1649,7 +1649,7 @@ private fun YourMusicPane(
                         cursorBrush = SolidColor(palette.primary),
                         decorationBox = { innerTextField ->
                             if (newFolderName.isBlank()) {
-                                Text("Nombre de la nueva carpeta…", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+                                Text("Nombre de la nueva carpeta…", color = Color.White.copy(alpha = 0.36f), fontSize = 14.sp)
                             }
                             innerTextField()
                         },
@@ -1689,7 +1689,7 @@ private fun YourMusicPane(
                             .clickable { showFolderDialog = false; newFolderName = "" }
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     ) {
-                        Text("Cancelar", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.70f))
+                        Text("Cancelar", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.62f))
                     }
                 }
             }
@@ -1880,7 +1880,7 @@ private fun YourMusicPane(
                 Text(
                     text = "Aún no hay canciones recientes. Busca arriba o explora música para empezar a escuchar.",
                     fontSize = 13.5.sp,
-                    color = Color.White.copy(alpha = 0.50f),
+                    color = Color.White.copy(alpha = 0.62f),
                 )
             }
         } else {
@@ -2017,7 +2017,7 @@ private fun AllListsSubPane(
                         Text(
                             "No tienes carpetas. Crea una con «Carpeta» en Tus listas.",
                             fontSize = 13.5.sp,
-                            color = Color.White.copy(alpha = 0.5f),
+                            color = Color.White.copy(alpha = 0.62f),
                             modifier = Modifier.padding(vertical = 18.dp),
                         )
                     }
@@ -2552,7 +2552,7 @@ private fun PlaylistTileDesktop(
             Text(
                 text = "Lista · ${playlist.songs.size} canciones",
                 fontSize = 12.sp,
-                color = Color.White.copy(alpha = 0.56f),
+                color = Color.White.copy(alpha = 0.62f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -2644,7 +2644,7 @@ private fun FolderTileDesktop(
             Text(
                 text = folderSubtitle(lists),
                 fontSize = 12.sp,
-                color = Color.White.copy(alpha = 0.56f),
+                color = Color.White.copy(alpha = 0.62f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -2707,7 +2707,7 @@ private fun SortRow(newest: Boolean, onFlip: () -> Unit) {
                 text = if (n) "Lo último que añadiste, arriba" else "Lo primero que añadiste, arriba",
                 fontSize = 12.5.sp,
                 fontWeight = FontWeight.Medium,
-                color = Color.White.copy(alpha = 0.65f),
+                color = Color.White.copy(alpha = 0.62f),
             )
         }
     }
@@ -2805,7 +2805,7 @@ private fun FolderDetailPane(
                     Text(
                         text = folderSubtitle(lists),
                         fontSize = 13.sp,
-                        color = Color.White.copy(alpha = 0.60f),
+                        color = Color.White.copy(alpha = 0.62f),
                     )
                     Spacer(Modifier.height(6.dp))
                     Row(
@@ -2873,8 +2873,8 @@ private fun FolderDetailPane(
                                     },
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Deshacer la carpeta", color = Color(0xFFFF6E6E), fontSize = 13.sp) },
-                                    leadingIcon = { Icon(MobileIcons.folder, null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
+                                    text = { Text("Deshacer la carpeta", color = Danger, fontSize = 13.sp) },
+                                    leadingIcon = { Icon(MobileIcons.folder, null, tint = Danger, modifier = Modifier.size(18.dp)) },
                                     onClick = {
                                         showMenu = false
                                         onUngroup()
@@ -2907,7 +2907,7 @@ private fun FolderDetailPane(
                         cursorBrush = SolidColor(palette.primary),
                         decorationBox = { innerTextField ->
                             if (nameInput.isBlank()) {
-                                Text("Nombre de la carpeta…", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+                                Text("Nombre de la carpeta…", color = Color.White.copy(alpha = 0.36f), fontSize = 14.sp)
                             }
                             innerTextField()
                         },
@@ -2945,7 +2945,7 @@ private fun FolderDetailPane(
                             .clickable { editing = false; nameInput = name }
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     ) {
-                        Text("Cancelar", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.70f))
+                        Text("Cancelar", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.62f))
                     }
                 }
             }
@@ -2978,7 +2978,7 @@ private fun FolderDetailPane(
                         Text(
                             "Aún no tienes listas.",
                             fontSize = 13.sp,
-                            color = Color.White.copy(alpha = 0.5f),
+                            color = Color.White.copy(alpha = 0.62f),
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         )
                     }
@@ -3010,7 +3010,7 @@ private fun FolderDetailPane(
                                 Text(
                                     text = pl.folder?.takeIf { !inside }?.let { "En «$it»" } ?: "${pl.songs.size} canciones",
                                     fontSize = 12.sp,
-                                    color = Color.White.copy(alpha = 0.55f),
+                                    color = Color.White.copy(alpha = 0.62f),
                                     maxLines = 1,
                                 )
                             }
@@ -3032,7 +3032,7 @@ private fun FolderDetailPane(
                     Text(
                         "Añade listas con el botón de arriba, o desde el menú (···) de cada lista.",
                         fontSize = 13.sp,
-                        color = Color.White.copy(alpha = 0.5f),
+                        color = Color.White.copy(alpha = 0.62f),
                     )
                 }
             }
@@ -3068,7 +3068,7 @@ private fun FolderDetailPane(
                     }
                     Column(Modifier.weight(1f)) {
                         Text(pl.name, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("${pl.songs.size} canciones", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.56f), maxLines = 1)
+                        Text("${pl.songs.size} canciones", fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.62f), maxLines = 1)
                     }
                     Icon(
                         imageVector = MobileIcons.chevronRight,
@@ -3206,7 +3206,7 @@ private fun LocalPlaylistDetailPane(
                 Text(
                     text = "Lista · ${list.songs.size} canciones",
                     fontSize = 13.sp,
-                    color = Color.White.copy(alpha = 0.60f),
+                    color = Color.White.copy(alpha = 0.62f),
                 )
                 Spacer(Modifier.height(6.dp))
                 Row(
@@ -3304,8 +3304,8 @@ private fun LocalPlaylistDetailPane(
                                 }
                                 if (onDeletePlaylist != null) {
                                     DropdownMenuItem(
-                                        text = { Text("Eliminar playlist", color = Color(0xFFFF6E6E), fontWeight = FontWeight.Bold, fontSize = 13.sp) },
-                                        leadingIcon = { Icon(MobileIcons.delete, contentDescription = null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
+                                        text = { Text("Eliminar playlist", color = Danger, fontWeight = FontWeight.Bold, fontSize = 13.sp) },
+                                        leadingIcon = { Icon(MobileIcons.delete, contentDescription = null, tint = Danger, modifier = Modifier.size(18.dp)) },
                                         onClick = {
                                             showPlaylistMenu = false
                                             onDeletePlaylist()
@@ -3373,7 +3373,7 @@ private fun LocalPlaylistDetailPane(
                         cursorBrush = SolidColor(palette.primary),
                         decorationBox = { innerTextField ->
                             if (moveNewFolder.isBlank()) {
-                                Text("Nueva carpeta…", color = Color.White.copy(alpha = 0.40f), fontSize = 13.5.sp)
+                                Text("Nueva carpeta…", color = Color.White.copy(alpha = 0.36f), fontSize = 13.5.sp)
                             }
                             innerTextField()
                         },
@@ -3404,7 +3404,7 @@ private fun LocalPlaylistDetailPane(
 
         if (list.songs.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text("Esta lista está vacía.", color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp)
+                Text("Esta lista está vacía.", color = Color.White.copy(alpha = 0.62f), fontSize = 14.sp)
             }
         } else {
             LazyColumn(
@@ -3486,8 +3486,8 @@ private fun LocalPlaylistDetailPane(
                                     }
                                     if (onRemoveSong != null) {
                                         DropdownMenuItem(
-                                            text = { Text("Quitar de esta lista", color = Color(0xFFFF6E6E), fontSize = 13.sp) },
-                                            leadingIcon = { Icon(MobileIcons.delete, contentDescription = null, tint = Color(0xFFFF6E6E), modifier = Modifier.size(18.dp)) },
+                                            text = { Text("Quitar de esta lista", color = Danger, fontSize = 13.sp) },
+                                            leadingIcon = { Icon(MobileIcons.delete, contentDescription = null, tint = Danger, modifier = Modifier.size(18.dp)) },
                                             onClick = {
                                                 showSongMenu = false
                                                 onRemoveSong(s.id)
@@ -3622,7 +3622,7 @@ private fun RemoteDetailPane(
                     overflow = TextOverflow.Ellipsis,
                 )
                 page.sub?.let {
-                    Text(it, fontSize = 13.sp, color = Color.White.copy(alpha = 0.65f))
+                    Text(it, fontSize = 13.sp, color = Color.White.copy(alpha = 0.62f))
                 }
                 if (!songs.isNullOrEmpty()) {
                     Spacer(Modifier.height(4.dp))
@@ -3668,7 +3668,7 @@ private fun RemoteDetailPane(
 
         when {
             page.error != null -> Text("Error: ${page.error}", color = palette.secondary, fontSize = 14.sp)
-            songs == null && shelves.isEmpty() -> Text("Cargando pistas de YouTube Music…", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
+            songs == null && shelves.isEmpty() -> Text("Cargando pistas de YouTube Music…", color = Color.White.copy(alpha = 0.62f), fontSize = 14.sp)
             else -> LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -3966,7 +3966,7 @@ private fun ExploreShelfCard(
             Text(
                 text = sub,
                 fontSize = 12.sp,
-                color = Color.White.copy(alpha = 0.58f),
+                color = Color.White.copy(alpha = 0.62f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = if (isArtist) TextAlign.Center else TextAlign.Start,
@@ -4002,8 +4002,8 @@ private fun SearchResultsPane(
         }
         when {
             error != null -> Text("La búsqueda falló: $error", color = palette.secondary, fontSize = 13.sp)
-            searching && results.isEmpty() -> Text("Buscando «$query» en YouTube Music…", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
-            results.isEmpty() -> Text("Sin resultados para «$query».", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
+            searching && results.isEmpty() -> Text("Buscando «$query» en YouTube Music…", color = Color.White.copy(alpha = 0.62f), fontSize = 14.sp)
+            results.isEmpty() -> Text("Sin resultados para «$query».", color = Color.White.copy(alpha = 0.62f), fontSize = 14.sp)
             else -> {
                 val topItem = results.first()
                 val restItems = results.drop(1)
@@ -4211,7 +4211,7 @@ internal fun QueuePane(
                     MenuTabPill(
                         label = "Vaciar",
                         selected = false,
-                        accent = Color(0xFFFF5252),
+                        accent = Danger,
                         onClick = onClearQueue,
                     )
                 }
@@ -4260,7 +4260,7 @@ internal fun QueuePane(
                     Text(
                         text = "Pon algo a sonar y aquí verás lo que viene después.",
                         style = OtoType.rowSub,
-                        color = Color.White.copy(alpha = 0.52f),
+                        color = Color.White.copy(alpha = 0.62f),
                     )
                 }
             }
@@ -4359,7 +4359,7 @@ private fun QueueRowDesktop(
                 text = "$index",
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
-                color = Color.White.copy(alpha = 0.45f),
+                color = Color.White.copy(alpha = 0.36f),
                 modifier = Modifier.width(22.dp),
             )
         }
@@ -4399,7 +4399,7 @@ private fun QueueRowDesktop(
                 Text(
                     text = subtitle,
                     fontSize = 12.sp,
-                    color = Color.White.copy(alpha = 0.56f),
+                    color = Color.White.copy(alpha = 0.62f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -4560,7 +4560,7 @@ private fun SettingsAndAccountPane(
                         Column(Modifier.weight(1f)) {
                             Text(session.name.ifBlank { "Conectado" }, style = OtoType.rowTitle, color = Color.White)
                             session.email?.let {
-                                Text(it, style = OtoType.rowSub, color = Color.White.copy(alpha = 0.65f))
+                                Text(it, style = OtoType.rowSub, color = Color.White.copy(alpha = 0.62f))
                             }
                             Text(
                                 when (cloudState) {
@@ -4581,7 +4581,7 @@ private fun SettingsAndAccountPane(
                     Text(
                         "Explorar y la radio salen de tus gustos, lo que oigas cuenta en tu historial de YouTube y lo que te guste en Oto también le gustará a YouTube Music.",
                         style = OtoType.rowSub,
-                        color = Color.White.copy(alpha = 0.65f),
+                        color = Color.White.copy(alpha = 0.62f),
                     )
 
                     // Inicio de sesión: Chrome temporal con CDP (lo normal) o pegar la cookie a mano.
@@ -4653,7 +4653,7 @@ private fun SettingsAndAccountPane(
                             Text(
                                 "En music.youtube.com con tu sesión: F12 → Red (Network) → clic en cualquier petición → Copiar como cURL (o copiar valor de Cookie) y pégalo abajo:",
                                 style = OtoType.rowSub,
-                                color = Color.White.copy(alpha = 0.65f),
+                                color = Color.White.copy(alpha = 0.62f),
                             )
                             Row(
                                 modifier = Modifier
@@ -4673,7 +4673,7 @@ private fun SettingsAndAccountPane(
                                     cursorBrush = SolidColor(palette.primary),
                                     decorationBox = { inner ->
                                         if (cookieInput.isBlank()) {
-                                            Text("Pega aquí las cookies (con SAPISID) o el comando cURL…", color = Color.White.copy(alpha = 0.4f), fontSize = 13.sp)
+                                            Text("Pega aquí las cookies (con SAPISID) o el comando cURL…", color = Color.White.copy(alpha = 0.36f), fontSize = 13.sp)
                                         }
                                         inner()
                                     },
@@ -4724,7 +4724,7 @@ private fun SettingsAndAccountPane(
                 Text(
                     importSummary(importState),
                     style = OtoType.rowSub,
-                    color = Color.White.copy(alpha = 0.65f),
+                    color = Color.White.copy(alpha = 0.62f),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     MenuTabPill("Abrir importador completo…", true, palette.secondary) {
@@ -4760,10 +4760,10 @@ private fun SettingsAndAccountPane(
                     if (qualityMode == QualityMode.Auto) "La mejor calidad que aguante tu conexión. Se elige al empezar cada canción."
                     else "Siempre la mejor calidad disponible (Opus 256/160k).",
                     style = OtoType.rowSub,
-                    color = Color.White.copy(alpha = 0.55f),
+                    color = Color.White.copy(alpha = 0.62f),
                 )
                 Spacer(Modifier.height(4.dp))
-                Text("Fundido entre canciones (crossfade)", style = OtoType.rowSub, color = Color.White.copy(alpha = 0.70f))
+                Text("Fundido entre canciones (crossfade)", style = OtoType.rowSub, color = Color.White.copy(alpha = 0.62f))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(0 to "Sin fundido", 3 to "3s", 6 to "6s", 10 to "10s").forEach { (secs, label) ->
                         MenuTabPill(label, crossfade == secs, palette.secondary) {
@@ -4797,7 +4797,7 @@ private fun SettingsAndAccountPane(
                     if (loop) "Al acabar la lista o cola de reproducción, vuelve a empezar desde la primera."
                     else "Al acabar la lista, continúan recomendaciones automáticas parecidas.",
                     style = OtoType.rowSub,
-                    color = Color.White.copy(alpha = 0.55f),
+                    color = Color.White.copy(alpha = 0.62f),
                 )
             }
         }
@@ -4839,7 +4839,7 @@ private fun SettingsAndAccountPane(
                 Text(
                     "Personaliza cómo se muestran los tiempos en la barra de progreso y la pronunciación en canciones en japonés, coreano o chino.",
                     style = OtoType.rowSub,
-                    color = Color.White.copy(alpha = 0.55f),
+                    color = Color.White.copy(alpha = 0.62f),
                 )
             }
         }
@@ -4935,7 +4935,7 @@ private fun SettingsAndAccountPane(
                             Text(
                                 text = desc,
                                 fontSize = 12.sp,
-                                color = Color.White.copy(alpha = 0.70f),
+                                color = Color.White.copy(alpha = 0.62f),
                             )
                         }
                     }
@@ -4953,12 +4953,12 @@ private fun SettingsAndAccountPane(
                     "Oto 1.2.2 · GPL-3.0",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White.copy(alpha = 0.50f),
+                    color = Color.White.copy(alpha = 0.62f),
                 )
                 Text(
                     "Con InnerTubeX y partes de Metrolist. Letras de lyricsplus, NetEase, LRCLIB y YouTube Music.\ngithub.com/iaguito22/oto",
                     fontSize = 11.sp,
-                    color = Color.White.copy(alpha = 0.35f),
+                    color = Color.White.copy(alpha = 0.36f),
                 )
             }
         }
@@ -5070,7 +5070,7 @@ private fun ImportPane(
                             Text(
                                 "Pega su enlace público (Compartir → Copiar enlace). Sin sesión en Spotify, se leen hasta 100 canciones.",
                                 style = OtoType.rowSub,
-                                color = Color.White.copy(alpha = 0.65f),
+                                color = Color.White.copy(alpha = 0.62f),
                             )
                             Row(
                                 modifier = Modifier
@@ -5090,7 +5090,7 @@ private fun ImportPane(
                                     cursorBrush = SolidColor(palette.primary),
                                     decorationBox = { inner ->
                                         if (linkText.isBlank()) {
-                                            Text("open.spotify.com/playlist/…", color = Color.White.copy(alpha = 0.4f), fontSize = 13.sp)
+                                            Text("open.spotify.com/playlist/…", color = Color.White.copy(alpha = 0.36f), fontSize = 13.sp)
                                         }
                                         inner()
                                     },
@@ -5133,7 +5133,7 @@ private fun ImportPane(
                                 "1. En el navegador o en Spotify con la extensión «Exportar a Oto», descarga tu archivo oto-spotify.json.\n" +
                                 "2. Selecciónalo aquí para importar todas tus listas privadas, públicas y «Canciones que te gustan».",
                                 style = OtoType.rowSub,
-                                color = Color.White.copy(alpha = 0.65f),
+                                color = Color.White.copy(alpha = 0.62f),
                             )
                             MenuTabPill("Elegir archivo oto-spotify.json…", true, palette.secondary) {
                                 val fd = FileDialog(null as Frame?, "Seleccionar oto-spotify.json", FileDialog.LOAD)
@@ -5200,7 +5200,7 @@ private fun ImportPane(
                             "ELIGE QUÉ TRAER (${lists.size} listas)",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White.copy(alpha = 0.60f),
+                            color = Color.White.copy(alpha = 0.62f),
                         )
                         val allPicked = picked.size == lists.size
                         MenuTabPill(if (allPicked) "Ninguna" else "Todas", false, palette.primary) {
@@ -5257,7 +5257,7 @@ private fun ImportPane(
                                         "ya importada".takeIf { l.id in importedFromIds },
                                         "solo las primeras 100".takeIf { l.partial },
                                     ).joinToString(" · ")
-                                    Text(subParts, fontSize = 12.sp, color = Color.White.copy(alpha = 0.55f))
+                                    Text(subParts, fontSize = 12.sp, color = Color.White.copy(alpha = 0.62f))
                                 }
                             }
                         }
@@ -5273,7 +5273,7 @@ private fun ImportPane(
                     ) {
                         Column {
                             Text("$uniqueCount canciones distintas", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-                            Text(estMinutes, fontSize = 12.sp, color = Color.White.copy(alpha = 0.55f))
+                            Text(estMinutes, fontSize = 12.sp, color = Color.White.copy(alpha = 0.62f))
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             MenuTabPill("Atrás", false, palette.secondary) {
@@ -5351,7 +5351,7 @@ private fun ImportPane(
                         Text(
                             "Cada lista se guarda en cuanto acaba. Puedes cerrar el Menú y seguir oyendo música mientras tanto.",
                             fontSize = 12.5.sp,
-                            color = Color.White.copy(alpha = 0.55f),
+                            color = Color.White.copy(alpha = 0.62f),
                             textAlign = TextAlign.Center,
                         )
                         Spacer(Modifier.height(20.dp))
@@ -5388,7 +5388,7 @@ private fun ImportPane(
                                         if (s.missing.isEmpty()) " No faltó ninguna canción."
                                         else " ${s.missing.size} canciones no se encontraron en YouTube Music.",
                                     fontSize = 13.sp,
-                                    color = Color.White.copy(alpha = 0.70f),
+                                    color = Color.White.copy(alpha = 0.62f),
                                 )
                                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     MenuTabPill("Ver Tus listas", true, palette.primary) {
@@ -5408,7 +5408,7 @@ private fun ImportPane(
                                     "NO ENCONTRADAS (${s.missing.size})",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color.White.copy(alpha = 0.50f),
+                                    color = Color.White.copy(alpha = 0.62f),
                                 )
                             }
                             items(s.missing) { m ->
@@ -5420,7 +5420,7 @@ private fun ImportPane(
                                         .padding(horizontal = 14.dp, vertical = 8.dp),
                                 ) {
                                     Text(m.track.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-                                    Text("${m.track.artists.joinToString()} · ${m.list}", fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.50f))
+                                    Text("${m.track.artists.joinToString()} · ${m.list}", fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.62f))
                                 }
                             }
                         }
@@ -5548,7 +5548,7 @@ private fun SongRowDesktop(
                     Text(
                         text = subtitle,
                         style = OtoType.rowSub,
-                        color = Color.White.copy(alpha = 0.58f),
+                        color = Color.White.copy(alpha = 0.62f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -5691,7 +5691,7 @@ fun SaveToModal(
                     Text(
                         text = track.artist,
                         fontSize = 12.5.sp,
-                        color = Color.White.copy(alpha = 0.60f),
+                        color = Color.White.copy(alpha = 0.62f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -5720,7 +5720,7 @@ fun SaveToModal(
                 text = "Guardar en tus listas",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = Color.White.copy(alpha = 0.50f),
+                color = Color.White.copy(alpha = 0.62f),
             )
 
             // Lista de destinos
@@ -5790,7 +5790,7 @@ fun SaveToModal(
                         cursorBrush = SolidColor(accent),
                         decorationBox = { inner ->
                             if (newListName.isBlank()) {
-                                Text("Nombre de la lista…", color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp)
+                                Text("Nombre de la lista…", color = Color.White.copy(alpha = 0.36f), fontSize = 13.sp)
                             }
                             inner()
                         },
@@ -5822,7 +5822,7 @@ fun SaveToModal(
                     Text(
                         text = "Cancelar",
                         fontSize = 12.sp,
-                        color = Color.White.copy(alpha = 0.50f),
+                        color = Color.White.copy(alpha = 0.62f),
                         modifier = Modifier.clickable {
                             creatingNew = false
                             newListName = ""
@@ -5862,7 +5862,7 @@ private fun SaveToDestinationRow(
         Icon(icon, null, tint = iconTint, modifier = Modifier.size(20.dp))
         Column(Modifier.weight(1f)) {
             Text(text = title, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = if (checked) accent else Color.White)
-            Text(text = subtitle, fontSize = 11.sp, color = Color.White.copy(alpha = 0.50f))
+            Text(text = subtitle, fontSize = 11.sp, color = Color.White.copy(alpha = 0.62f))
         }
         Box(
             modifier = Modifier
