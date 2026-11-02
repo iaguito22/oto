@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -57,6 +58,8 @@ class Account(
     }
 
     suspend fun signIn(s: Session) {
+        prefs.setCloudSelection(null)
+        prefs.setCloud(null)
         apply(s)
         // Con la sesión puesta, YouTube dice quién eres.
         val info = withContext(Dispatchers.IO) { YouTube.accountInfo() }.getOrNull()
@@ -91,6 +94,12 @@ class Account(
      * cambios desde que se entra (lo de antes, incluido lo importado de Spotify, se manda una vez, poco a poco).
      */
     private suspend fun syncLikes() {
+        prefs.cloudSelection.collectLatest { raw ->
+            if (io.github.iaguito22.oto.LIKED_ID in CloudSelection.decode(raw)?.exports.orEmpty()) syncSelectedLikes()
+        }
+    }
+
+    private suspend fun syncSelectedLikes() {
         var before: Set<String>? = null
         prefs.likedIds.collect { now ->
             val sent = prefs.likesSent()

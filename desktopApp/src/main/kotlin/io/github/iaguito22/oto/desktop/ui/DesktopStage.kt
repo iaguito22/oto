@@ -1364,7 +1364,7 @@ private fun CoverControlButton(
 }
 
 @Composable
-private fun LyricsStageColumn(
+internal fun LyricsStageColumn(
     lyrics: Lyrics?,
     loading: Boolean,
     positionMs: Long,
@@ -1417,7 +1417,7 @@ private fun LyricsStageColumn(
             lyrics is Lyrics.Synced && lyrics.lines.isNotEmpty() -> {
                 val lines = lyrics.lines
                 val activeIdx = remember(lines, positionMs) {
-                    lines.indexOfLast { it.start <= positionMs + 120L }.coerceAtLeast(0)
+                    lines.indexOfLast { it.start <= positionMs + 250L }.coerceAtLeast(0)
                 }
                 LaunchedEffect(activeIdx, userScrolledAt) {
                     val elapsed = System.currentTimeMillis() - userScrolledAt

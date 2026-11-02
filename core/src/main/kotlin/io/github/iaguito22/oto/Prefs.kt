@@ -36,6 +36,7 @@ private val PINNED = stringSetPreferencesKey("pinned")
 private val FOLDERS = stringSetPreferencesKey("folders")
 private val SPOTS = stringPreferencesKey("shelf_spots")
 private val CLOUD = stringPreferencesKey("cloud")
+private val CLOUD_SELECTION = stringPreferencesKey("cloud_selection")
 private val QUALITY = stringPreferencesKey("audio_quality")
 private val DATA_SAVER = booleanPreferencesKey("data_saver")
 private val LOOP = booleanPreferencesKey("loop")
@@ -407,6 +408,9 @@ class Prefs(
     // ---- Copia en la cuenta (ver Cloud) ----
 
     /** Lo que ya está subido: junto a las listas, porque pesa lo mismo que ellas. */
+    val cloudSelection: Flow<String?> = lists.data.map { it[CLOUD_SELECTION] }.distinctUntilChanged()
+    suspend fun setCloudSelection(value: String?) { lists.edit { if(value==null) it.remove(CLOUD_SELECTION) else it[CLOUD_SELECTION]=value } }
+
     suspend fun cloud(): String? = lists.data.first()[CLOUD]
 
     suspend fun setCloud(s: String?) {
@@ -424,6 +428,32 @@ class Prefs(
             p[PINNED] = p[PINNED].orEmpty() + pinned
             p[SORT_FLIPPED] = p[SORT_FLIPPED].orEmpty() + flipped
         }
+    }
+
+    suspend fun linkedLibraryVersion(): List<Any?> {
+        val p = store.data.first()
+        return listOf(lists.data.first()[PLAYLISTS], p[LIKED], p[FOLDERS], p[PINNED], p[SORT_FLIPPED])
+    }
+
+    suspend fun linkedLibrarySnapshot(): io.github.iaguito22.oto.remote.LinkedLibraryState {
+        val p = store.data.first()
+        return io.github.iaguito22.oto.remote.LinkedLibraryState(decodeLists(lists.data.first()[PLAYLISTS]), decode(p[LIKED]), p[FOLDERS].orEmpty(), p[PINNED].orEmpty(), p[SORT_FLIPPED].orEmpty())
+    }
+
+    /** Comparar dentro de cada transacción conserva cambios locales hechos durante la recepción. */
+    suspend fun applyLinkedLibrary(expected: io.github.iaguito22.oto.remote.LinkedLibraryState, newLists: List<LocalPlaylist>, likes: List<Heard>, folders: Set<String>, pinned: Set<String>, flipped: Set<String>): Boolean {
+        var applied = false
+        lists.edit { p ->
+            if (decodeLists(p[PLAYLISTS]) == expected.lists) { p[PLAYLISTS] = encodeLists(newLists); applied = true }
+        }
+        if (!applied) return false
+        applied = false
+        store.edit { p ->
+            if (decode(p[LIKED]) == expected.likes && p[FOLDERS].orEmpty() == expected.folders && p[PINNED].orEmpty() == expected.pinned && p[SORT_FLIPPED].orEmpty() == expected.flipped) {
+                p[LIKED] = songsJson(likes).toString(); p[FOLDERS] = folders; p[PINNED] = pinned; p[SORT_FLIPPED] = flipped; applied = true
+            }
+        }
+        return applied
     }
 
     private suspend fun editLists(f: (List<LocalPlaylist>) -> List<LocalPlaylist>) {

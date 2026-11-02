@@ -13,6 +13,8 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+    implementation("sh.calvin.reorderable:reorderable:3.1.0")
+    implementation("com.google.zxing:core:3.5.3")
     implementation(project(":innertube"))
 
     implementation(compose.desktop.currentOs)

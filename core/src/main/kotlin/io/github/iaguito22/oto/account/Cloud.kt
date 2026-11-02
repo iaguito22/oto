@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import timber.log.Timber
@@ -37,12 +39,9 @@ sealed interface CloudState {
 }
 
 /**
- * Con cuenta, tus listas también viven en YouTube Music: cada una es una lista privada tuya allí, con su id de Oto,
- * su carpeta y su origen en la descripción ([ListMeta]), y una más («Oto · copia de tus listas», vacía) guarda en la
- * suya lo que es de todas: el orden, las carpetas vacías, las fijadas. Al entrar en una instalación nueva (u otro
- * móvil) vuelven solas, y Me gusta con tus me gusta de YouTube Music.
- *
- * Solo se suben los cambios: lo que entra o sale de cada lista desde la última vez ([Synced]).
+ * Importación por selección y copia continua solo de las listas autorizadas.
+ * Cada copia privada lleva el id de Oto en su descripción para reconocerla al volver a entrar.
+ * Desmarcar o borrar una lista local nunca elimina su copia de YouTube Music.
  */
 @OptIn(FlowPreview::class)
 class Cloud(private val prefs: Prefs, private val account: Account, private val scope: CoroutineScope) {
@@ -57,19 +56,72 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
 
     private data class Saved(val manifest: String?, val lists: Map<String, Synced>, val written: String?)
 
+    private val operation = Mutex()
+    val selection = prefs.cloudSelection
+
+    /** Solo lee el catálogo; iniciar sesión no modifica ninguna lista. */
+    suspend fun available(): List<PlaylistItem> = withContext(Dispatchers.IO) {
+        val all = ArrayList<PlaylistItem>()
+        library { if(it.title != MANIFEST_TITLE && it.id.removePrefix("VL") != "LM") all += it; false }
+        all.distinctBy { it.id.removePrefix("VL") }
+    }
+
+    /** Importación explícita y exportación limitada a los destinos elegidos. */
+    suspend fun choose(choice: CloudSelection) = withContext(Dispatchers.IO) {
+        check(account.session.value != null) { "Inicia sesión primero" }
+        prefs.setCloudSelection(null)
+        operation.withLock {
+            try {
+                var saved = load()
+                val catalog = if(choice.imports.any { it!="LM" } || choice.exports.any { it!=io.github.iaguito22.oto.LIKED_ID }) available() else emptyList()
+                val local = prefs.playlists.first()
+                val requested = local.filter { it.id in choice.exports }
+                // Recuperar los ids de copias anteriores evita duplicarlas tras volver a entrar.
+                for(item in catalog.filter { item -> requested.any { it.name == item.title && it.id !in saved.lists } }) {
+                    val yt=item.id.removePrefix("VL")
+                    val raw=YouTube.browseRaw("VL$yt").getOrThrow()
+                    val meta=ListMeta.find(raw) ?: continue
+                    if(requested.any { it.id==meta.id }) {
+                        val tracks=songs(yt) ?: error("No se pudo leer «${item.title}»")
+                        saved=saved.copy(lists=saved.lists+(meta.id to Synced(yt,item.title,tracks.map{it.id},meta.encode())))
+                        save(saved)
+                    }
+                }
+                for(yt in choice.imports) {
+                    if(yt=="LM") { restoreLikes(); continue }
+                    val item=catalog.firstOrNull { it.id.removePrefix("VL")==yt } ?: error("Una lista seleccionada ya no está disponible. Actualiza la selección.")
+                    _state.value=CloudState.Working("Importando «${item.title}»")
+                    val tracks=songs(yt) ?: error("No se pudo leer «${item.title}»")
+                    val raw=YouTube.browseRaw("VL$yt").getOrThrow()
+                    val meta=ListMeta.find(raw)
+                    val id=meta?.id ?: "youtube:$yt"
+                    prefs.restore(listOf(LocalPlaylist(id,item.title,tracks,meta?.from ?: "youtube:$yt",meta?.folder)),meta?.folder?.let { setOf(it) }.orEmpty(),emptySet(),emptySet())
+                    if(meta!=null) { saved=saved.copy(lists=saved.lists+(id to Synced(yt,item.title,tracks.map{it.id},meta.encode())));save(saved) }
+                }
+                prefs.setCloudSelection(choice.encode())
+                _state.value=if(choice.exports.isEmpty()) CloudState.Done(0,System.currentTimeMillis()) else CloudState.Working("Preparando las listas elegidas")
+            } catch(e: Exception) { fail(e);throw e }
+        }
+    }
+
     fun start() {
         scope.launch {
             account.session.collectLatest { s ->
                 if (s == null) { _state.value = CloudState.Off; return@collectLatest }
-                combine(prefs.playlists, prefs.folders, prefs.pinned, prefs.sortFlipped) { l, _, _, _ -> l }
-                    .debounce(DEBOUNCE_MS)
-                    .collect { withContext(Dispatchers.IO) { runCatching { sync() }.onFailure { fail(it) } } }
+                prefs.cloudSelection.collectLatest { raw ->
+                    val choice=CloudSelection.decode(raw)
+                    if(choice==null) { _state.value=CloudState.Off; return@collectLatest }
+                    combine(prefs.playlists, prefs.folders, prefs.pinned, prefs.sortFlipped) { l, _, _, _ -> l }
+                        .debounce(DEBOUNCE_MS)
+                        .collect { withContext(Dispatchers.IO) { operation.withLock { runCatching { sync(choice) }.onFailure { fail(it) } } } }
+                }
             }
         }
     }
 
     /** Al cerrar sesión: lo subido es de esa cuenta, no de la siguiente. */
     suspend fun forget() {
+        prefs.setCloudSelection(null)
         prefs.setCloud(null)
         _state.value = CloudState.Off
     }
@@ -80,42 +132,10 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
         _state.value = CloudState.Failed(e.message ?: "Sin conexión")
     }
 
-    private suspend fun sync() {
+    private suspend fun sync(choice: CloudSelection) {
         var saved = load()
-        val manifestId = saved.manifest ?: findManifest()
-        val remote = manifestId?.let { readManifest(it) }
-
-        // 1. Lo que hay en la cuenta y esta instalación no conoce (es nueva, u otro móvil): se trae, en el orden de la
-        // copia. Si la lista ya está aquí con el mismo id (se perdió lo subido, no la lista), solo se apunta, para no
-        // duplicarla allí. Una instalación nueva las busca todas aunque la copia no se lea bien: si no, la reescribiría vacía.
-        if (manifestId != null) {
-            val fresh = saved.lists.isEmpty()
-            val order = remote?.order.orEmpty()
-            val known = saved.lists.keys.mapTo(HashSet(), Manifest::ref)
-            if (fresh || order.any { it !in known }) {
-                val found = remote?.old?.takeIf { it.isNotEmpty() }
-                    ?.map { Found(it.yt, it.name, ListMeta(it.id, it.folder, it.from), described = false) }
-                    ?: scan()
-                val at = order.withIndex().associate { (i, r) -> r to i }
-                val unknown = found.filter { it.meta.id !in saved.lists }.sortedBy { at[Manifest.ref(it.meta.id)] ?: Int.MAX_VALUE }
-                val local = prefs.playlists.first().mapTo(HashSet()) { it.id }
-                val restored = ArrayList<LocalPlaylist>()
-                unknown.forEachIndexed { i, f ->
-                    _state.value = CloudState.Working("Recuperando «${f.name}» (${i + 1} de ${unknown.size})")
-                    // Sin leerla entera no se apunta, o se quedaría fuera del orden y no volvería nunca: mejor reintentar luego.
-                    val songs = songs(f.yt) ?: error("No se pudo leer «${f.name}»")
-                    val m = f.meta
-                    saved = saved.copy(lists = saved.lists + (m.id to Synced(f.yt, f.name, songs.map { it.id }, m.encode().takeIf { f.described })))
-                    if (m.id !in local) restored += LocalPlaylist(m.id, f.name, songs, m.from, m.folder)
-                }
-                prefs.restore(restored, remote?.folders.orEmpty(), remote?.pinned.orEmpty(), remote?.flipped.orEmpty())
-                save(saved)
-            }
-            if (fresh) restoreLikes()
-        }
-
-        // 2. Lo de aquí, a la cuenta.
-        val lists = prefs.playlists.first()
+        // Las listas desmarcadas quedan intactas, tanto aquí como en YouTube Music.
+        val lists = prefs.playlists.first().filter { it.id in choice.exports }
         lists.forEachIndexed { i, l ->
             val ids = l.songs.map { it.id }
             val meta = ListMeta(l.id, l.folder, l.from).encode()
@@ -144,28 +164,9 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
             }
         }
 
-        // 3. Las que borraste aquí, también allí. Nunca si de pronto no hay ninguna: eso huele a error al leerlas.
-        if (lists.isNotEmpty()) {
-            val here = lists.mapTo(HashSet()) { it.id }
-            for ((id, s) in saved.lists.filterKeys { it !in here }) {
-                YouTube.deletePlaylist(s.yt).onFailure { Timber.w(it, "copia: borrar %s", s.yt) }
-                saved = saved.copy(lists = saved.lists - id)
-                save(saved)
-            }
-        }
-
-        // 4. La descripción de la copia: carpetas, fijadas y orden.
-        val manifest = Manifest(
-            lists.filter { it.id in saved.lists }.map { Manifest.ref(it.id) },
-            prefs.folders.first(), prefs.pinned.first(), prefs.sortFlipped.first(),
-        ).encode()
-        if (manifest != saved.written || manifestId == null) {
-            val id = manifestId ?: YouTube.createPlaylist(MANIFEST_TITLE, emptyList()).getOrThrow()
-            YouTube.editPlaylist(id, description = MANIFEST_NOTE + manifest).getOrThrow()
-            saved = saved.copy(manifest = id, written = manifest)
-            save(saved)
-        }
-        _state.value = CloudState.Done(saved.lists.size, System.currentTimeMillis())
+        // Mantener la copia existente sin borrar ni reescribir su índice global desde una
+        // selección parcial. Cada lista exportada conserva sus metadatos recuperables.
+        _state.value = CloudState.Done(lists.size, System.currentTimeMillis())
     }
 
     /** Tus me gusta de YouTube Music (con los que Oto subió), a Me gusta. Ya constan como enviados. */
@@ -182,7 +183,7 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
         val all = first.songs.toMutableList<SongItem>()
         var next = first.songsContinuation ?: first.continuation
         while (next != null) {
-            val page = YouTube.playlistContinuation(next).getOrElse { Timber.w(it, "copia: seguir %s", yt); break }
+            val page = YouTube.playlistContinuation(next).getOrThrow()
             all += page.songs
             next = page.continuation
         }

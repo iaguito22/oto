@@ -47,11 +47,25 @@ class DesktopAudioEngine(
     private val _state = MutableStateFlow(EngineState())
     val state: StateFlow<EngineState> = _state.asStateFlow()
 
+    @Volatile private var beats = FloatArray(0)
+    @Volatile private var beatFile: String? = null
+    @Volatile private var beatLength = 0L
+    private var beatJob: Job? = null
+    fun beat(positionMs: Long): Float = if (_state.value.playing) beats.getOrElse((positionMs * 48000 / 512000).toInt()) { 0f } else 0f
+    private fun analyzeBeat(file: File) {
+        if (beatFile == file.absolutePath && beatLength == file.length()) return
+        beatJob?.cancel(); beats = FloatArray(0); beatFile = file.absolutePath;beatLength = file.length()
+        beatJob = scope.launch(Dispatchers.IO) {
+            val result = runCatching { DesktopBeat.analyze(file) { !isActive } }.getOrNull()
+            if(isActive && result != null) beats = result
+        }
+    }
     @Volatile private var currentProcess: Process? = null
     @Volatile private var currentLine: SourceDataLine? = null
     @Volatile private var playJob: Job? = null
     @Volatile private var downloadJob: Job? = null
     @Volatile private var tickerJob: Job? = null
+    private var volumeJob: Job? = null
 
     @Volatile private var activeFile: File? = null
     @Volatile private var activeDurationMs: Long = 0L
@@ -68,10 +82,21 @@ class DesktopAudioEngine(
 
     init {
         cacheDir.mkdirs()
+        Runtime.getRuntime().addShutdownHook(Thread { currentProcess?.destroyForcibly(); currentLine?.close() })
     }
 
     fun setGain(linear: Float) {
+        val previous = gainLinear
         gainLinear = linear.coerceIn(0.0f, 2.0f)
+        val process = currentProcess
+        if (process != null && previous != gainLinear) {
+            volumeJob?.cancel()
+            volumeJob = scope.launch {
+                delay(120)
+                val file = activeFile
+                if (currentProcess === process && _state.value.playing && file != null && file.exists()) startPlaybackAt(file, _state.value.positionMs)
+            }
+        }
         currentLine?.let { line ->
             runCatching {
                 if (line.isControlSupported(FloatControl.Type.MASTER_GAIN)) {
@@ -91,12 +116,14 @@ class DesktopAudioEngine(
         contentLength: Long?,
         durationMs: Long,
         codec: String,
+        playWhenReady: Boolean = true,
+        initialPositionMs: Long = 0L,
     ) {
         stopInternal()
         activeDurationMs = durationMs.coerceAtLeast(0L)
-        pausedPositionMs = 0L
-        startOffsetMs = 0L
-        _state.value = EngineState(playing = true, buffering = true, positionMs = 0L, durationMs = activeDurationMs, bufferedFraction = 0f)
+        pausedPositionMs = initialPositionMs
+        startOffsetMs = initialPositionMs
+        _state.value = EngineState(playing = playWhenReady, buffering = true, positionMs = 0L, durationMs = activeDurationMs, bufferedFraction = 0f)
 
         val ext = if (codec.contains("opus", ignoreCase = true) || codec.contains("webm", ignoreCase = true)) "webm" else "m4a"
         val targetFile = File(cacheDir, "$cacheKey.$ext")
@@ -104,20 +131,22 @@ class DesktopAudioEngine(
 
         downloadJob = scope.launch(Dispatchers.IO) {
             try {
-                if (!targetFile.exists() || targetFile.length() < MIN_PLAYABLE_BYTES) {
+                if (!targetFile.exists() || targetFile.length() < MIN_PLAYABLE_BYTES || (contentLength != null && contentLength > 0L && targetFile.length() < contentLength)) {
                     downloadChunked(streamUrl, headers, contentLength, targetFile) { downloaded, total ->
                         val frac = if (total > 0L) (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0.5f
                         _state.value = _state.value.copy(bufferedFraction = frac)
-                        if (downloaded >= FIRST_PLAY_BYTES && playJob == null && _state.value.playing) {
-                            startPlaybackAt(targetFile, 0L)
-                        }
                     }
                 } else {
                     _state.value = _state.value.copy(bufferedFraction = 1f)
                 }
+                updateDuration(targetFile)
                 if (playJob == null && _state.value.playing && targetFile.exists() && targetFile.length() > 0L) {
-                    startPlaybackAt(targetFile, 0L)
+                    startPlaybackAt(targetFile, initialPositionMs)
                 }
+                analyzeBeat(targetFile)
+                if (!playWhenReady) _state.value = _state.value.copy(buffering = false, positionMs = initialPositionMs)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
             } catch (t: Throwable) {
                 Timber.w(t, "Error descargando stream para $cacheKey")
                 onError(t)
@@ -129,7 +158,7 @@ class DesktopAudioEngine(
      * Reproduce un archivo que ya está en disco (una descarga), sin pedir nada a la red.
      * Devuelve false si el archivo no sirve.
      */
-    fun loadLocalFile(file: File, durationMs: Long): Boolean {
+    fun loadLocalFile(file: File, durationMs: Long, playWhenReady: Boolean = true, initialPositionMs: Long = 0L): Boolean {
         if (!file.exists() || file.length() <= 0L) return false
         stopInternal()
         activeFile = file
@@ -143,38 +172,80 @@ class DesktopAudioEngine(
             durationMs = activeDurationMs,
             bufferedFraction = 1f,
         )
-        startPlaybackAt(file, 0L)
+        pausedPositionMs = initialPositionMs
+        _state.value = _state.value.copy(playing = playWhenReady, positionMs = initialPositionMs)
+        downloadJob = scope.launch(Dispatchers.IO) {
+            updateDuration(file)
+            if (isActive && activeFile == file && _state.value.playing) startPlaybackAt(file, initialPositionMs)
+        }
         return true
     }
 
+    private fun updateDuration(file: File) {
+        val actual = runCatching {
+            val process = ProcessBuilder("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file.absolutePath)
+                .redirectErrorStream(true).start()
+            if (!process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) { process.destroyForcibly(); return@runCatching null }
+            process.inputStream.bufferedReader().use { it.readText().trim().toDoubleOrNull()?.times(1000)?.toLong() }
+        }.getOrNull()?.takeIf { it > 0 } ?: return
+        if (activeFile != file) return
+        activeDurationMs = actual
+        _state.value = _state.value.copy(durationMs = actual)
+        Timber.d("Duración de audio: %d ms", actual)
+    }
+
     private fun startPlaybackAt(file: File, offsetMs: Long) {
+        analyzeBeat(file)
         killDecodeProcess()
         startOffsetMs = offsetMs.coerceAtLeast(0L)
         playStartedWallMs = System.currentTimeMillis()
-        _state.value = _state.value.copy(playing = true, buffering = false, positionMs = startOffsetMs)
+        _state.value = _state.value.copy(playing = true, buffering = hasFfplay, positionMs = startOffsetMs)
 
-        startTicker()
+        if (!hasFfplay) startTicker()
 
         playJob = scope.launch(Dispatchers.IO) {
             try {
                 if (hasFfplay) {
                     val sec = String.format(java.util.Locale.US, "%.3f", startOffsetMs / 1000.0)
-                    val vol = (gainLinear * 100f).toInt().coerceIn(5, 100)
+                    val vol = (gainLinear * 100f).toInt().coerceIn(0, 100)
                     val pb = ProcessBuilder(
                         "ffplay",
                         "-nodisp",
                         "-autoexit",
                         "-loglevel", "quiet",
+                        "-stats",
                         "-ss", sec,
+                        "-af", "atrim=start=$sec,asetpts=PTS-STARTPTS",
                         "-volume", vol.toString(),
                         file.absolutePath,
                     )
                     val proc = pb.start()
                     currentProcess = proc
+                    if (!isActive) { proc.destroyForcibly(); return@launch }
+                    val status = StringBuilder()
+                    val clockPattern = Regex("^\\s*(-?\\d+(?:\\.\\d+)?)\\s+(?:M-A|:)")
+                    proc.errorStream.bufferedReader().use { reader ->
+                        while (isActive && currentProcess === proc) {
+                            val ch = reader.read()
+                            if (ch < 0) break
+                            if (ch == '\r'.code || ch == '\n'.code) {
+                                val seconds = clockPattern.find(status.toString())?.groupValues?.get(1)?.toDoubleOrNull()
+                                if (seconds != null && currentProcess === proc && _state.value.playing) {
+                                    val position = (startOffsetMs + (seconds * 1000).toLong()).coerceAtLeast(startOffsetMs)
+                                        .let { if (activeDurationMs > 0) it.coerceAtMost(activeDurationMs) else it }
+                                    _state.value = _state.value.copy(positionMs = position, buffering = false)
+                                }
+                                status.setLength(0)
+                            } else if (status.length < 1024) status.append(ch.toChar())
+                        }
+                    }
                     val code = proc.waitFor()
                     if (isActive && currentProcess === proc && code == 0) {
                         _state.value = _state.value.copy(playing = false, positionMs = activeDurationMs)
                         onEnded()
+                    } else if (isActive && currentProcess === proc && code != 0) {
+                        _state.value = _state.value.copy(playing = false, buffering = false)
+                        onError(IllegalStateException("No se pudo reproducir el audio (ffplay: $code)"))
                     }
                 } else {
                     playWithJavaSound(file, startOffsetMs)
@@ -272,6 +343,8 @@ class DesktopAudioEngine(
     }
 
     private fun stopInternal() {
+        volumeJob?.cancel()
+        volumeJob = null
         tickerJob?.cancel()
         tickerJob = null
         downloadJob?.cancel()
@@ -293,7 +366,6 @@ class DesktopAudioEngine(
     }
 
     companion object {
-        private const val FIRST_PLAY_BYTES = 128 * 1024L
         private const val MIN_PLAYABLE_BYTES = 64 * 1024L
     }
 }

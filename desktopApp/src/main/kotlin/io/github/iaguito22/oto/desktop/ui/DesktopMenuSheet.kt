@@ -174,6 +174,7 @@ private const val FOLDER_PREFIX = "folder:"
 @Composable
 fun DesktopMenuSheet(
     open: Boolean,
+    standalone: Boolean = false,
     isIdle: Boolean = false,
     isPlaying: Boolean = false,
     onTextInputFocusChange: (Boolean) -> Unit = {},
@@ -270,8 +271,8 @@ fun DesktopMenuSheet(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-        val openTargetW = (maxWidth - 36.dp).coerceAtMost(1040.dp).coerceAtLeast(320.dp)
-        val openTargetH = (maxHeight - 56.dp).coerceAtLeast(360.dp)
+        val openTargetW = if (standalone) maxWidth else (maxWidth - 36.dp).coerceAtMost(1040.dp).coerceAtLeast(320.dp)
+        val openTargetH = if (standalone) maxHeight else (maxHeight - 56.dp).coerceAtLeast(360.dp)
         val closedPillH = if (!open && pillHovered) 28.dp else 24.dp
 
         val morphSpec = spring<androidx.compose.ui.unit.Dp>(
@@ -300,7 +301,7 @@ fun DesktopMenuSheet(
         )
 
         // Capa exterior para cerrar al hacer clic fuera de la isla cuando está abierta
-        if (open) {
+        if (open && !standalone) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -319,7 +320,7 @@ fun DesktopMenuSheet(
 
         Box(
             modifier = Modifier
-                .padding(bottom = 16.dp)
+                .padding(bottom = if (standalone) 0.dp else 16.dp)
                 .graphicsLayer {
                     alpha = if (open) 1f else idleAlpha
                     translationY = if (open) 0f else idleTranslateY
@@ -333,7 +334,9 @@ fun DesktopMenuSheet(
                 )
                 .clip(sheetShape)
                 .background(
-                    if (open) {
+                    if (standalone) {
+                        Brush.verticalGradient(listOf(Color(0xFF171A18), Color(0xFF171A18)))
+                    } else if (open) {
                         Brush.verticalGradient(
                             0.00f to Color.White.copy(alpha = 0.14f),
                             0.28f to Color(0x82101010),
@@ -347,7 +350,7 @@ fun DesktopMenuSheet(
                     },
                 )
                 .border(
-                    1.dp,
+                    if (standalone) 0.dp else 1.dp,
                     if (open) {
                         Brush.verticalGradient(
                             0.00f to Color.White.copy(alpha = 0.42f),
@@ -392,6 +395,7 @@ fun DesktopMenuSheet(
             // - Velo de agua ultratransparente arriba que deja pasar la luz del escenario desenfocado
             // - Resplandor interior inferior con el color --accent (inset 0 -16px 40px var(--accent))
             Canvas(Modifier.fillMaxSize()) {
+                if (standalone) return@Canvas
                 val w = size.width
                 val h = size.height
                 drawRect(
@@ -454,7 +458,7 @@ fun DesktopMenuSheet(
                         .requiredHeight(openTargetH),
                 ) {
                     // Tirador superior con mini-controles de reproducción en vivo (.sheet-grab)
-                    Row(
+                    if (!standalone) Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 4.dp),
@@ -784,7 +788,7 @@ fun DesktopMenuSheet(
                                         subView = if (subView == MenuSubView.Settings) MenuSubView.None else MenuSubView.Settings
                                     },
                                 )
-                                SheetCircleIconButton(
+                                if (!standalone) SheetCircleIconButton(
                                     icon = MobileIcons.close,
                                     tooltip = "Cerrar (Esc)",
                                     active = false,
@@ -1329,6 +1333,8 @@ internal fun MenuTabPill(
     onClick: () -> Unit,
 ) {
     var hovered by remember { mutableStateOf(false) }
+    val growth by animateFloatAsState(if(hovered) 1.06f else 1f, tween(150), label="pillHover")
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Box(
         modifier = Modifier
             .height(36.dp)
@@ -1336,7 +1342,7 @@ internal fun MenuTabPill(
             .background(
                 when {
                     selected -> accent
-                    hovered -> Color.White.copy(alpha = 0.11f)
+                    hovered -> Color.White.copy(alpha = 0.06f)
                     else -> Color.White.copy(alpha = 0.06f)
                 },
             )
@@ -1344,7 +1350,7 @@ internal fun MenuTabPill(
                 1.dp,
                 when {
                     selected -> accent
-                    hovered -> Color.White.copy(alpha = 0.15f)
+                    hovered -> Color.White.copy(alpha = 0.09f)
                     else -> Color.White.copy(alpha = 0.09f)
                 },
                 CircleShape,
@@ -1352,13 +1358,13 @@ internal fun MenuTabPill(
             .pointerHoverIcon(PointerIcon.Hand)
             .onPointerEvent(PointerEventType.Enter) { hovered = true }
             .onPointerEvent(PointerEventType.Exit) { hovered = false }
-            .clickable(onClick = onClick)
+            .clickable(interactionSource=interaction,indication=null,onClick=onClick)
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
-            style = OtoType.rowTitle.copy(fontSize = 14.sp),
+            style = OtoType.rowTitle.copy(fontSize = 14.sp * growth),
             color = if (selected) Color(0xFF101010) else if (hovered) Color.White else Color.White.copy(alpha = 0.72f),
         )
     }
@@ -4438,32 +4444,6 @@ private fun QueueRowDesktop(
                     modifier = Modifier.size(18.dp),
                 )
             }
-            if (canMoveUp) {
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .clickable(onClick = onMoveUp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Rounded.KeyboardArrowUp, "Subir", tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
-                }
-            } else {
-                Spacer(Modifier.size(28.dp))
-            }
-            if (canMoveDown) {
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .clickable(onClick = onMoveDown),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Rounded.KeyboardArrowDown, "Bajar", tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
-                }
-            } else {
-                Spacer(Modifier.size(28.dp))
-            }
             Box(
                 modifier = Modifier
                     .size(28.dp)
@@ -4479,7 +4459,7 @@ private fun QueueRowDesktop(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SettingsAndAccountPane(
+internal fun SettingsAndAccountPane(
     prefs: Prefs,
     importer: Importer,
     account: Account,
@@ -4496,6 +4476,8 @@ private fun SettingsAndAccountPane(
     onSetLoop: (Boolean) -> Unit,
     palette: ArtworkPalette,
     onOpenImport: () -> Unit,
+    accountOnly: Boolean = false,
+    onAccountFromMobile: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val crossfade by prefs.crossfade.collectAsState(initial = 3)
@@ -4564,7 +4546,7 @@ private fun SettingsAndAccountPane(
                             }
                             Text(
                                 when (cloudState) {
-                                    CloudState.Off -> "Copia en la nube: desactivada"
+                                    CloudState.Off -> "Elige qué listas importar y exportar"
                                     is CloudState.Working -> "Sincronizando: ${cloudState.what}…"
                                     is CloudState.Done -> "Guardadas en tu cuenta (${if (cloudState.lists == 1) "1 lista" else "${cloudState.lists} listas"} privadas)"
                                     is CloudState.Failed -> "No se pudo sincronizar: ${cloudState.why}"
@@ -4584,17 +4566,20 @@ private fun SettingsAndAccountPane(
                         color = Color.White.copy(alpha = 0.62f),
                     )
 
-                    // Inicio de sesión: Chrome temporal con CDP (lo normal) o pegar la cookie a mano.
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        MenuTabPill("Entrar con Google", loginMode == 0, palette.primary) { loginMode = 0 }
-                        MenuTabPill("Pegar cookie", loginMode == 1, palette.primary) { loginMode = 1 }
+                    onAccountFromMobile?.let { connect ->
+                        MenuTabPill("Conectar con Oto móvil", true, palette.primary, connect)
+                        Text("Vincula el móvil por QR y confirma el envío de la sesión desde allí.", style = OtoType.rowSub, color = Color.White.copy(alpha = 0.62f))
                     }
 
+                    // Inicio de sesión: Chrome temporal con CDP (lo normal) o pegar la cookie a mano.
                     if (loginMode == 0) {
                         val loginState by login.state.collectAsState()
-                        MenuTabPill("Entrar con Google", true, palette.primary) {
-                            snippetCopied = false
-                            login.start()
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            MenuTabPill("Entrar con Google", true, palette.primary) {
+                                snippetCopied = false
+                                login.start()
+                            }
+                            MenuTabPill("Pegar cookie", false, palette.primary) { loginMode = 1 }
                         }
 
                         when (val ls = loginState) {
@@ -4650,6 +4635,7 @@ private fun SettingsAndAccountPane(
                     } else {
                         // Método 1: Pegar cookie o cURL
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            MenuTabPill("Volver al navegador", false, palette.primary) { loginMode = 0 }
                             Text(
                                 "En music.youtube.com con tu sesión: F12 → Red (Network) → clic en cualquier petición → Copiar como cURL (o copiar valor de Cookie) y pégalo abajo:",
                                 style = OtoType.rowSub,
@@ -4705,6 +4691,12 @@ private fun SettingsAndAccountPane(
                 }
             }
         }
+
+        if(session!=null) item {
+            val localLists by prefs.playlists.collectAsState(initial=emptyList())
+            CloudChoices(cloud,localLists)
+        }
+        if (accountOnly) return@LazyColumn
 
         // 2. IMPORTAR DE SPOTIFY
         item {
@@ -5026,7 +5018,7 @@ private fun importSummary(s: ImportState): String = when (s) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ImportPane(
+internal fun ImportPane(
     importer: Importer,
     prefs: Prefs,
     palette: ArtworkPalette,
@@ -5046,8 +5038,8 @@ private fun ImportPane(
 
     val step = when {
         importState is ImportState.Running -> 2
-        loaded != null -> 1
         importState is ImportState.Done -> 3
+        loaded != null -> 1
         else -> 0
     }
 
@@ -5060,9 +5052,9 @@ private fun ImportPane(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(18.dp))
+                                .clip(RoundedCornerShape(24.dp))
                                 .background(Color.White.copy(alpha = 0.05f))
-                                .border(1.dp, palette.primary.copy(alpha = 0.2f), RoundedCornerShape(18.dp))
+                                .border(1.dp, palette.primary.copy(alpha = 0.2f), RoundedCornerShape(24.dp))
                                 .padding(18.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
@@ -5122,9 +5114,9 @@ private fun ImportPane(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(18.dp))
+                                .clip(RoundedCornerShape(24.dp))
                                 .background(Color.White.copy(alpha = 0.05f))
-                                .border(1.dp, palette.secondary.copy(alpha = 0.2f), RoundedCornerShape(18.dp))
+                                .border(1.dp, palette.secondary.copy(alpha = 0.2f), RoundedCornerShape(24.dp))
                                 .padding(18.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
@@ -5197,7 +5189,7 @@ private fun ImportPane(
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text(
-                            "ELIGE QUÉ TRAER (${lists.size} listas)",
+                            "Elige tus listas · ${lists.size}",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White.copy(alpha = 0.62f),
@@ -5271,7 +5263,7 @@ private fun ImportPane(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Column {
+                        Column(Modifier.weight(1f)) {
                             Text("$uniqueCount canciones distintas", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
                             Text(estMinutes, fontSize = 12.sp, color = Color.White.copy(alpha = 0.62f))
                         }
@@ -5305,7 +5297,7 @@ private fun ImportPane(
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Text(
-                            "LISTA ${s.index + 1} DE ${s.lists}",
+                            "Lista ${s.index + 1} de ${s.lists}",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = palette.primary,
@@ -5324,7 +5316,7 @@ private fun ImportPane(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(10.dp)
+                                .height(3.dp)
                                 .clip(CircleShape)
                                 .background(Color.White.copy(alpha = 0.12f)),
                         ) {
@@ -5336,7 +5328,7 @@ private fun ImportPane(
                                     .background(palette.primary),
                             )
                         }
-                        Spacer(Modifier.height(10.dp))
+                        Spacer(Modifier.height(3.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -5371,14 +5363,14 @@ private fun ImportPane(
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(18.dp))
+                                    .clip(RoundedCornerShape(24.dp))
                                     .background(Color.White.copy(alpha = 0.05f))
-                                    .border(1.dp, palette.primary.copy(alpha = 0.3f), RoundedCornerShape(18.dp))
+                                    .border(1.dp, palette.primary.copy(alpha = 0.3f), RoundedCornerShape(24.dp))
                                     .padding(20.dp),
                                 verticalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
                                 Text(
-                                    if (s.stopped) "Parado a medias" else "¡Importación completada!",
+                                    if (s.stopped) "Importación detenida" else "Todo listo",
                                     fontSize = 18.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White,
@@ -5391,7 +5383,7 @@ private fun ImportPane(
                                     color = Color.White.copy(alpha = 0.62f),
                                 )
                                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    MenuTabPill("Ver Tus listas", true, palette.primary) {
+                                    MenuTabPill("Ir a tu música", true, palette.primary) {
                                         importer.dismiss()
                                         onLists()
                                     }
@@ -5405,7 +5397,7 @@ private fun ImportPane(
                         if (s.missing.isNotEmpty()) {
                             item {
                                 Text(
-                                    "NO ENCONTRADAS (${s.missing.size})",
+                                    "Sin encontrar · ${s.missing.size}",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White.copy(alpha = 0.62f),

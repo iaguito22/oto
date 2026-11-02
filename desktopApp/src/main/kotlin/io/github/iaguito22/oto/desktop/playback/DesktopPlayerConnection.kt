@@ -99,9 +99,11 @@ class DesktopPlayerConnection(
 
     private var currentLoudnessGain: Float = 1.0f
     private var songQueue = mutableListOf<SongItem>()
+    private var originalQueue: List<SongItem>? = null
     private var currentIndex = -1
     private var radio: Radio? = null
     private var dj: Dj? = null
+    @Volatile private var resolvingTrack = false
     private var resolveJob: Job? = null
     private var lyricsJob: Job? = null
 
@@ -110,8 +112,8 @@ class DesktopPlayerConnection(
         scope = scope,
         onEnded = { scope.launch { onTrackFinished(completedNaturally = true) } },
         onError = { err ->
-            Timber.w(err, "Fallo en pista actual; pasando a la siguiente")
-            scope.launch { next() }
+            Timber.w(err, "Fallo en pista actual")
+            scope.launch { _state.value = _state.value.copy(playing = false, buffering = false, error = "No se pudo reproducir. Pulsa para reintentar.") }
         },
     )
 
@@ -123,7 +125,7 @@ class DesktopPlayerConnection(
                 val cur = _state.value
                 _state.value = cur.copy(
                     playing = es.playing,
-                    buffering = es.buffering,
+                    buffering = resolvingTrack || es.buffering,
                     durationMs = if (es.durationMs > 0L) es.durationMs else cur.durationMs,
                 )
             }
@@ -134,28 +136,9 @@ class DesktopPlayerConnection(
         scope.launch {
             prefs.loop.collect { _loop.value = it }
         }
-        // Restaurar última canción escuchada al abrir en escritorio (en pausa, lista para darle al play).
-        scope.launch {
-            val hist = prefs.history.first()
-            if (hist.isNotEmpty() && _state.value.id == null) {
-                val last = hist.first().toSong()
-                songQueue = mutableListOf(last)
-                currentIndex = 0
-                syncQueueFlow()
-                _state.value = NowPlaying(
-                    id = last.id,
-                    title = last.title,
-                    artist = last.artists.joinToString { it.name },
-                    artists = last.artists.map { it.name to it.id },
-                    album = last.album?.name,
-                    artwork = last.thumbnail,
-                    playing = false,
-                    buffering = false,
-                )
-                fetchLyrics(last)
-            }
-        }
     }
+
+    fun beat(): Float = engine.beat(position())
 
     override fun position(): Long = _positionMs.value
 
@@ -164,7 +147,8 @@ class DesktopPlayerConnection(
     override fun play(song: SongItem) {
         dj = null
         radio = Radio(song.id)
-        _source.value = null
+        originalQueue = null
+        _source.value = Source("Radio", song.title)
         songQueue = mutableListOf(song)
         currentIndex = 0
         syncQueueFlow()
@@ -176,6 +160,16 @@ class DesktopPlayerConnection(
                 syncQueueFlow()
             }
         }
+    }
+
+    fun appendArtistTracks(artistId:String, tracks:List<SongItem>) {
+        if ((_source.value?.item as? ArtistItem)?.id != artistId || tracks.isEmpty()) return
+        val seen = songQueue.mapTo(HashSet()) { it.id }
+        val added = tracks.filter { seen.add(it.id) }
+        if (added.isEmpty()) return
+        originalQueue = (originalQueue ?: songQueue.toList()) + added
+        songQueue.addAll(if (_shuffle.value) added.shuffled() else added)
+        syncQueueFlow()
     }
 
     override fun playNext(song: SongItem) {
@@ -198,6 +192,7 @@ class DesktopPlayerConnection(
             is ArtistItem -> Source("DEL ARTISTA", from.title, from)
             else -> null
         }
+        originalQueue = songs.toList()
         val ordered = if (start == null && _shuffle.value) songs.shuffled() else songs
         songQueue = ordered.toMutableList()
         currentIndex = (start ?: 0).coerceIn(0, songQueue.lastIndex)
@@ -212,6 +207,7 @@ class DesktopPlayerConnection(
         dj = null
         radio = null
         _source.value = Source("DESDE TU LISTA", list.name, local = list.id)
+        originalQueue = items.toList()
         val ordered = if (start == null && _shuffle.value) items.shuffled() else items
         songQueue = ordered.toMutableList()
         currentIndex = (start ?: 0).coerceIn(0, songQueue.lastIndex)
@@ -235,6 +231,7 @@ class DesktopPlayerConnection(
             }
             radio = null
             dj = newDj
+            originalQueue = null
             _source.value = Source("DJ", "Mezcla para ti")
             songQueue = mutableListOf(first.toSong())
             currentIndex = 0
@@ -301,7 +298,21 @@ class DesktopPlayerConnection(
     }
 
     override fun setShuffle(on: Boolean) {
+        val changed = _shuffle.value != on
         _shuffle.value = on
+        if (changed && currentIndex in songQueue.indices) {
+            val played = songQueue.take(currentIndex + 1)
+            val pending = songQueue.drop(currentIndex + 1)
+            val next = if (on) {
+                if (originalQueue == null) originalQueue = songQueue.toList()
+                pending.shuffled()
+            } else {
+                val rank = originalQueue.orEmpty().mapIndexed { i, song -> song.id to i }.toMap()
+                pending.sortedBy { rank[it.id] ?: Int.MAX_VALUE }
+            }
+            songQueue = (played + next).toMutableList()
+            syncQueueFlow()
+        }
         scope.launch { prefs.setShuffle(on) }
     }
 
@@ -313,7 +324,12 @@ class DesktopPlayerConnection(
     override fun toggle() {
         val st = _state.value
         if (st.id == null) return
-        if (st.playing) {
+        if (st.buffering && resolvingTrack) {
+            resolveJob?.cancel()
+            resolvingTrack = false
+            engine.stop()
+            _state.value = st.copy(playing = false, buffering = false)
+        } else if (st.playing) {
             engine.pause()
         } else {
             if (engine.state.value.durationMs > 0L) {
@@ -405,13 +421,25 @@ class DesktopPlayerConnection(
         }
     }
 
-    private fun startCurrentTrack() {
+    fun prepareTransfer(songs: List<SongItem>, index: Int, positionMs: Long, shuffled: Boolean) {
+        engine.pause()
+        _shuffle.value = shuffled
+        scope.launch { prefs.setShuffle(shuffled) }
+        radio = null; dj = null; originalQueue = songs.toList(); songQueue = songs.toMutableList(); currentIndex = index.coerceIn(songs.indices)
+        syncQueueFlow(); startCurrentTrack(false, positionMs)
+    }
+
+    private fun startCurrentTrack(playWhenReady: Boolean = true, initialPositionMs: Long = 0L) {
         val song = songQueue.getOrNull(currentIndex) ?: return
         resolveJob?.cancel()
+        engine.stop()
+        _currentQuality.value = null
+        resolvingTrack = true
         resolveJob = scope.launch {
             val dataSaver = prefs.dataSaver.first()
-            val tier = if (dataSaver) Tier.Low else Tier.High
-            val durGuess = (song.duration ?: 0).takeIf { it > 0 }?.times(1000L) ?: 210_000L
+            val qualityMode = prefs.quality.first()
+            val tier = if (dataSaver && qualityMode != io.github.iaguito22.oto.QualityMode.Max) Tier.Low else Tier.High
+            val durGuess = (song.duration ?: 0).takeIf { it > 0 }?.times(1000L) ?: 0L
 
             _state.value = NowPlaying(
                 id = song.id,
@@ -420,7 +448,7 @@ class DesktopPlayerConnection(
                 artists = song.artists.map { it.name to it.id },
                 album = song.album?.name,
                 artwork = song.thumbnail,
-                playing = true,
+                playing = playWhenReady,
                 buffering = true,
                 durationMs = durGuess,
                 upNext = (songQueue.size - 1 - currentIndex).coerceAtLeast(0),
@@ -438,7 +466,8 @@ class DesktopPlayerConnection(
                 }
                 currentLoudnessGain = 1f
                 engine.setGain(_volume.value)
-                engine.loadLocalFile(local, durGuess)
+                resolvingTrack = false
+                engine.loadLocalFile(local, durGuess, playWhenReady, initialPositionMs)
                 return@launch
             }
 
@@ -452,6 +481,7 @@ class DesktopPlayerConnection(
                 val gain = stream.loudnessDb?.let { min(1f, 10f.pow(-it.toFloat() / 20f)) } ?: 1f
                 currentLoudnessGain = gain
                 engine.setGain(gain * _volume.value)
+                resolvingTrack = false
                 engine.loadAndPlay(
                     cacheKey = tier.key(song.id),
                     streamUrl = stream.url,
@@ -459,8 +489,11 @@ class DesktopPlayerConnection(
                     contentLength = stream.contentLength,
                     durationMs = durGuess,
                     codec = stream.quality.codec,
+                    playWhenReady = playWhenReady,
+                    initialPositionMs = initialPositionMs,
                 )
             }.onFailure { err ->
+                resolvingTrack = false
                 Timber.e(err, "No se pudo resolver stream para ${song.id}")
                 _state.value = _state.value.copy(playing = false, buffering = false, error = err.message)
             }
@@ -481,11 +514,25 @@ class DesktopPlayerConnection(
                 album = song.album?.name,
                 durationMs = durMs,
             )
-            val result = runCatching {
-                lyricsStore.get(query).lyrics
-            }.getOrNull()
-            _lyrics.value = result
-            _lyricsLoading.value = false
+            fun rank(value: Lyrics?) = when(value) { is Lyrics.Synced -> if(value.wordByWord) 3 else 2; is Lyrics.Plain -> 1; else -> 0 }
+            try {
+                var fetched = lyricsStore.get(query)
+                if (_state.value.id == song.id) { _lyrics.value = fetched.lyrics; _lyricsLoading.value = false }
+                for (wait in listOf(20_000L, 90_000L)) {
+                    if (fetched.final) break
+                    kotlinx.coroutines.delay(wait)
+                    fetched = lyricsStore.get(query)
+                    if (_state.value.id != song.id) break
+                    if (rank(fetched.lyrics) > rank(_lyrics.value)) _lyrics.value = fetched.lyrics
+                }
+                if (fetched.final && _state.value.id == song.id) _lyrics.value?.let { lyricsStore.put(song.id, it) }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Timber.w(error, "No se pudo buscar la letra")
+            } finally {
+                if (_state.value.id == song.id) _lyricsLoading.value = false
+            }
         }
     }
 
