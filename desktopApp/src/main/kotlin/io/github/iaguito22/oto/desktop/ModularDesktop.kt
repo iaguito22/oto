@@ -45,15 +45,25 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     lyricsStore: LyricsStore, quit: () -> Unit) {
     val kv = remember { OtoDirs.keyValue("modular_windows") }
     var shortcut by remember { mutableStateOf(kv.getString("shortcut") ?: "CTRL + ALT + O") }
-    var playerOpen by remember { mutableStateOf(true) }
-    var menuOpen by remember { mutableStateOf(false) }
-    var queueOpen by remember { mutableStateOf(false) }
+    val docking = remember {
+        DockSession(decodeDockLayout(kv.getString("docking_v1")) ?: initialDockLayout()).apply {
+            if(layout.bounds.isEmpty()) open(DockId.Player)
+        }
+    }
+    var playerOpen by remember { DockVisibility(docking,DockId.Player) }
+    LaunchedEffect(docking.revision) {
+        kotlinx.coroutines.delay(400)
+        kv.putString("docking_v1",docking.layout.encode())
+    }
+    DisposableEffect(docking) { onDispose { kv.putString("docking_v1",docking.layout.encode()) } }
+    var menuOpen by remember { DockVisibility(docking,DockId.Library) }
+    var queueOpen by remember { DockVisibility(docking,DockId.Queue) }
     var devicesOpen by remember { mutableStateOf(false) }
     val connectionScope = rememberCoroutineScope()
     var deviceRevision by remember { mutableIntStateOf(0) }
     val devices = remember(deviceRevision) { DeviceConnection(player, prefs, account, connectionScope) }
     DisposableEffect(devices) { onDispose { devices.close() } }
-    var lyricsOpen by remember { mutableStateOf(false) }
+    var lyricsOpen by remember { DockVisibility(docking,DockId.Lyrics) }
     var lyricsHover by remember { mutableStateOf(false) }
     var lyricsScale by remember {
         if (kv.getString("lyrics_scale_default_v2") != "true") {
@@ -68,6 +78,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     var pointerInside by remember { mutableStateOf(false) }
     var chrome by remember { mutableStateOf(false) }
     var options by remember { mutableStateOf(false) }
+    var libraryOptions by remember { mutableStateOf(false) }
     LaunchedEffect(pointerInside, options) {
         if(pointerInside || options) chrome = true else { kotlinx.coroutines.delay(450); chrome = false }
     }
@@ -77,6 +88,16 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     val coverBeat by prefs.coverBeat.collectAsState(initial = true)
     val showRemaining by prefs.showRemaining.collectAsState(initial = false)
     var pinned by remember { mutableStateOf(kv.getString("pinned") == "true") }
+    val playerSolo = playerOpen && docking.layout.group(DockId.Player).members.size == 1
+    LaunchedEffect(playerSolo) { if(!playerSolo) { pinned=false; kv.putString("pinned","false") } }
+    LaunchedEffect(form) {
+        val minimum = when(form) {
+            PlayerForm.Vertical -> 96 to 240
+            PlayerForm.Horizontal -> 280 to 108
+            PlayerForm.Full -> 260 to 370
+        }
+        docking.layout.setMinimum(DockId.Player,minimum.first,minimum.second,form.width)
+    }
     var libraryRequest by remember { mutableStateOf(0 to 0) }
     var librarySearchFocused by remember { mutableStateOf(false) }
     var savingTrack by remember { mutableStateOf<Heard?>(null) }
@@ -101,14 +122,18 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     LaunchedEffect(nowPlaying.artwork) { val (bmp, pal) = ArtworkLoader.load(nowPlaying.artwork); artwork = bmp; palette = pal }
     val backdrop by produceState<ImageBitmap?>(null, artwork, artworkBackground) { value = if(artworkBackground && artwork != null) blurredBackdrop(artwork!!) else null }
     fun like() { nowPlaying.id?.let { id -> uiScope.launch { prefs.setLiked(Heard(id, nowPlaying.title, nowPlaying.artist, nowPlaying.artwork), !isLiked) } } }
-    val playerWindow = rememberModuleState("player", 320, 560)
-    val libraryWindow = rememberModuleState("library", 960, 740)
-    val queueWindow = rememberModuleState("queue", 420, 580)
-    val lyricsWindow = rememberModuleState("lyrics", 480, 680)
+    val playerWindow = rememberDockState(docking,DockId.Player)
+    val libraryWindow = rememberDockState(docking,DockId.Library)
+    val queueWindow = rememberDockState(docking,DockId.Queue)
+    val lyricsWindow = rememberDockState(docking,DockId.Lyrics)
     var playerFrame by remember { mutableStateOf<java.awt.Window?>(null) }
     var formRequest by remember { mutableIntStateOf(0) }
     fun changeForm(selected:PlayerForm) {
-        form=selected;kv.putString("player_form",selected.name);formRequest++
+        form=selected;kv.putString("player_form",selected.name)
+        val minimum = when(selected) { PlayerForm.Vertical -> 96 to 240; PlayerForm.Horizontal -> 280 to 108; PlayerForm.Full -> 260 to 370 }
+        docking.layout.setMinimum(DockId.Player,minimum.first,minimum.second,selected.width)
+        if(playerOpen) docking.layout.resize(DockId.Player,selected.width,if(playerSolo)selected.height else docking.layout.bounds.getValue(DockId.Player).height)
+        formRequest++
     }
     fun shortcuts(event: KeyEvent): Boolean {
         if(event.type != KeyEventType.KeyDown) return false
@@ -126,6 +151,14 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             else -> false
         }
     }
+    @Composable fun WindowOptions(open: Boolean, setOpen: (Boolean) -> Unit) {
+        Box {
+            SmallAction(Icons.Rounded.MoreHoriz,"Opciones") { setOpen(!open); docking.trace("options=${!open}") }
+            PlayerOptions(open,{setOpen(false)},form,::changeForm,volume,{player.adjustVolume(it-volume)},
+                {setOpen(false);devicesOpen=true},
+                {setOpen(false);docking.layout.organize(desktopArea())},quit)
+        }
+    }
     DisposableEffect(shortcut) {
         val access = DesktopAccess(shortcut) { force -> java.awt.EventQueue.invokeLater { playerOpen = force || !playerOpen; if (playerOpen) { playerWindow.isMinimized = false; playerFrame?.toFront(); playerFrame?.requestFocus() } } }
         onDispose { access.close() }
@@ -134,23 +167,12 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         Item("Reproductor", onClick = { playerOpen = true }); Item("Tu música", onClick = { menuOpen = true })
         Item("Letra", onClick = { lyricsOpen = true }); Item("Cola", onClick = { queueOpen = true }); Separator(); Item("Salir de Oto", onClick = quit)
     })
-    ModuleWindow("Reproductor", playerWindow, playerOpen, { playerOpen = false }, pinned, accent = palette.primary,
+    ModuleWindow("Reproductor", playerWindow, playerOpen, { playerOpen = false }, pinned && playerSolo, accent = palette.primary, dock=docking, dockId=DockId.Player,
         keys = ::shortcuts, onWindow = { playerFrame = it }, immersive = true, chrome = chrome,
         minimum = if(form == PlayerForm.Vertical) DpSize(96.dp,240.dp) else if(form == PlayerForm.Horizontal) DpSize(280.dp,108.dp) else DpSize(260.dp,370.dp),
         backgroundArtwork = if(artworkBackground) backdrop else null, actionsOnRight = form == PlayerForm.Horizontal, hover = {pointerInside = it}, resizeRequest = formRequest, requestedSize = DpSize(form.width.dp,form.height.dp), extra = {
-            Box {
-                SmallAction(Icons.Rounded.MoreHoriz,"Opciones") { options = !options }
-                PlayerOptions(options,{options=false},form,{ selected -> changeForm(selected)
-                },volume,{player.adjustVolume(it-volume)}, {options=false;devicesOpen=true}, {
-                    options=false
-                    val bounds=GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration.bounds
-                    val states=listOfNotNull(playerWindow.takeIf{playerOpen},libraryWindow.takeIf{menuOpen},lyricsWindow.takeIf{lyricsOpen},queueWindow.takeIf{queueOpen})
-                    val cols=if(states.size>1)2 else 1;val rows=(states.size+cols-1)/cols
-                    val cellW=(bounds.width-72)/cols;val cellH=(bounds.height-72)/rows.coerceAtLeast(1)
-                    states.forEachIndexed {i,st -> st.size=DpSize((if(st===playerWindow)form.width else cellW-16).dp,(if(st===playerWindow)minOf(form.height,cellH-16)else cellH-16).dp);st.position=WindowPosition((bounds.x+36+i%cols*cellW).dp,(bounds.y+36+i/cols*cellH).dp)}
-                },quit)
-            }
-            SmallAction(Icons.Rounded.PushPin, if(pinned) "Desfijar" else "Fijar sobre otras ventanas") { pinned = !pinned;kv.putString("pinned",pinned.toString()) }
+            WindowOptions(options,{options=it})
+            if(playerSolo) SmallAction(Icons.Rounded.PushPin, if(pinned) "Desfijar" else "Fijar sobre otras ventanas") { pinned = !pinned;kv.putString("pinned",pinned.toString()) }
         }) {
         @Composable fun PlayerContents() {
         val positionMs by player.positionMs.collectAsState()
@@ -164,7 +186,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         PlayerContents()
     }
     ModuleWindow("Dispositivos", rememberModuleState("devices", 410, 720), devicesOpen, { devicesOpen = false }, minimum=DpSize(360.dp,480.dp), accent=palette.primary, keys = ::shortcuts) { DevicesPane(devices, shortcut, { shortcut = it; kv.putString("shortcut", it) }) { devices.close(); OtoDirs.keyValue("local_link").putString("secret", null); deviceRevision++ } }
-    ModuleWindow("Letra", lyricsWindow, lyricsOpen, { lyricsOpen = false }, keys = ::shortcuts, backgroundArtwork = if(artworkBackground) backdrop else null, hover={lyricsHover=it}, extra={
+    ModuleWindow("Letra", lyricsWindow, lyricsOpen, { lyricsOpen = false }, dock=docking, dockId=DockId.Lyrics, keys = ::shortcuts, backgroundArtwork = if(artworkBackground) backdrop else null, hover={lyricsHover=it}, extra={
         if(lyricsHover) {
             SmallAction(Icons.Rounded.Remove,"Letra más pequeña") { changeLyricsScale(-.1f) }
             SmallAction(Icons.Rounded.Add,"Letra más grande") { changeLyricsScale(.1f) }
@@ -189,10 +211,16 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             }
         }
     }
-    ModuleWindow("Cola", queueWindow, queueOpen, { queueOpen = false }, keys = ::shortcuts) {
+    ModuleWindow("Cola", queueWindow, queueOpen, { queueOpen = false }, dock=docking, dockId=DockId.Queue, keys = ::shortcuts) {
         Box(Modifier.fillMaxSize().padding(start=20.dp,end=20.dp,bottom=20.dp,top=4.dp)) { QueuePane(queue, nowPlaying.id, shuffle, loop, palette, { player.setShuffle(!shuffle) }, { player.setLoop(!loop) }, player::move, player::remove, player::clearQueue, player::skipTo) }
     }
-    ModuleWindow("Tu música", libraryWindow, menuOpen, {menuOpen=false}, keys={event -> if(librarySearchFocused && event.key==Key.Spacebar) false else shortcuts(event)}) {
+    ModuleWindow("Tu música", libraryWindow, menuOpen, {menuOpen=false}, dock=docking, dockId=DockId.Library,
+        extra={
+            WindowOptions(libraryOptions,{libraryOptions=it})
+            SmallAction(Icons.Rounded.PlayArrow,"Reproductor") { docking.toggle(DockId.Player,DockId.Library) }
+            SmallAction(Icons.Rounded.Subtitles,"Letra") { docking.toggle(DockId.Lyrics,DockId.Library) }
+            SmallAction(Icons.Rounded.QueueMusic,"Cola") { docking.toggle(DockId.Queue,DockId.Library) }
+        }, keys={event -> if(librarySearchFocused && event.key==Key.Spacebar) false else shortcuts(event)}) {
         LibrarySpace(player,prefs,menu,importer,account,cloud,login,downloads,palette,{openSave(it, "biblioteca")},{devicesOpen=true},libraryRequest,jump,artworkBackground,{ artworkBackground=it;kv.putString("artwork_background",it.toString()) },{librarySearchFocused=it},{ devices.requestAccount(); devicesOpen=true })
     }
     ModuleWindow("Guardar",rememberModuleState("save",380,540),savingTrack!=null,{savingTrack=null}) {
@@ -246,13 +274,15 @@ private fun SmallAction(icon: ImageVector, label: String, onClick: () -> Unit) {
 
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
-private fun ModuleWindow(title: String, state: WindowState, visible: Boolean, close: () -> Unit, pinned: Boolean = false, accent: Color = Color(0xFFE2EADB),
+internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, close: () -> Unit, pinned: Boolean = false, accent: Color = Color(0xFFE2EADB),
+    dock: DockSession? = null, dockId: DockId? = null,
     keys: (KeyEvent) -> Boolean = { false },
     immersive:Boolean=false, chrome:Boolean=true, hover:(Boolean)->Unit={}, minimum:DpSize=DpSize(260.dp,250.dp), resizeRequest:Int=0, requestedSize:DpSize?=null,
     backgroundArtwork:ImageBitmap?=null, actionsOnRight:Boolean=false, onWindow: (java.awt.Window) -> Unit = {}, extra: @Composable () -> Unit = {}, content: @Composable () -> Unit) {
-    if (!visible && title != "Reproductor") return
+    if (!visible && (title != "Reproductor" || dock != null)) return
     Window(onCloseRequest = close, state = state, visible = visible, title = "Oto · $title", undecorated = true, transparent = true, alwaysOnTop = pinned,
         icon = painterResource("oto-icon.png"), onKeyEvent = { if (keys(it)) true else if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { close(); true } else false }) {
+        BindDock(dock, dockId, state)
         val density = LocalDensity.current
         SideEffect { window.minimumSize = java.awt.Dimension(if(title == "Tu música") 640 else minimum.width.value.toInt(), if(title == "Tu música") 480 else minimum.height.value.toInt()); onWindow(window) }
         LaunchedEffect(resizeRequest) {
@@ -272,30 +302,52 @@ private fun ModuleWindow(title: String, state: WindowState, visible: Boolean, cl
             }
         }
         MaterialTheme(colorScheme = darkColorScheme(primary = accent, onPrimary = Color(0xFF101010), primaryContainer = Color(0xFF303630), secondary = accent, secondaryContainer = Color(0xFF303630), tertiary = accent, background = Color(0xFF171A18), surface = Color(0xFF171A18), surfaceVariant = Color(0xFF343A34), surfaceTint = Color.Transparent, surfaceContainerLowest = Color(0xFF101310), surfaceContainerLow = Color(0xFF1C201C), surfaceContainer = Color(0xFF222722), surfaceContainerHigh = Color(0xFF292F29), surfaceContainerHighest = Color(0xFF343A34)), typography = OtoTypography) {
-            Surface(Modifier.fillMaxSize().border(1.dp, Color.White.copy(alpha = .12f), RoundedCornerShape(22.dp)), color = Color(0xFF171A18), shape = RoundedCornerShape(22.dp)) {
+            Surface(Modifier.fillMaxSize().border(if((dock?.preview?.target == dockId || dock?.reorderPreview?.second == dockId) && dockId != null) 3.dp else 1.dp, if((dock?.preview?.target == dockId || dock?.reorderPreview?.second == dockId) && dockId != null) accent else Color.White.copy(alpha = .12f), RoundedCornerShape(22.dp)), color = Color(0xFF171A18), shape = RoundedCornerShape(22.dp)) {
                 val chromeAlpha by animateFloatAsState(if(chrome)1f else 0f,tween(180),label="windowChrome")
-                Box(Modifier.fillMaxSize().onPointerEvent(PointerEventType.Enter){hover(true)}.onPointerEvent(PointerEventType.Exit){hover(false)}) {
+                Box(Modifier.fillMaxSize().onPointerEvent(PointerEventType.Press) { if(dock != null && dockId != null) dock.raise(dockId) }.onPointerEvent(PointerEventType.Enter){hover(true)}.onPointerEvent(PointerEventType.Exit){hover(false)}) {
                     if(backgroundArtwork != null) PlayerBackdrop(backgroundArtwork)
+                    val feedback = remember { SnackbarHostState() }
+                    val feedbackOwner = dock?.layout?.bounds?.keys?.maxByOrNull { it.rank }
+                    val message = dock?.message.orEmpty()
+                    LaunchedEffect(message,feedbackOwner) {
+                        if(message.isNotBlank() && dockId == feedbackOwner) {
+                            feedback.showSnackbar(message)
+                            if(dock?.message == message) dock.message=""
+                        }
+                    }
+                    val insertion = dock?.reorderPreview?.takeIf { it.second == dockId }
+                    if(insertion != null) {
+                        val g=dock.layout.group(insertion.first)
+                        val root=g.members.indexOf(g.leader)
+                        val sameSide=(g.members.indexOf(insertion.first)<root)==(g.members.indexOf(insertion.second)<root)
+                        if(sameSide) Box(Modifier.align(if(insertion.third) Alignment.CenterStart else Alignment.CenterEnd).width(3.dp).fillMaxHeight().background(accent))
+                    }
                     Box(Modifier.fillMaxSize().padding(top=if(immersive)0.dp else 44.dp)) { content() }
                     if(title=="Tu música") Canvas(Modifier.align(Alignment.TopStart).padding(start=12.dp,top=20.dp).size(48.dp)) {
                         drawCircle(Color.White,radius=size.minDimension*.47f,center=Offset(size.width*.5f,size.height*.5f),style=Stroke(width=size.minDimension*.045f))
                         drawCircle(Color.White,radius=size.minDimension*.17f,center=Offset(size.width*.33f,size.height*.33f))
                     }
-                    WindowDraggableArea(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(if(immersive)36.dp else 44.dp)) {
+                    DockDragArea(dock, dockId, Modifier.align(Alignment.TopCenter).fillMaxWidth().height(if(immersive)36.dp else 44.dp)) {
                         BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer {alpha=chromeAlpha}) {
                             val showTitle=!immersive && title != "Tu música" && title != "Letra" && title != "Cola" && maxWidth>200.dp
-                            Row(Modifier.fillMaxSize().background(Color.Transparent).padding(start=if(showTitle)18.dp else if(title=="Letra")12.dp else 0.dp,end=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.End) {
+                            Row(Modifier.fillMaxSize().background(Color.Transparent).padding(start=if(title=="Tu música")72.dp else if(showTitle)18.dp else if(title=="Letra")12.dp else 0.dp,end=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.End) {
                                 if(showTitle)Text(title,Modifier.weight(1f),style=OtoType.rowSub,color=Color.White.copy(alpha=.4f))
                                 if(!showTitle && actionsOnRight) Spacer(Modifier.weight(1f))
                                 if(chrome) {extra()}
                                 if(!showTitle && !actionsOnRight) Spacer(Modifier.weight(1f))
+                                if(chrome && dock != null && dockId != null) {
+                                    if(dock.layout.group(dockId).leader == dockId) Text("·",color=accent,modifier=Modifier.padding(horizontal=4.dp))
+                                    if(dock.supportsMaximize) SmallAction(if(dock.layout.group(dockId).maximized) Icons.Rounded.FilterNone else Icons.Rounded.CropSquare,
+                                        if(dock.layout.group(dockId).maximized) "Restaurar conjunto" else "Maximizar conjunto") { dock.maximize(dockId) }
+                                }
                                 if(chrome) SmallAction(Icons.Rounded.Close,"Cerrar $title",close)
                             }
                         }
                     }
                     Box(Modifier.align(Alignment.BottomEnd).size(16.dp).graphicsLayer{alpha=if(immersive)chromeAlpha else .5f}.pointerInput(minimum) {
-                        detectDragGestures {change,delta -> change.consume();with(density){state.size=DpSize((state.size.width+delta.x.toDp()).coerceIn(if(title=="Tu música")640.dp else minimum.width,2400.dp),(state.size.height+delta.y.toDp()).coerceIn(if(title=="Tu música")480.dp else minimum.height,1600.dp))}}
+                        detectDragGestures {change,delta -> change.consume();if(dock != null && dockId != null) { val r=dock.layout.bounds.getValue(dockId); with(density) { dock.layout.resize(dockId, r.width+delta.x.toDp().value.toInt(), r.height+delta.y.toDp().value.toInt()) } } else with(density){state.size=DpSize((state.size.width+delta.x.toDp()).coerceIn(if(title=="Tu música")640.dp else minimum.width,2400.dp),(state.size.height+delta.y.toDp()).coerceIn(if(title=="Tu música")480.dp else minimum.height,1600.dp))}}
                     }) {Text("⌟",color=Color.White.copy(alpha=.25f))}
+                    if(dockId == feedbackOwner && dock != null) OtoSnackbarHost(feedback,Modifier.align(Alignment.BottomCenter).padding(18.dp))
                 }
             }
         }

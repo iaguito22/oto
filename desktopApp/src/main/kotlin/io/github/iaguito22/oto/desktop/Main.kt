@@ -26,6 +26,11 @@ import java.util.Locale
 
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
+    if (System.getenv("OTO_DOCK_HARNESS") == "1") {
+        prepareDesktopWindows()
+        application { DockHarness() }
+        return
+    }
     val instance = DesktopInstance.acquire() ?: return
     Runtime.getRuntime().addShutdownHook(Thread { instance.close() })
     Timber.plant(Timber.DebugTree())
@@ -70,10 +75,14 @@ fun main() {
     cloud.start()
     appScope.launch(Dispatchers.IO) { OtoDirs.trimDj(File(OtoDirs.cacheDir, "dj")) }
 
-    if (System.getenv("HYPRLAND_INSTANCE_SIGNATURE") != null) {
-        runCatching { ProcessBuilder("hyprctl", "eval", "hl.window_rule({ name = \"oto-modular\", match = { class = \"io-github-iaguito22-oto-desktop-MainKt\" }, float = true })").start().waitFor() }
-    }
+    prepareDesktopWindows()
     application {
         ModularDesktop(player, prefs, menu, importer, account, cloud, login, downloads, lyricsStore, ::exitApplication)
+    }
+}
+
+private fun prepareDesktopWindows() {
+    if (System.getenv("HYPRLAND_INSTANCE_SIGNATURE") != null) {
+        runCatching { ProcessBuilder("hyprctl", "eval", "hl.window_rule({ name = \"oto-modular\", match = { class = \"io-github-iaguito22-oto-desktop-MainKt\" }, float = true })").start().waitFor() }
     }
 }
