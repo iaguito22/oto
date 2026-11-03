@@ -53,6 +53,10 @@ import java.awt.GraphicsEnvironment
 fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Prefs, menu: MenuController,
     importer: Importer, account: Account, cloud: Cloud, login: BrowserLogin, downloads: DesktopDownloads,
     lyricsStore: LyricsStore, quit: () -> Unit) {
+    // Compose termina su sesión al desmontar la última Window. La bandeja usa AWT,
+    // así que necesitamos una ventana invisible que mantenga la sesión hasta Salir.
+    Window(onCloseRequest = quit, visible = false, title = "Oto · Sesión",
+        state = rememberWindowState(width = 1.dp, height = 1.dp), undecorated = true) { }
     val kv = remember { OtoDirs.keyValue("modular_windows") }
     val welcomePrefs = remember { OtoDirs.keyValue("desktop_welcome") }
     var welcomeOpen by remember { mutableStateOf(welcomePrefs.getString("seen_version") != "1") }
