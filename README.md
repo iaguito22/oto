@@ -48,7 +48,20 @@ Las dos aplicaciones pueden vincularse en la red local desde «Dispositivos». L
 
 ## Instalar
 
-Para Android, descarga el APK de la [última versión](https://github.com/iaguito22/oto/releases/latest) y ábrelo en el móvil. Android 13 o más. No está en Play Store.
+Descargas de [Oto 1.2.3](https://github.com/iaguito22/oto/releases/tag/v1.2.3):
+
+| Sistema | Paquete |
+|---|---|
+| Windows x64 | MSI con instalador de Oto |
+| Ubuntu/Debian amd64 | DEB; instalar con `sudo apt install ./oto_1.2.3_amd64.deb` |
+| Arch Linux x86_64 | Paquete nativo; instalar con `sudo pacman -U ./oto-1.2.3-1-x86_64.pkg.tar.zst` |
+| Android 13 o superior | APK optimizado `phone`, para el paquete `io.github.iaguito22.oto.debug` |
+
+El APK `phone` conserva la firma de las instalaciones personales de esa variante. El APK público anterior, sin sufijo `.debug`, tiene otra firma: consultar las notas de la release antes de actualizar y no desinstalarlo para sortear diferencias de firma. No está en Play Store.
+
+Los paquetes Linux incluyen Java y dependen de FFmpeg. El MSI de Windows todavía no está firmado con Authenticode, por lo que SmartScreen puede mostrar un aviso de reputación. Los hashes se adjuntan a la release. Véase [Publicación](docs/PUBLICACION.md) para compilar paquetes y mantener las identidades de firma.
+
+La rama común de desarrollo y publicación para todos los sistemas es `main`.
 
 ## Hecho con
 

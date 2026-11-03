@@ -1,0 +1,31 @@
+name: Comprobar paquete Arch
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Etiqueta de la release
+        required: true
+        default: v1.2.3
+permissions:
+  contents: write
+jobs:
+  arch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Descargar paquete
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mkdir packages
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.pkg.tar.zst' --dir packages
+      - name: Instalar con pacman en Arch Linux
+        run: |
+          docker run --rm -v "$PWD/packages:/packages:ro" archlinux:base bash -euc '
+            pacman -Sy --noconfirm
+            pacman -U --noconfirm /packages/*.pkg.tar.zst
+            /opt/oto/runtime/bin/java -version
+            test -x /opt/oto/bin/Oto
+            test -L /usr/bin/oto
+            pacman -Qk oto
+          '
