@@ -47,7 +47,7 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
                     Spacer(Modifier.weight(1f))
                     Box {
                         HoverAction(MobileIcons.moreHoriz,"Opciones de la lista",onClick={menuOpen=true})
-                        DropdownMenu(menuOpen,{menuOpen=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(230.dp)) {
+                        LibraryDropdownMenu(menuOpen,{menuOpen=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(230.dp)) {
                             actions.forEach { action -> DropdownMenuItem(text={Text(action.label,style=OtoType.rowSub,color=if(action.label.startsWith("Eliminar"))Danger else Color.White)},onClick={menuOpen=false;action.onClick()}) }
                         }
                     }
@@ -85,7 +85,7 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
                 if(h.id==currentId)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=palette.primary)
                 Box {
                     HoverAction(MobileIcons.moreHoriz,"Opciones de ${h.title}",onClick={songMenu=true})
-                    DropdownMenu(songMenu,{songMenu=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(240.dp)) {
+                    LibraryDropdownMenu(songMenu,{songMenu=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(240.dp)) {
                         @Composable fun Action(label:String,click:()->Unit){DropdownMenuItem(text={Text(label,style=OtoType.rowSub)},onClick={songMenu=false;click()})}
                         Action("Reproducir a continuación"){player.playNext(h.toSong())}
                         Action("Guardar en…"){onSave(h)}

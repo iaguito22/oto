@@ -7,6 +7,7 @@ import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.OtoDirs
+import io.github.iaguito22.oto.desktop.isWindowsDesktop
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.QualityMode
 import io.github.iaguito22.oto.dj.Dj
@@ -33,6 +34,13 @@ import io.github.iaguito22.oto.toSong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,8 +49,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.PI
+import kotlin.math.sin
+import kotlin.math.cos
 
 /**
  * Implementación de [OtoPlayer] para Linux y Windows.
@@ -107,20 +119,37 @@ class DesktopPlayerConnection(
     private var resolveJob: Job? = null
     private var lyricsJob: Job? = null
 
-    private val engine = DesktopAudioEngine(
-        cacheDir = File(OtoDirs.cacheDir, "audio"),
-        scope = scope,
-        onEnded = { scope.launch { onTrackFinished(completedNaturally = true) } },
-        onError = { err ->
-            Timber.w(err, "Fallo en pista actual")
-            scope.launch { _state.value = _state.value.copy(playing = false, buffering = false, error = "No se pudo reproducir. Pulsa para reintentar.") }
-        },
-    )
+    private val activeDeck = MutableStateFlow<DesktopAudioEngine?>(null)
+    private var engine: DesktopAudioEngine
+        get() = requireNotNull(activeDeck.value)
+        set(value) { activeDeck.value=value }
+    private fun createDeck(cacheName:String): DesktopAudioEngine {
+        lateinit var deck: DesktopAudioEngine
+        deck=DesktopAudioEngine(File(OtoDirs.cacheDir,cacheName),scope,
+            onEnded={ scope.launch { if(activeDeck.value === deck) onTrackFinished(completedNaturally=true) } },
+            onError={ err -> scope.launch { if(activeDeck.value === deck) { Timber.w(err,"Fallo en pista actual");_state.value=_state.value.copy(playing=false,buffering=false,error="No se pudo reproducir. Pulsa para reintentar.") } } })
+        return deck
+    }
+    private val decks = listOf(createDeck("audio"),createDeck("audio-crossfade"))
+    private data class PreparedNext(val currentId:String,val next:SongItem,val deck:DesktopAudioEngine,val quality:Quality?,val gain:Float)
+    @Volatile private var preparedNext:PreparedNext? = null
+    @Volatile private var preparingKey:Pair<String,String>? = null
+    @Volatile private var preparingDeck:DesktopAudioEngine? = null
+    private val preparationGeneration=AtomicLong()
+    @Volatile private var preparation:Job? = null
+    @Volatile private var fading:Job? = null
+    @Volatile private var outgoing:DesktopAudioEngine? = null
+    internal val crossfadeActive: Boolean get() = outgoing != null
+    @Volatile private var fadeSeconds = 0
+    @Volatile private var fadeIn = 1f
+    @Volatile private var fadeOut = 0f
+    @Volatile private var outgoingGain = 1f
 
     init {
+        engine=decks.first()
         engine.setGain(_volume.value)
         scope.launch {
-            engine.state.collect { es ->
+            activeDeck.filterNotNull().collectLatest { active -> active.state.collect { es ->
                 _positionMs.value = es.positionMs
                 val cur = _state.value
                 _state.value = cur.copy(
@@ -128,7 +157,7 @@ class DesktopPlayerConnection(
                     buffering = resolvingTrack || es.buffering,
                     durationMs = if (es.durationMs > 0L) es.durationMs else cur.durationMs,
                 )
-            }
+            } }
         }
         scope.launch {
             prefs.shuffle.collect { _shuffle.value = it }
@@ -136,9 +165,129 @@ class DesktopPlayerConnection(
         scope.launch {
             prefs.loop.collect { _loop.value = it }
         }
+        if(isWindowsDesktop) {
+            scope.launch { prefs.crossfade.collect { fadeSeconds=it.coerceAtLeast(0); if(fadeSeconds==0) cancelCrossfade() } }
+            scope.launch { watchCrossfade() }
+        }
     }
 
     fun beat(): Float = engine.beat(position())
+
+    /** Mantiene el volumen del usuario y la normalización separados de la curva del fundido. */
+    private fun applyDeckGains() {
+        engine.setGain((_volume.value * currentLoudnessGain * fadeIn).coerceIn(0f,2f))
+        outgoing?.setGain((_volume.value * outgoingGain * fadeOut).coerceIn(0f,2f))
+    }
+
+    private fun cancelCrossfade() {
+        preparationGeneration.incrementAndGet()
+        fading?.cancel(); fading=null
+        preparation?.cancel(); preparation=null
+        preparingDeck?.takeIf { it !== activeDeck.value && it !== outgoing }?.stop(); preparingDeck=null
+        preparedNext?.deck?.takeIf { it !== activeDeck.value }?.stop()
+        preparedNext=null; preparingKey=null
+        outgoing?.takeIf { it !== activeDeck.value }?.stop(); outgoing=null
+        fadeIn=1f;fadeOut=0f
+        applyDeckGains()
+    }
+
+    /** Prepara la siguiente canción con antelación; si no llega, la transición normal sigue intacta. */
+    private suspend fun watchCrossfade() {
+        while (scope.coroutineContext[Job]?.isActive != false) {
+            val current = songQueue.getOrNull(currentIndex)
+            val next = songQueue.getOrNull(currentIndex+1)
+            val state = engine.state.value
+            val length = fadeSeconds * 1000L
+            val key = if(current!=null && next!=null) current.id to next.id else null
+            if(length <= 0 || key==null || !state.playing || state.buffering || state.durationMs < length*3) {
+                if(fading?.isActive != true && (preparedNext!=null || preparation?.isActive==true)) cancelCrossfade()
+            } else if(fading?.isActive != true) {
+                if(preparingKey != key) {
+                    cancelCrossfade()
+                    preparingKey=key
+                    val generation=preparationGeneration.get()
+                    preparation=scope.launch(Dispatchers.IO) { prepareNext(current!!,next!!,generation) }
+                }
+                val candidate=preparedNext
+                if(candidate!=null && candidate.currentId==current!!.id && candidate.next.id==next!!.id && state.durationMs-state.positionMs <= length) {
+                    fading=scope.launch { performCrossfade(candidate,length) }
+                }
+            }
+            delay(100)
+        }
+    }
+
+    private suspend fun prepareNext(current:SongItem,next:SongItem,generation:Long) {
+        val deck=decks.first { it !== engine }
+        preparingDeck=deck
+        deck.stop()
+        try {
+            val duration=(next.duration ?: 0).takeIf { it>0 }?.times(1000L) ?: 0L
+            val local=downloads.localFile(next.id)
+            val quality:Quality?
+            val gain:Float
+            if(local!=null) {
+                quality=downloads.quality(next.id); gain=1f
+                if(!deck.loadLocalFile(local,duration,playWhenReady=false)) return
+            } else {
+                val tier=if(prefs.dataSaver.first() && prefs.quality.first()!=QualityMode.Max) Tier.Low else Tier.High
+                val stream=InnerTubeXPlayer.resolve(next.id,tier).getOrThrow()
+                currentCoroutineContext().ensureActive()
+                quality=stream.quality
+                gain=stream.loudnessDb?.let { min(1f,10f.pow(-it.toFloat()/20f)) } ?: 1f
+                deck.loadAndPlay(tier.key(next.id),stream.url,stream.headers,stream.contentLength,duration,stream.quality.codec,playWhenReady=false)
+            }
+            val ready=withTimeoutOrNull(90_000) { deck.state.first { !it.buffering && it.bufferedFraction>=1f } } != null
+            if(ready && preparationGeneration.get()==generation && preparingKey==(current.id to next.id) && activeDeck.value !== deck) preparedNext=PreparedNext(current.id,next,deck,quality,gain)
+        } catch(cancelled:kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch(error:Exception) { Timber.w(error,"No se pudo preparar la siguiente canción para el fundido") }
+        finally {
+            if(preparationGeneration.get()==generation) {
+                if(preparedNext?.deck !== deck && activeDeck.value !== deck && outgoing !== deck) deck.stop()
+                if(preparingDeck === deck) preparingDeck=null
+            }
+        }
+    }
+
+    private suspend fun performCrossfade(next:PreparedNext,length:Long) {
+        val old=engine
+        val originalIndex=currentIndex
+        val oldGain=currentLoudnessGain
+        val deck=next.deck
+        deck.setGain(0f)
+        deck.resume()
+        val started=withTimeoutOrNull(1500) { deck.state.first { it.playing && !it.buffering && it.positionMs>0 } } != null
+        if(!started || engine !== old || !old.state.value.playing || songQueue.getOrNull(originalIndex+1)?.id != next.next.id || currentIndex!=originalIndex) {
+            deck.stop(); preparedNext=null; return
+        }
+        recordPlayProgress(completed=true)
+        outgoing=old;outgoingGain=oldGain;fadeOut=1f;fadeIn=0f
+        preparedNext=null;preparation=null;preparingKey=null
+        currentIndex=originalIndex+1
+        currentLoudnessGain=next.gain
+        engine=deck
+        val song=next.next
+        _currentQuality.value=next.quality
+        next.quality?.let { StreamInfo.put(song.id,it) }
+        _state.value=NowPlaying(id=song.id,title=song.title,artist=song.artists.joinToString { it.name },artists=song.artists.map { it.name to it.id },album=song.album?.name,artwork=song.thumbnail,playing=true,buffering=false,durationMs=deck.state.value.durationMs,upNext=(songQueue.size-1-currentIndex).coerceAtLeast(0),index=currentIndex)
+        syncQueueFlow()
+        scope.launch { prefs.addHeard(song.toHeard()) }
+        fetchLyrics(song)
+        maybeReplenishQueue()
+        val start=System.nanoTime()
+        try {
+            while(true) {
+                val p=((System.nanoTime()-start)/1_000_000.0/length).toFloat().coerceIn(0f,1f)
+                fadeOut=cos(p*PI.toFloat()/2);fadeIn=sin(p*PI.toFloat()/2)
+                applyDeckGains()
+                if(p>=1f || engine !== deck || !deck.state.value.playing) break
+                delay(16)
+            }
+        } finally {
+            if(outgoing===old) { old.stop();outgoing=null }
+            if(activeDeck.value===deck) { fadeIn=1f;fadeOut=0f;applyDeckGains() }
+        }
+    }
 
     override fun position(): Long = _positionMs.value
 
@@ -173,6 +322,7 @@ class DesktopPlayerConnection(
     }
 
     override fun playNext(song: SongItem) {
+        cancelCrossfade()
         if (songQueue.isEmpty()) {
             play(song)
             return
@@ -193,9 +343,9 @@ class DesktopPlayerConnection(
             else -> null
         }
         originalQueue = songs.toList()
-        val ordered = if (start == null && _shuffle.value) songs.shuffled() else songs
+        val (ordered, index) = playbackOrder(songs, start, _shuffle.value)
         songQueue = ordered.toMutableList()
-        currentIndex = (start ?: 0).coerceIn(0, songQueue.lastIndex)
+        currentIndex = index
         syncQueueFlow()
         startCurrentTrack()
     }
@@ -208,9 +358,9 @@ class DesktopPlayerConnection(
         radio = null
         _source.value = Source("DESDE TU LISTA", list.name, local = list.id)
         originalQueue = items.toList()
-        val ordered = if (start == null && _shuffle.value) items.shuffled() else items
+        val (ordered, index) = playbackOrder(items, start, _shuffle.value)
         songQueue = ordered.toMutableList()
-        currentIndex = (start ?: 0).coerceIn(0, songQueue.lastIndex)
+        currentIndex = index
         syncQueueFlow()
         startCurrentTrack()
     }
@@ -250,6 +400,7 @@ class DesktopPlayerConnection(
 
     override fun move(from: Int, to: Int) {
         if (from !in songQueue.indices || to !in songQueue.indices || from == to) return
+        cancelCrossfade()
         val item = songQueue.removeAt(from)
         songQueue.add(to, item)
         currentIndex = when (currentIndex) {
@@ -266,13 +417,31 @@ class DesktopPlayerConnection(
     }
 
     override fun remove(index: Int) {
-        if (index !in songQueue.indices || index == currentIndex) return
-        songQueue.removeAt(index)
+        if (index !in songQueue.indices) return
+        cancelCrossfade()
+        val removingCurrent = index == currentIndex
+        val wasPlaying = _state.value.playing
+        if (removingCurrent) recordPlayProgress(completed = false)
+        val removed = songQueue.removeAt(index)
+        originalQueue = originalQueue?.toMutableList()?.apply { remove(removed) }
         if (index < currentIndex) currentIndex--
+        if (songQueue.isEmpty()) {
+            resolveJob?.cancel(); lyricsJob?.cancel(); resolvingTrack = false
+            engine.stop()
+            currentIndex = -1
+            _state.value = NowPlaying()
+            _lyrics.value = null
+            _lyricsLoading.value = false
+            _source.value = null
+        } else if (removingCurrent) {
+            currentIndex = currentIndex.coerceAtMost(songQueue.lastIndex)
+            startCurrentTrack(playWhenReady = wasPlaying)
+        }
         syncQueueFlow()
     }
 
     fun clearQueue() {
+        cancelCrossfade()
         val cur = currentIndex
         if (cur in songQueue.indices) {
             val curSong = songQueue[cur]
@@ -283,6 +452,7 @@ class DesktopPlayerConnection(
             songQueue.clear()
             currentIndex = -1
         }
+        originalQueue = songQueue.toList()
         syncQueueFlow()
     }
 
@@ -290,7 +460,7 @@ class DesktopPlayerConnection(
         val clamped = vol.coerceIn(0f, 1f)
         _volume.value = clamped
         desktopKv.putString("volume", clamped.toString())
-        engine.setGain(currentLoudnessGain * clamped)
+        applyDeckGains()
     }
 
     fun adjustVolume(delta: Float) {
@@ -298,6 +468,7 @@ class DesktopPlayerConnection(
     }
 
     override fun setShuffle(on: Boolean) {
+        cancelCrossfade()
         val changed = _shuffle.value != on
         _shuffle.value = on
         if (changed && currentIndex in songQueue.indices) {
@@ -324,7 +495,10 @@ class DesktopPlayerConnection(
     override fun toggle() {
         val st = _state.value
         if (st.id == null) return
-        if (st.buffering && resolvingTrack) {
+        cancelCrossfade()
+        if (st.error != null) {
+            startCurrentTrack()
+        } else if (st.buffering && resolvingTrack) {
             resolveJob?.cancel()
             resolvingTrack = false
             engine.stop()
@@ -341,15 +515,18 @@ class DesktopPlayerConnection(
     }
 
     override fun seekTo(ms: Long) {
+        cancelCrossfade()
         engine.seekTo(ms)
     }
 
     override fun next() {
+        cancelCrossfade()
         recordPlayProgress(completed = false)
         advanceToNext()
     }
 
     override fun previous() {
+        cancelCrossfade()
         if (restarts()) {
             engine.seekTo(0L)
             return
@@ -431,6 +608,7 @@ class DesktopPlayerConnection(
 
     private fun startCurrentTrack(playWhenReady: Boolean = true, initialPositionMs: Long = 0L) {
         val song = songQueue.getOrNull(currentIndex) ?: return
+        cancelCrossfade()
         resolveJob?.cancel()
         engine.stop()
         _currentQuality.value = null
@@ -506,6 +684,10 @@ class DesktopPlayerConnection(
         _lyricsLoading.value = true
         lyricsJob = scope.launch(Dispatchers.IO) {
             val artist = song.artists.joinToString { it.name }
+            if ((song.duration ?: 0) <= 0) {
+                kotlinx.coroutines.withTimeoutOrNull(3000) { _state.first { it.id != song.id || it.durationMs > 0 } }
+                if (_state.value.id != song.id) return@launch
+            }
             val durMs = ((song.duration ?: 0).takeIf { it > 0 }?.times(1000L)) ?: _state.value.durationMs
             val query = LyricsQuery(
                 id = song.id,
@@ -565,5 +747,6 @@ class DesktopPlayerConnection(
             )
         }
         _previousEntry.value = if (currentIndex > 0) _queue.value.getOrNull(currentIndex - 1) else null
+        _state.value = _state.value.copy(index = currentIndex, upNext = (songQueue.size - currentIndex - 1).coerceAtLeast(0))
     }
 }

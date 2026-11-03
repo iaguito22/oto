@@ -11,6 +11,10 @@ import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -86,7 +90,23 @@ class LibraryReplica(private val prefs: Prefs, private val file: File) {
         }
     }
     private var persisted = ""
-    private fun persist() { if(!needsPersist)return;val text=records.toString();if(text==persisted){needsPersist=false;return};file.parentFile?.mkdirs();val tmp=File(file.path+".tmp");tmp.writeText(text);check(tmp.renameTo(file));persisted=text;needsPersist=false }
+    private fun persist() {
+        if (!needsPersist) return
+        val text = records.toString()
+        if (text == persisted) { needsPersist = false; return }
+        file.parentFile?.mkdirs()
+        val tmp = File(file.path + ".tmp")
+        tmp.writeText(text)
+        // renameTo no reemplaza un destino existente en Windows. Conservar la copia
+        // anterior hasta que la nueva esté escrita y sustituirla en una sola operación.
+        try {
+            Files.move(tmp.toPath(), file.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(tmp.toPath(), file.toPath(), REPLACE_EXISTING)
+        }
+        persisted = text
+        needsPersist = false
+    }
     suspend fun export():JSONObject=withContext(Dispatchers.IO) { lock.withLock { capture();persist();JSONObject(entries.toString()) } }
     suspend fun digest():String=withContext(Dispatchers.IO) { lock.withLock {
         capture();persist()

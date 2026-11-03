@@ -28,6 +28,38 @@ class DockLayoutTest {
         assertEquals(600,l.bounds.getValue(DockId.Library).height)
         assertJoined(l,DockId.Player)
     }
+    @Test fun openingShorterLibraryKeepsExistingGroupHeight() {
+        val l=DockLayout()
+        l.create(DockId.Player,DockRect(20,20,320,700))
+        l.create(DockId.Library,DockRect(340,20,640,480))
+        assertTrue(l.dock(DockId.Library,DockId.Player,false,DockRect(0,0,1600,900)))
+        assertEquals(700,l.bounds.getValue(DockId.Library).height)
+        assertEquals(700,l.bounds.getValue(DockId.Player).height)
+    }
+    @Test fun attachingTallerQueueKeepsExistingGroupHeight() {
+        val l=DockLayout()
+        l.create(DockId.Library,DockRect(20,20,640,530))
+        l.create(DockId.Queue,DockRect(660,20,420,694))
+        assertTrue(l.dock(DockId.Queue,DockId.Library,false,DockRect(0,0,1600,900)))
+        assertEquals(530,l.bounds.getValue(DockId.Library).height)
+        assertEquals(530,l.bounds.getValue(DockId.Queue).height)
+        assertJoined(l,DockId.Library)
+    }
+    @Test fun verticalResizeTracksTopEdgeAndKeepsGroupAligned() {
+        val l=layout()
+        l.resize(DockId.Player,320,650,110)
+        assertEquals(110,l.bounds.getValue(DockId.Player).y)
+        assertEquals(110,l.bounds.getValue(DockId.Library).y)
+        assertEquals(650,l.bounds.getValue(DockId.Library).height)
+        assertJoined(l,DockId.Player)
+    }
+    @Test fun secondaryCanSwapWithPrincipal() {
+        val l=layout()
+        l.reorder(DockId.Player,DockId.Library)
+        assertEquals(listOf(DockId.Player,DockId.Library),l.group(DockId.Library).members)
+        assertEquals(DockId.Library,l.group(DockId.Player).leader)
+        assertJoined(l,DockId.Library)
+    }
     @Test fun detachCarriesOutwardDependents() {
         val l=layout()
         l.create(DockId.Queue,DockRect(0,0,420,580))
@@ -45,9 +77,23 @@ class DockLayoutTest {
         assertEquals(860,l.bounds.getValue(DockId.Library).width)
         assertJoined(l,DockId.Library)
         l.maximize(DockId.Library,DockRect(0,0,1600,900))
-        assertEquals(960,l.bounds.getValue(DockId.Library).width)
+        assertEquals(860,l.bounds.getValue(DockId.Library).width)
         assertEquals(320,l.bounds.getValue(DockId.Player).width)
         assertJoined(l,DockId.Library)
+    }
+    @Test fun restoringAfterOpeningLyricsKeepsEveryMemberOnScreen() {
+        val l = layout()
+        val area = DockRect(0, 0, 1536, 816)
+        assertTrue(l.maximize(DockId.Library, area))
+        assertTrue(l.open(DockId.Lyrics, DockId.Library, area))
+        assertTrue(l.maximize(DockId.Library, area))
+        val g = l.group(DockId.Library)
+        assertFalse(g.maximized)
+        assertJoined(l, DockId.Library)
+        assertEquals(736, l.bounds.getValue(DockId.Library).width)
+        assertEquals(320, l.bounds.getValue(DockId.Player).width)
+        assertEquals(480, l.bounds.getValue(DockId.Lyrics).width)
+        assertTrue(g.members.all { l.bounds.getValue(it).let { r -> r.x >= 0 && r.x + r.width <= area.width } })
     }
     @Test fun reducesOversizedSecondaryBeforeLibrary() {
         val l=layout()
@@ -103,13 +149,13 @@ class DockLayoutTest {
         assertEquals(-1920,l.bounds.getValue(DockId.Library).x)
         assertEquals(0,l.bounds.getValue(DockId.Library).y)
     }
-    @Test fun reorderInsertsOnSameSideWithoutMovingChief() {
+    @Test fun reorderSwapsOnSameSideWithoutMovingChief() {
         val l=layout()
         l.create(DockId.Lyrics,DockRect(0,0,480,740));l.dock(DockId.Lyrics,DockId.Player,false)
         l.create(DockId.Queue,DockRect(0,0,420,740));l.dock(DockId.Queue,DockId.Lyrics,false)
         val chief=l.bounds.getValue(DockId.Library)
-        l.reorder(DockId.Player,DockId.Queue,false)
-        assertEquals(listOf(DockId.Library,DockId.Lyrics,DockId.Queue,DockId.Player),l.group(DockId.Library).members)
+        l.reorder(DockId.Player,DockId.Queue)
+        assertEquals(listOf(DockId.Library,DockId.Queue,DockId.Lyrics,DockId.Player),l.group(DockId.Library).members)
         assertEquals(chief,l.bounds[DockId.Library]);assertJoined(l,DockId.Library)
     }
     @Test fun reorderAcrossChiefSwapsAndRecalculatesDependents() {
@@ -127,7 +173,7 @@ class DockLayoutTest {
         val l=layout()
         l.create(DockId.Lyrics,DockRect(0,0,480,740));l.dock(DockId.Lyrics,DockId.Player,false)
         l.create(DockId.Queue,DockRect(0,0,420,740));l.dock(DockId.Queue,DockId.Lyrics,false)
-        l.reorder(DockId.Lyrics,DockId.Player,true)
+        l.reorder(DockId.Lyrics,DockId.Player)
         l.detach(DockId.Player)
         assertEquals(listOf(DockId.Player,DockId.Queue),l.group(DockId.Player).members)
         assertEquals(listOf(DockId.Library,DockId.Lyrics),l.group(DockId.Library).members)

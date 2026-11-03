@@ -97,9 +97,9 @@ class BrowserLogin(private val account: Account, private val scope: CoroutineSco
     }
 
     /** Abre Chrome con un perfil temporal; si no hay Chrome, cae al flujo de extensión/consola. */
-    fun start() {
+    fun start(defaultBrowser: Boolean = false) {
         cancel()
-        val chromePath = findChrome()
+        val chromePath = if (defaultBrowser) null else findChromiumBrowser()
         if (chromePath == null) {
             startBrowserFallback()
             return
@@ -160,6 +160,7 @@ class BrowserLogin(private val account: Account, private val scope: CoroutineSco
         var port = 0
         var tries = 0
         while (port == 0 && tries < 80) {
+            if (!process.isAlive) { fail("El navegador se cerró antes de iniciar sesión."); return }
             val file = File(dir, "DevToolsActivePort")
             if (file.exists()) port = file.readLines().firstOrNull()?.toIntOrNull() ?: 0
             if (port == 0) delay(250)
@@ -183,6 +184,7 @@ class BrowserLogin(private val account: Account, private val scope: CoroutineSco
         val deadline = System.currentTimeMillis() + TIMEOUT_MS
         while (System.currentTimeMillis() < deadline) {
             if (_state.value !is LoginState.Waiting) return
+            if (!process.isAlive) { fail("El navegador se cerró antes de iniciar sesión."); return }
             val info = evaluate(client)
             if (info != null && info.optString("host") == "music.youtube.com" && info.optString("v").isNotEmpty()) {
                 val cookies = client.call("Network.getAllCookies").optJSONArray("cookies")
@@ -253,43 +255,6 @@ class BrowserLogin(private val account: Account, private val scope: CoroutineSco
             values[cookie.optString("name")] = cookie.optString("value")
         }
         return values.entries.joinToString("; ") { "${it.key}=${it.value}" }
-    }
-
-    private fun findChrome(): String? {
-        val configured = System.getenv("OTO_CHROME")?.takeIf { it.isNotBlank() && File(it).canExecute() }
-        if (configured != null) return configured
-        val os = System.getProperty("os.name").lowercase()
-        val candidates = when {
-            os.contains("win") -> listOf(
-                "${System.getenv("PROGRAMFILES")}\\Google\\Chrome\\Application\\chrome.exe",
-                "${System.getenv("PROGRAMFILES(X86)")}\\Google\\Chrome\\Application\\chrome.exe",
-                "${System.getenv("LOCALAPPDATA")}\\Google\\Chrome\\Application\\chrome.exe",
-                "${System.getenv("PROGRAMFILES")}\\Microsoft\\Edge\\Application\\msedge.exe",
-                "${System.getenv("LOCALAPPDATA")}\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
-            )
-            os.contains("mac") -> listOf(
-                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                "/Applications/Chromium.app/Contents/MacOS/Chromium",
-                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-            )
-            else -> listOf(
-                "/usr/bin/google-chrome-stable",
-                "/usr/bin/google-chrome",
-                "/usr/bin/chromium",
-                "/usr/bin/chromium-browser",
-                "/usr/bin/brave-browser",
-                "/usr/bin/microsoft-edge",
-                "/snap/bin/chromium",
-            )
-        }
-        candidates.firstOrNull { it.isNotBlank() && File(it).canExecute() }?.let { return it }
-        for (name in listOf("google-chrome-stable", "google-chrome", "chromium", "chromium-browser", "brave-browser", "microsoft-edge")) {
-            val path = runCatching {
-                ProcessBuilder("which", name).start().inputStream.bufferedReader().readText().trim()
-            }.getOrNull()
-            if (!path.isNullOrBlank() && File(path).canExecute()) return path
-        }
-        return null
     }
 
     fun cancel() {

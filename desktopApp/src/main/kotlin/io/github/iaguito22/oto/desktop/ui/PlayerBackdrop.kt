@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +16,8 @@ import org.jetbrains.skia.Image as SkiaImage
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import javax.imageio.ImageIO
+import kotlin.math.ceil
+import kotlin.math.abs
 
 /** Las mismas tres pasadas y velo que el fondo de la pantalla del móvil. */
 internal suspend fun blurredBackdrop(image: ImageBitmap): ImageBitmap = withContext(Dispatchers.Default) {
@@ -49,9 +52,19 @@ internal suspend fun blurredBackdrop(image: ImageBitmap): ImageBitmap = withCont
 }
 
 @Composable
-internal fun PlayerBackdrop(image: ImageBitmap) {
+internal fun PlayerBackdrop(image: ImageBitmap, opacity: Float = 1f, extended: Boolean = false) {
+    Box(Modifier.fillMaxSize().graphicsLayer { alpha = opacity.coerceIn(0f,1f) }) {
     Crossfade(image, animationSpec=tween(800),label="backdrop") { bmp ->
-        Image(bmp,null,Modifier.fillMaxSize().graphicsLayer { scaleX=1.35f;scaleY=1.35f },contentScale=ContentScale.Crop,colorFilter=ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) }))
+        val colors = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1.4f) })
+        if (extended) BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment=Alignment.Center) {
+            val copies = ceil((maxWidth / maxHeight) / 2f).toInt()
+            for (index in -copies..copies) {
+                Image(bmp,null,Modifier.offset(x=maxHeight*index).size(maxHeight)
+                    .graphicsLayer { scaleX=if(abs(index)%2 == 1) -1f else 1f },
+                    contentScale=ContentScale.FillBounds,colorFilter=colors)
+            }
+        } else Image(bmp,null,Modifier.fillMaxSize().graphicsLayer { scaleX=1.35f;scaleY=1.35f },contentScale=ContentScale.Crop,colorFilter=colors)
     }
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color(0x8C080808),.55f to Color(0x6B080808),1f to Color(0xCC080808))))
+    }
 }

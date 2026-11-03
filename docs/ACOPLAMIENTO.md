@@ -4,7 +4,7 @@ Trabajo aislado en `oto-acoplamiento`, rama `feat/prueba-acoplamiento`. Parte de
 
 ## Uso
 
-La aplicación normal inicia biblioteca y reproductor unidos si todavía no hay una distribución guardada. Biblioteca y reproductor tienen accesos para abrir los módulos; biblioteca también comparte el menú de tres puntos del reproductor.
+La aplicación normal inicia biblioteca y reproductor unidos si todavía no hay una distribución guardada. Biblioteca y reproductor tienen accesos para abrir los módulos. Por petición del usuario durante la revisión Windows, el menú de tres puntos queda en reproductor; biblioteca conserva los accesos directos. Al compactar biblioteca, su logo ocupa la cabecera y la navegación muestra iconos centrados con ayuda al pasar el ratón.
 
 - Las ventanas nuevas se reparten a ambos lados de la jefa, según el ancho ocupado; las conocidas recuperan su disposición anterior.
 - Prioridad: biblioteca, reproductor y, al mismo nivel, letra/cola. Entre iguales dirige quien recibe a la otra ventana.

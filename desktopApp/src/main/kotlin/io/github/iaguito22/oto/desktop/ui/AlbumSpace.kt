@@ -66,7 +66,7 @@ internal fun AlbumSpace(page:Page.Remote,currentId:String?,player:DesktopPlayerC
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable{play(i)}.padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
                     LibraryArt(h.artwork,Modifier.size(48.dp));Column(Modifier.weight(1f)){Text(h.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(h.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)}
                     if(h.id==currentId)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=palette.primary)
-                    Box {HoverAction(MobileIcons.moreHoriz,"Opciones de ${h.title}",onClick={menu=true});DropdownMenu(menu,{menu=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(240.dp)) {
+                    Box {HoverAction(MobileIcons.moreHoriz,"Opciones de ${h.title}",onClick={menu=true});LibraryDropdownMenu(menu,{menu=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(240.dp)) {
                         @Composable fun Action(label:String,click:()->Unit){DropdownMenuItem(text={Text(label,style=OtoType.rowSub)},onClick={menu=false;click()})}
                         Action("Reproducir a continuación"){player.playNext(song)}
                         Action("Guardar en…"){onSave(h)}

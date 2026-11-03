@@ -9,18 +9,13 @@ import io.github.iaguito22.oto.OtoDirs
 import io.github.iaguito22.oto.Prefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import timber.log.Timber
 
 /** Lo que hace falta para hablar con YouTube Music como tú: las cookies de la sesión y quién eres. */
 data class Session(
@@ -37,7 +32,7 @@ private val SESSION = stringPreferencesKey("session")
 
 /**
  * Tu cuenta de YouTube Music, si has entrado. Con ella la portada y la radio salen de tus gustos (el «algoritmo»), lo
- * que oyes cuenta en tu historial de YouTube y lo que te gusta en Oto también le gusta a YouTube Music. Sin ella, Oto
+ * que oyes cuenta en tu historial de YouTube. Los Me gusta de Oto permanecen separados. Sin ella, Oto
  * funciona igual, pero como un visitante.
  */
 class Account(
@@ -48,7 +43,6 @@ class Account(
 ) {
     private val _session = MutableStateFlow<Session?>(null)
     val session: StateFlow<Session?> = _session.asStateFlow()
-    private var likes: Job? = null
 
     /** Al arrancar, antes de la primera petición: si no, la portada saldría anónima. */
     fun restore(): Session? {
@@ -85,36 +79,6 @@ class Account(
         // La portada y la radio («next») van con la cuenta solo si esto está puesto.
         YouTube.useLoginForBrowse = s != null
         _session.value = s
-        likes?.cancel()
-        likes = if (s != null) scope.launch { syncLikes() } else null
-    }
-
-    /**
-     * Lo que te gusta en Oto, también en YouTube Music: es la señal más clara para sus recomendaciones. Solo los
-     * cambios desde que se entra (lo de antes, incluido lo importado de Spotify, se manda una vez, poco a poco).
-     */
-    private suspend fun syncLikes() {
-        prefs.cloudSelection.collectLatest { raw ->
-            if (io.github.iaguito22.oto.LIKED_ID in CloudSelection.decode(raw)?.exports.orEmpty()) syncSelectedLikes()
-        }
-    }
-
-    private suspend fun syncSelectedLikes() {
-        var before: Set<String>? = null
-        prefs.likedIds.collect { now ->
-            val sent = prefs.likesSent()
-            val add = now - sent
-            val remove = if (before == null) emptySet() else (before!! - now) intersect sent
-            before = now
-            for (id in add) {
-                if (withContext(Dispatchers.IO) { YouTube.likeVideo(id, true) }.isFailure) { Timber.w("No se pudo dar me gusta en YouTube a %s", id); break }
-                prefs.markLikeSent(id, true)
-                delay(LIKE_PACE_MS)
-            }
-            for (id in remove) {
-                if (withContext(Dispatchers.IO) { YouTube.likeVideo(id, false) }.isSuccess) prefs.markLikeSent(id, false)
-            }
-        }
     }
 
     private fun encode(s: Session) = JSONObject()
@@ -130,7 +94,4 @@ class Account(
         )
     }.getOrNull()
 
-    private companion object {
-        const val LIKE_PACE_MS = 400L
-    }
 }

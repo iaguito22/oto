@@ -1,6 +1,13 @@
 package io.github.iaguito22.oto.desktop.ui
 
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.spring
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyGridState
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -29,6 +36,7 @@ import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -61,6 +69,7 @@ import com.metrolist.innertube.models.*
 import io.github.iaguito22.oto.*
 import io.github.iaguito22.oto.account.*
 import io.github.iaguito22.oto.desktop.BrowserLogin
+import io.github.iaguito22.oto.desktop.LocalWindowTooltipEpoch
 import io.github.iaguito22.oto.OtoDirs
 import io.github.iaguito22.oto.desktop.playback.*
 import io.github.iaguito22.oto.importer.Importer
@@ -75,7 +84,7 @@ private data class LibraryEdit(val kind:String,val id:String="",val value:String
 /** Biblioteca de escritorio: navegación lateral y un lienzo que cambia entre colección, búsqueda y escucha. */
 @Composable
 internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuController,importer:Importer,
-    account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={}) {
+    account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={}) {
     val lists by prefs.playlists.collectAsState(initial=emptyList())
     val liked by prefs.likedList.collectAsState(initial=LocalPlaylist(LIKED_ID,"Me gusta",emptyList()))
     val history by prefs.history.collectAsState(initial=emptyList())
@@ -85,6 +94,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     val entries by downloads.entries.collectAsState()
     val state by menu.state.collectAsState()
     val np by player.state.collectAsState()
+    val coverBeat by prefs.coverBeat.collectAsState(initial=true)
+    val pulse=rememberCoverPulse(np.playing,coverBeat,player::beat)
     val qualityPlaying by player.currentQuality.collectAsState()
     val session by account.session.collectAsState()
     val cloudState by cloud.state.collectAsState()
@@ -141,18 +152,15 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
         Row(Modifier.fillMaxSize()) {
             Column(Modifier.width(if(wide)176.dp else 62.dp).fillMaxHeight().padding(horizontal=12.dp,vertical=16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
                 if(wide) Spacer(Modifier.height(58.dp))
-                listOf("Tu música" to MobileIcons.libraryMusic,"Explorar" to MobileIcons.graphicEq,"Recientes" to MobileIcons.history,"Descargas" to MobileIcons.download).forEach { (name,icon) ->
-                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if(section==name)Color.White.copy(alpha=.07f)else Color.Transparent).clickable{home(name)}.padding(12.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                        Icon(icon,name,Modifier.size(18.dp),tint=Color.White.copy(alpha=if(section==name).95f else .42f))
-                        if(wide)Text(name,style=OtoType.rowSub,color=Color.White.copy(alpha=if(section==name).95f else .52f))
-                    }
+                listOf("Tu música" to MobileIcons.libraryMusic,"Explorar" to Icons.Rounded.Explore,"Recientes" to MobileIcons.history,"Descargas" to MobileIcons.download).forEach { (name,icon) ->
+                    LibraryNavigation(name,icon,wide,section==name) { home(name) }
                 }
                 Spacer(Modifier.weight(1f))
                 if(np.id!=null) {
                     if(wide) {
                         Column(Modifier.fillMaxWidth().padding(horizontal=6.dp,vertical=8.dp),verticalArrangement=Arrangement.spacedBy(5.dp)) {
-                            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(9.dp)) {
-                                LibraryArt(np.artwork,Modifier.size(40.dp))
+                            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick=onSource),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(9.dp)) {
+                                LibraryArt(np.artwork,Modifier.size(40.dp).graphicsLayer { val s=1f+.022f*pulse;scaleX=s;scaleY=s })
                                 Column(Modifier.weight(1f)) {
                                     Text(np.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis)
                                     Text(np.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)
@@ -167,7 +175,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         }
                     } else {
                         Column(Modifier.fillMaxWidth(),horizontalAlignment=Alignment.CenterHorizontally) {
-                            LibraryArt(np.artwork,Modifier.size(36.dp))
+                            LibraryArt(np.artwork,Modifier.size(36.dp).graphicsLayer { val s=1f+.022f*pulse;scaleX=s;scaleY=s }.clickable(onClick=onSource))
                             MinimalPlayback(np.playing,player::toggle,controlSize=36.dp)
                         }
                     }
@@ -183,11 +191,11 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     }
                 } else Box {
                     HoverAction(Icons.Rounded.VolumeUp,"Volumen",onClick={volumeMenu=true})
-                    DropdownMenu(volumeMenu,{volumeMenu=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(190.dp)) {
+                    LibraryDropdownMenu(volumeMenu,{volumeMenu=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(190.dp)) {
                         Column(Modifier.padding(horizontal=16.dp,vertical=8.dp)) {Text("Volumen · ${(volume*100).toInt()} %",style=OtoType.rowSub);FineSlider(volume,player::setVolume,label="Volumen")}
                     }
                 }
-                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable{home("Ajustes")}.padding(12.dp),horizontalArrangement=Arrangement.spacedBy(12.dp)){Icon(MobileIcons.settings,"Ajustes",Modifier.size(18.dp));if(wide)Text("Ajustes",style=OtoType.rowSub)}
+                LibraryNavigation("Ajustes",MobileIcons.settings,wide,section=="Ajustes") { home("Ajustes") }
             }
             Column(Modifier.weight(1f).fillMaxHeight().padding(start=16.dp,end=28.dp,top=18.dp,bottom=12.dp),verticalArrangement=Arrangement.spacedBy(20.dp)) {
                 Row(Modifier.fillMaxWidth().height(48.dp).clip(CircleShape).background(Color.White.copy(alpha=.045f)).padding(start=16.dp,end=6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
@@ -196,6 +204,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     if(state.query.isNotBlank())IconButton(onClick={menu.onQuery("")}){Icon(MobileIcons.close,"Limpiar búsqueda",Modifier.size(17.dp))}
                     HoverAction(Icons.Rounded.Devices,"Dispositivos",onClick=onDevices,tint=Color.White.copy(alpha=.55f))
                 }
+                val panelModifier = if(floatingPanel) Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFF171A18).copy(alpha=.35f)).padding(16.dp) else Modifier
+                Column(Modifier.weight(1f).fillMaxWidth().then(panelModifier),verticalArrangement=Arrangement.spacedBy(20.dp)) {
                 val page=state.pages.lastOrNull() as? Page.Remote
                 val remoteSongs=page?.songs
                 val selected=(if(local==LIKED_ID)liked else lists.firstOrNull{it.id==local})
@@ -206,13 +216,13 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     if(section=="Tu música"&&selected==null&&page==null&&state.query.isBlank()){
                         Box {
                             HoverAction(Icons.Rounded.GridView,"Tamaño de las listas",onClick={sizeMenu=true})
-                            DropdownMenu(expanded=sizeMenu,onDismissRequest={sizeMenu=false},shape=RoundedCornerShape(18.dp)) {
+                            LibraryDropdownMenu(expanded=sizeMenu,onDismissRequest={sizeMenu=false},shape=RoundedCornerShape(18.dp)) {
                                 listOf("Pequeñas","Medianas","Grandes").forEachIndexed { i,label -> DropdownMenuItem(text={Text(if(cardSize==i) "$label  ✓" else label)},onClick={cardSize=i;libraryKv.putString("card_size",i.toString());sizeMenu=false}) }
                             }
                         }
                         Box(Modifier.padding(end=16.dp)) {
                             TextButton(onClick={newMenu=true}){Icon(MobileIcons.add,null,Modifier.size(17.dp));Spacer(Modifier.width(6.dp));Text("Nueva")}
-                            DropdownMenu(expanded=newMenu,onDismissRequest={newMenu=false},shape=RoundedCornerShape(18.dp),offset=DpOffset((-12).dp,0.dp)) {
+                            LibraryDropdownMenu(expanded=newMenu,onDismissRequest={newMenu=false},shape=RoundedCornerShape(18.dp),offset=DpOffset((-12).dp,0.dp)) {
                                 DropdownMenuItem(text={Text("Lista")},leadingIcon={Icon(MobileIcons.libraryMusic,null)},onClick={newMenu=false;editor=LibraryEdit("list")})
                                 DropdownMenuItem(text={Text("Carpeta")},leadingIcon={Icon(MobileIcons.createNewFolder,null)},onClick={newMenu=false;editor=LibraryEdit("folder")})
                             }
@@ -220,6 +230,11 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     }
                 }
                 Box(Modifier.weight(1f)) {
+                    AnimatedContent(section, transitionSpec = {
+                        val direction = if (targetState == "Ajustes") 1 else if (initialState == "Ajustes") -1 else 1
+                        (fadeIn(tween(260)) + slideInVertically(spring(dampingRatio=.8f,stiffness=280f)) { direction * it / 5 }) togetherWith
+                            (fadeOut(tween(160)) + slideOutVertically(tween(200)) { -direction * it / 8 })
+                    }, label="librarySection") { animatedSection ->
                     when {
                         state.query.isNotBlank() -> SearchSpace(state,lists,np.id,player,menu,prefs,palette,onSave,onOpen=::openItem,onLocal={local=it;menu.onQuery("")})
                         selected!=null -> LocalPlaylistView(selected,np.id,player,prefs,downloads,palette,onSave,
@@ -238,12 +253,12 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                 else LazyColumn {page.shelves.forEach{shelf->item{Text(shelf.title,style=OtoType.section)};items(shelf.items){item->LibraryLine(item.title,"",item.thumbnail,{openItem(item)})}}}
                             }}
                         }
-                        section=="Ajustes" -> SettingsSpace(prefs,player,palette,session,importState,artworkBackground,onArtworkBackground,onAccount={home("Cuenta")},onImport={home("Importar")},onDevices=onDevices)
-                        section=="Cuenta" -> SettingsAndAccountPane(prefs,importer,account,cloud,login,session,cloudState,importState,quality,dataSaver,shuffle,loop,player::setShuffle,player::setLoop,palette,{home("Importar")}, accountOnly = true, onAccountFromMobile = onAccountFromMobile)
-                        section=="Importar" -> ImportPane(importer,prefs,palette,{home("Ajustes")},{home("Tu música")})
-                        section=="Descargas" -> DownloadsSpace(player,prefs,downloads,palette,np.id,onOpen={local=it},onSave=onSave,workScope=scope)
-                        section=="Recientes" -> SongList(history,np.id,{i->player.play(history[i].toSong())},onSave,player,prefs)
-                        section=="Explorar" -> LazyColumn(verticalArrangement=Arrangement.spacedBy(24.dp)) {
+                        animatedSection=="Ajustes" -> SettingsSpace(prefs,player,palette,session,importState,artworkBackground,onArtworkBackground,backdropOpacity,onBackdropOpacity,shortcut,shortcutIssue,onShortcut,onAccount={home("Cuenta")},onImport={home("Importar")},onDevices=onDevices)
+                        animatedSection=="Cuenta" -> SettingsAndAccountPane(prefs,importer,account,cloud,login,session,cloudState,importState,quality,dataSaver,shuffle,loop,player::setShuffle,player::setLoop,palette,{home("Importar")}, accountOnly = true, onAccountFromMobile = onAccountFromMobile)
+                        animatedSection=="Importar" -> ImportPane(importer,prefs,palette,{home("Ajustes")},{home("Tu música")})
+                        animatedSection=="Descargas" -> DownloadsSpace(player,prefs,downloads,palette,np.id,onOpen={local=it},onSave=onSave,workScope=scope)
+                        animatedSection=="Recientes" -> SongList(history,np.id,{i->player.play(history[i].toSong())},onSave,player,prefs)
+                        animatedSection=="Explorar" -> LazyColumn(verticalArrangement=Arrangement.spacedBy(24.dp)) {
                             item {Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){state.chips.forEach{chip->FilterChip(selected=state.chip==chip.title,onClick={menu.onChip(chip.title)},label={Text(chip.title)})}}}
                             if(state.homeError!=null)item{TextButton(onClick=menu::loadHome){Text("Volver a cargar Explorar")}}
                             if(state.shelves==null)item{LinearProgressIndicator(Modifier.fillMaxWidth())}
@@ -303,6 +318,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                             }
                         }
                     }
+                    }
+                }
                 }
             }
         }
@@ -394,7 +411,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         deleting=null
                         scope.launch {
                             prefs.deletePlaylist(list.id)
-                            if(snackbar.showSnackbar("Lista eliminada","Deshacer")==SnackbarResult.ActionPerformed) {
+                            if(snackbar.showSnackbar("Lista eliminada","Deshacer",duration=SnackbarDuration.Long)==SnackbarResult.ActionPerformed) {
                                 prefs.restore(listOf(list),emptySet(),if(wasPinned)setOf(list.id)else emptySet(),emptySet())
                                 if(wasDownloaded)prefs.setDownloadList(list.id,true)
                             }
@@ -406,10 +423,33 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun LibraryNavigation(name:String,icon:androidx.compose.ui.graphics.vector.ImageVector,wide:Boolean,selected:Boolean,onClick:()->Unit) {
+    val interaction=remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val highlight by animateFloatAsState(if(selected).09f else if(hovered).05f else 0f,tween(180),label="navHighlight")
+    val iconScale by animateFloatAsState(if(selected)1.08f else if(hovered)1.04f else 1f,tween(180),label="navIcon")
+    val content: @Composable () -> Unit = {
+        Row(Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha=highlight)).hoverable(interaction)
+            .clickable(interactionSource=interaction,indication=null,onClick=onClick).padding(horizontal=if(wide)12.dp else 8.dp),
+            verticalAlignment=Alignment.CenterVertically,horizontalArrangement=if(wide)Arrangement.spacedBy(12.dp)else Arrangement.Center) {
+            Icon(icon,name,Modifier.size(18.dp).graphicsLayer { scaleX=iconScale;scaleY=iconScale },tint=Color.White.copy(alpha=if(selected).95f else .42f))
+            if(wide)Text(name,style=OtoType.rowSub,color=Color.White.copy(alpha=if(selected).95f else .52f))
+        }
+    }
+    if(wide) content() else key(LocalWindowTooltipEpoch.current) { TooltipArea(tooltip={
+        Surface(color=Color(0xFF30362F),shape=RoundedCornerShape(8.dp)) {
+            Text(name,Modifier.padding(8.dp),style=OtoType.rowSub)
+        }
+    }) { content() } }
+}
+
 @Composable internal fun LibraryArt(url:String?,modifier:Modifier=Modifier) {
     var bitmap by remember(url){mutableStateOf<ImageBitmap?>(null)}
     LaunchedEffect(url){bitmap=ArtworkLoader.load(url).first}
-    Box(modifier.clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha=.045f)),contentAlignment=Alignment.Center){if(bitmap!=null)Image(bitmap!!,null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)else Icon(MobileIcons.libraryMusic,null,Modifier.size(24.dp),tint=Color.White.copy(alpha=.15f))}
+    Box(modifier.clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha=.045f)),contentAlignment=Alignment.Center){Crossfade(bitmap,animationSpec=tween(220),label="libraryArtwork") { image -> if(image!=null)Image(image,null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)else Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) { Icon(MobileIcons.libraryMusic,null,Modifier.size(24.dp),tint=Color.White.copy(alpha=.15f)) } }}
 }
 @Composable private fun LibraryCard(title:String,sub:String,url:String?,modifier:Modifier=Modifier,click:()->Unit) {
     Column(modifier.clickable(onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
@@ -422,6 +462,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val grow by animateFloatAsState(if(hovered)1f else 0f,tween(180),label="playlistHover")
+    val playVisibility by animateFloatAsState(if(hovered && onPlay!=null)1f else 0f,tween(180),label="playlistPlay")
     val elevation by animateFloatAsState(if(lifted)1f else 0f,tween(140),label="dragLift")
     Column(modifier.graphicsLayer { alpha=1f-.08f*elevation }.hoverable(interaction).clickable(interactionSource=interaction,indication=null,enabled=!lifted,onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f),contentAlignment=Alignment.Center) {
@@ -435,7 +476,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     else -> LibraryArt(url,Modifier.fillMaxSize())
                 }
             }
-            if(onPlay!=null && hovered) Box(Modifier.align(Alignment.BottomEnd).padding(10.dp).size(38.dp).background(Color.White.copy(alpha=.94f),CircleShape).clickable(interactionSource=remember { MutableInteractionSource() },indication=null,onClick=onPlay),contentAlignment=Alignment.Center) {Canvas(Modifier.size(18.dp).semantics { contentDescription="Reproducir $title" }) {
+            if(onPlay!=null) Box(Modifier.align(Alignment.BottomEnd).padding(10.dp).graphicsLayer { alpha=playVisibility;scaleX=.8f+.2f*playVisibility;scaleY=.8f+.2f*playVisibility }.size(38.dp).background(Color.White.copy(alpha=.94f),CircleShape).clickable(interactionSource=remember { MutableInteractionSource() },indication=null,enabled=hovered,onClick=onPlay),contentAlignment=Alignment.Center) {Canvas(Modifier.size(18.dp).semantics { contentDescription="Reproducir $title" }) {
                 val path=Path().apply { moveTo(size.width*.32f,size.height*.16f);lineTo(size.width*.82f,size.height*.5f);lineTo(size.width*.32f,size.height*.84f);close() }
                 drawPath(path,Color(0xFF171A18),style=Stroke(1.8.dp.toPx(),cap=StrokeCap.Round,join=StrokeJoin.Round))
             }}
@@ -449,13 +490,16 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     var open by remember { mutableStateOf(false) }
     Box(Modifier.onPointerEvent(PointerEventType.Press) { if(it.buttons.isSecondaryPressed) { open=true;it.changes.forEach { change->change.consume() } } }) {
         content()
-        DropdownMenu(expanded=open,onDismissRequest={open=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(220.dp)) {
+        LibraryDropdownMenu(expanded=open,onDismissRequest={open=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(220.dp)) {
             items.forEach { item -> DropdownMenuItem(text={Text(item.label,style=OtoType.rowSub,color=if(item.label.startsWith("Eliminar")) Danger else Color.White.copy(alpha=.85f))},onClick={open=false;item.onClick()}) }
         }
     }
 }
 @Composable private fun LibraryLine(title:String,sub:String,url:String?,click:()->Unit,trailing:@Composable ()->Unit={}) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick=click).padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
+    val interaction=remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val glow by animateFloatAsState(if(hovered).055f else 0f,tween(160),label="songHover")
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha=glow)).hoverable(interaction).clickable(interactionSource=interaction,indication=null,onClick=click).padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
         LibraryArt(url,Modifier.size(44.dp));Column(Modifier.weight(1f)){Text(title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(sub,style=OtoType.rowSub,maxLines=1,color=Color.White.copy(alpha=.4f))};trailing()
     }
 }

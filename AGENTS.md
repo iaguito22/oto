@@ -215,7 +215,7 @@ Estas son decisiones del usuario. Una corrección de Windows debe conservarlas s
 - Ventanas agrupables: biblioteca, reproductor, letra y cola.
 - Dispositivos y Guardar siguen siendo ventanas auxiliares; no incorporarlas a la jerarquía sin una petición nueva.
 - Las uniones son exclusivamente laterales. No añadir acoplamiento por arriba o abajo.
-- Biblioteca y reproductor ofrecen accesos a módulos. Biblioteca incluye también el menú de tres puntos del reproductor.
+- Biblioteca y reproductor ofrecen accesos a módulos. Por petición de Iago del 02/11/2026 durante la revisión Windows, biblioteca no lleva menú de tres puntos; las opciones siguen en reproductor y en sus ubicaciones existentes.
 - Las ventanas nuevas se reparten a ambos lados de la jefa, prefiriendo el lado con menos ancho ocupado. Si ambos están vacíos, se empieza por la derecha.
 - La distribución guardada prevalece sobre ese reparto inicial.
 
@@ -276,6 +276,8 @@ Estas son decisiones del usuario. Una corrección de Windows debe conservarlas s
 - Unirlo a cualquier otra ventana desactiva la chincheta y oculta su control.
 - Separarlo otra vez deja la chincheta desactivada: Iago quiere fijarlo manualmente cada vez.
 - No extender la chincheta al grupo entero.
+- En vista Vertical, la chincheta va abajo, tras los accesos a módulos (petición de Iago durante la revisión Windows). La cabecera estrecha conserva menú y cierre.
+- Letra y Cola admiten anchos menores que los predeterminados: mínimos actuales 220 y 240 dp, respectivamente; predeterminados 480 y 420 dp.
 
 ## 8. Implementación del acoplamiento: dónde intervenir
 

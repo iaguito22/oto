@@ -4,6 +4,7 @@ import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.PlaylistItem
 import com.metrolist.innertube.models.SongItem
 import io.github.iaguito22.oto.Heard
+import io.github.iaguito22.oto.LIKED_ID
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.toHeard
@@ -67,15 +68,16 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
     }
 
     /** Importación explícita y exportación limitada a los destinos elegidos. */
-    suspend fun choose(choice: CloudSelection) = withContext(Dispatchers.IO) {
+    suspend fun choose(requestedChoice: CloudSelection) = withContext(Dispatchers.IO) {
+        val choice=requestedChoice.separated()
         check(account.session.value != null) { "Inicia sesión primero" }
         prefs.setCloudSelection(null)
         operation.withLock {
             try {
                 var saved = load()
-                val catalog = if(choice.imports.any { it!="LM" } || choice.exports.any { it!=io.github.iaguito22.oto.LIKED_ID }) available() else emptyList()
+                val catalog = if(choice.imports.any { it!="LM" } || choice.exports.isNotEmpty()) available() else emptyList()
                 val local = prefs.playlists.first()
-                val requested = local.filter { it.id in choice.exports }
+                val requested = local.filter { it.id in choice.exports } + if(LIKED_ID in choice.exports) listOf(prefs.likedList.first().copy(name="Me gusta de Oto")) else emptyList()
                 // Recuperar los ids de copias anteriores evita duplicarlas tras volver a entrar.
                 for(item in catalog.filter { item -> requested.any { it.name == item.title && it.id !in saved.lists } }) {
                     val yt=item.id.removePrefix("VL")
@@ -95,7 +97,7 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
                     val raw=YouTube.browseRaw("VL$yt").getOrThrow()
                     val meta=ListMeta.find(raw)
                     val id=meta?.id ?: "youtube:$yt"
-                    prefs.restore(listOf(LocalPlaylist(id,item.title,tracks,meta?.from ?: "youtube:$yt",meta?.folder)),meta?.folder?.let { setOf(it) }.orEmpty(),emptySet(),emptySet())
+                    importCloudPlaylist(prefs,LocalPlaylist(id,item.title,tracks,meta?.from ?: "youtube:$yt",meta?.folder))
                     if(meta!=null) { saved=saved.copy(lists=saved.lists+(id to Synced(yt,item.title,tracks.map{it.id},meta.encode())));save(saved) }
                 }
                 prefs.setCloudSelection(choice.encode())
@@ -111,7 +113,7 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
                 prefs.cloudSelection.collectLatest { raw ->
                     val choice=CloudSelection.decode(raw)
                     if(choice==null) { _state.value=CloudState.Off; return@collectLatest }
-                    combine(prefs.playlists, prefs.folders, prefs.pinned, prefs.sortFlipped) { l, _, _, _ -> l }
+                    combine(prefs.playlists, prefs.folders, prefs.pinned, prefs.sortFlipped, prefs.liked) { l, _, _, _, _ -> l }
                         .debounce(DEBOUNCE_MS)
                         .collect { withContext(Dispatchers.IO) { operation.withLock { runCatching { sync(choice) }.onFailure { fail(it) } } } }
                 }
@@ -135,7 +137,7 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
     private suspend fun sync(choice: CloudSelection) {
         var saved = load()
         // Las listas desmarcadas quedan intactas, tanto aquí como en YouTube Music.
-        val lists = prefs.playlists.first().filter { it.id in choice.exports }
+        val lists = prefs.playlists.first().filter { it.id in choice.exports } + if(LIKED_ID in choice.exports) listOf(prefs.likedList.first().copy(name="Me gusta de Oto")) else emptyList()
         lists.forEachIndexed { i, l ->
             val ids = l.songs.map { it.id }
             val meta = ListMeta(l.id, l.folder, l.from).encode()
@@ -169,12 +171,11 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
         _state.value = CloudState.Done(lists.size, System.currentTimeMillis())
     }
 
-    /** Tus me gusta de YouTube Music (con los que Oto subió), a Me gusta. Ya constan como enviados. */
+    /** Importa los Me gusta de YouTube como una lista independiente de los de Oto. */
     private suspend fun restoreLikes() {
         _state.value = CloudState.Working("Recuperando Me gusta")
-        val songs = songs("LM") ?: return
-        prefs.markLikesSent(songs.map { it.id })
-        prefs.addLikedAll(songs)
+        val songs = songs("LM") ?: error("No se pudieron leer los Me gusta de YouTube Music")
+        importCloudPlaylist(prefs,LocalPlaylist(YOUTUBE_LIKES_LIST_ID,"Me gusta de YouTube Music",songs,"youtube:LM"))
     }
 
     /** Todas las canciones de una lista de YouTube, página a página. */
@@ -259,6 +260,11 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
         const val MANIFEST_NOTE = "Oto guarda aquí cómo tienes tus listas (carpetas, fijadas, orden). No la borres. "
         const val LIST_NOTE = "Lista de Oto. "
     }
+}
+
+internal suspend fun importCloudPlaylist(prefs: Prefs, list: LocalPlaylist) {
+    if (list.id == LIKED_ID) prefs.addLikedAll(list.songs)
+    else prefs.restore(listOf(list),list.folder?.let { setOf(it) }.orEmpty(),emptySet(),emptySet())
 }
 
 /**

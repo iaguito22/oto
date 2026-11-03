@@ -37,23 +37,23 @@ import kotlin.math.*
 @Composable
 internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playing: Boolean, position: () -> Long, seek: (Long) -> Unit, store: LyricsStore, prefs: Prefs, fontScale:Float = 1f) {
     val clock = remember(id) { LyricsClock() }
+    val leadMs = if(lyrics is Lyrics.Synced && !lyrics.wordByWord) 100L else 250L
     val romanize by prefs.romanize.collectAsState(initial = true)
     var rom by remember(id) { mutableStateOf<Map<String,String>?>(null) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(id, lyrics) { rom = if (id != null && lyrics is Lyrics.Synced) store.romanized(id, lyrics) else null }
-    LaunchedEffect(id, playing) {
+    LaunchedEffect(id, playing, leadMs) {
         if (!playing) {
-            while (true) { clock.ms = position() + LEAD_MS; delay(150) }
+            while (true) { clock.ms = position() + leadMs; delay(150) }
         }
-        var last = position()
-        var anchorTime = 0L
-        var lastFrame = last
+        var anchorPos = position().toDouble()
+        var anchorTime = -1L
         while (true) withFrameNanos { now ->
-            val current = position()
-            if (anchorTime == 0L || current != last) { last = current; anchorTime = now }
-            val estimate = last + ((now - anchorTime) / 1_000_000).coerceIn(0, 70) + LEAD_MS
-            lastFrame = if (estimate < lastFrame && lastFrame - estimate < 180) lastFrame else estimate
-            clock.ms = lastFrame
+            if (anchorTime < 0) anchorTime = now
+            val estimate = anchorPos + (now-anchorTime)/1e6
+            val difference = position().toDouble()-estimate
+            if (abs(difference)>180) { anchorPos=position().toDouble();anchorTime=now } else anchorPos+=difference*.08
+            clock.ms=(anchorPos+(now-anchorTime)/1e6).toLong()+leadMs
         }
     }
     when {
@@ -91,7 +91,7 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
                     itemsIndexed(rows) { i, row -> when(row) {
                         is Row.Sung -> {
                             val cascade = remember { System.nanoTime() - openedAt < 400_000_000L }
-                            SungLine(row.line, if(active < 0) i+1 else i-active, if(cascade) i-max(firstActive,0) else null, rom?.get(row.line.text), romanize, clock, !following, fontScale, { scope.launch { prefs.setRomanize(!romanize) } }, { following=true; syncRequest++; seek((row.start - LEAD_MS).coerceAtLeast(0)) })
+                            SungLine(row.line, if(active < 0) i+1 else i-active, if(cascade) i-max(firstActive,0) else null, rom?.get(row.line.text), romanize, clock, !following, fontScale, { scope.launch { prefs.setRomanize(!romanize) } }, { following=true; syncRequest++; seek((row.start - leadMs).coerceAtLeast(0)) })
                         }
                         is Row.Gap -> GapDots(row, i == active, clock)
                     } }
@@ -118,7 +118,6 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
         }
     }
 }
-private const val LEAD_MS = 0L
 private const val ROM_MS = 420
 private const val GAP_MS = 6000L
 private const val GAP_INTRO_MS = 3500L
@@ -169,7 +168,7 @@ private fun SungLine(line: Line, dist: Int, order: Int?, rom: String?, showRom: 
     }
     val alpha by animateFloatAsState(alphaTarget, tween(if (dist == 0) dur / 2 else if (dist < 0) (dur * 1.4f).toInt() else dur, easing = EaseOutQuart), label = "lineAlpha")
     val scale by animateFloatAsState(if (dist == 0) 1.03f else 1f, tween(if (dist == 0) dur else (dur * 1.2f).toInt(), easing = EaseOutQuart), label = "lineScale")
-    val blur = if (!browsing && abs(dist) >= 3) 1.dp else 0.dp
+    val blur = if (browsing) 0.dp else when (abs(dist)) { 0 -> 0.dp; 1 -> .4.dp; 2 -> 1.2.dp; else -> 2.dp }
     val lyricStyle = LYRIC.copy(fontSize=LYRIC.fontSize*fontScale,lineHeight=LYRIC.lineHeight*fontScale)
     val backgroundStyle = BG.copy(fontSize=BG.fontSize*fontScale,lineHeight=BG.lineHeight*fontScale)
     val romanStyle = ROM.copy(fontSize=ROM.fontSize*fontScale,lineHeight=ROM.lineHeight*fontScale)
@@ -351,7 +350,7 @@ private fun LitWord(g: List<Word>, style: TextStyle, color: Color, clock: Lyrics
         text,
         modifier.drawWithContent {
             val l = layout ?: return@drawWithContent
-            val t = clock.ms + if (letters) 100L else 0L
+            val t = clock.ms
             val lift = sw * style.fontSize.toPx() * 1.05f
             pieces.forEachIndexed { k, p ->
                 val box = l.getBoundingBox(p.from)

@@ -74,10 +74,12 @@ internal fun DownloadsSpace(player:DesktopPlayerConnection,prefs:Prefs,downloads
                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable{player.play(song.toSong())}.padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
                         LibraryArt(song.artwork,Modifier.size(48.dp));Column(Modifier.weight(1f)){Text(song.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(song.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)}
                         if(entry?.state==DesktopDownloads.State.Done)Icon(MobileIcons.downloadDone,"Descargada",Modifier.size(16.dp),tint=palette.primary)
+                        if(entry?.state==DesktopDownloads.State.Failed)TextButton(onClick={downloads.retry(song.id)}) { Text("Reintentar") }
                         if(song.id==currentId)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=palette.primary)
                         HoverAction(MobileIcons.close,"Quitar descarga de ${song.title}",onClick={removeSong(song)})
                     }
                 }
+                if(entry?.state==DesktopDownloads.State.Failed)Text(entry.error ?: "No se pudo descargar",style=OtoType.rowSub,color=MaterialTheme.colorScheme.error,modifier=Modifier.padding(horizontal=8.dp))
             }
             if(lists.isNotEmpty()||songs.isNotEmpty())item(key="clear") {Box(Modifier.fillMaxWidth().padding(top=20.dp),contentAlignment=Alignment.Center){TextButton(onClick={if(confirm){confirm=false;scope.launch{downloads.clear()}}else confirm=true}){Text(if(confirm)"Toca otra vez para borrarlo todo" else "Borrar todas las descargas")}}}
         }

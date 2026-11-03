@@ -50,6 +50,11 @@ class CdpClient private constructor() : WebSocket.Listener {
         pending.clear()
     }
 
+    override fun onClose(webSocket: WebSocket, statusCode: Int, reason: String): CompletionStage<*>? {
+        onError(webSocket, IllegalStateException("El navegador temporal se ha cerrado"))
+        return null
+    }
+
     private fun dispatch(message: JSONObject) {
         val id = message.optLong("id", -1L)
         if (id < 0L) return // Evento, no respuesta.
@@ -79,6 +84,8 @@ class CdpClient private constructor() : WebSocket.Listener {
     }
 
     fun close() {
+        pending.values.forEach { it.completeExceptionally(IllegalStateException("Acceso cancelado")) }
+        pending.clear()
         runCatching { socket?.sendClose(WebSocket.NORMAL_CLOSURE, "") }
         runCatching { socket?.abort() }
         socket = null

@@ -1,5 +1,9 @@
 package io.github.iaguito22.oto.desktop.ui
 
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -4180,6 +4184,7 @@ private fun TopResultCard(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 internal fun QueuePane(
     queue: List<QueueEntry>,
     currentMediaId: String?,
@@ -4193,14 +4198,15 @@ internal fun QueuePane(
     onClearQueue: () -> Unit = {},
     onSkipTo: (Int) -> Unit,
     onClose: (() -> Unit)? = null,
+    currentIndex: Int? = null,
 ) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Row(
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.widthIn(min=128.dp)) {
                 Text(
                     text = "Cola de reproducción",
                     style = OtoType.section,
@@ -4271,22 +4277,27 @@ internal fun QueuePane(
                 }
             }
         } else {
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                itemsIndexed(queue, key = { idx, e -> "${e.id}-$idx" }) { idx, entry ->
+            val listState = rememberLazyListState()
+            val reorderState = rememberReorderableLazyListState(listState) { from, to -> onMove(from.index, to.index) }
+            val occurrences = mutableMapOf<String,Int>()
+            val keyedQueue = queue.map { entry -> val n=occurrences.getOrDefault(entry.id,0); occurrences[entry.id]=n+1; "${entry.id}#$n" to entry }
+            LazyColumn(Modifier.weight(1f), state=listState, contentPadding=PaddingValues(top=16.dp,bottom=12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                itemsIndexed(keyedQueue, key = { _, item -> item.first }) { idx, item ->
+                    val entry=item.second
+                    ReorderableItem(reorderState,item.first) { dragging ->
                     QueueRowDesktop(
                         index = idx + 1,
                         title = entry.title,
                         subtitle = entry.artist,
                         artwork = entry.artwork,
-                        isCurrent = entry.id == currentMediaId,
+                        isCurrent = if (currentIndex != null) idx == currentIndex else entry.id == currentMediaId,
                         accent = palette.primary,
-                        canMoveUp = idx > 0,
-                        canMoveDown = idx < queue.lastIndex,
+                        dragModifier = Modifier.draggableHandle(),
+                        isDragging = dragging,
                         onClick = { onSkipTo(idx) },
-                        onMoveUp = { onMove(idx, idx - 1) },
-                        onMoveDown = { onMove(idx, idx + 1) },
                         onRemove = { onRemove(idx) },
                     )
+                    }
                 }
             }
         }
@@ -4302,17 +4313,15 @@ private fun QueueRowDesktop(
     artwork: String? = null,
     isCurrent: Boolean,
     accent: Color,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
+    dragModifier: Modifier,
+    isDragging: Boolean,
     onClick: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
     onRemove: () -> Unit,
 ) {
     var thumbBmp by remember(artwork) { mutableStateOf<ImageBitmap?>(null) }
     var isHovered by remember { mutableStateOf(false) }
-    var dragOffsetY by remember { mutableFloatStateOf(0f) }
-    var isDragging by remember { mutableStateOf(false) }
+    val hoverAmount by animateFloatAsState(if(isHovered)1f else 0f,tween(160),label="queueHover")
+    val dragAmount by animateFloatAsState(if(isDragging)1f else 0f,tween(140),label="queueLift")
 
     LaunchedEffect(artwork) {
         if (!artwork.isNullOrBlank()) {
@@ -4320,29 +4329,30 @@ private fun QueueRowDesktop(
         }
     }
 
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+    val compactRow = maxWidth < 280.dp
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .zIndex(if (isDragging) 10f else 0f)
             .graphicsLayer {
-                translationY = dragOffsetY
-                shadowElevation = if (isDragging) 12f else 0f
+                shadowElevation = 12f * dragAmount
+                scaleX = 1f + .015f * dragAmount
+                scaleY = 1f + .015f * dragAmount
             }
             .clip(RoundedCornerShape(12.dp))
             .background(
                 if (isCurrent) Brush.horizontalGradient(
                     listOf(accent.copy(alpha = 0.32f), accent.copy(alpha = 0.14f)),
                 )
-                else if (isHovered) Brush.horizontalGradient(
-                    listOf(Color.White.copy(alpha = 0.12f), Color.White.copy(alpha = 0.05f)),
-                )
-                else SolidColor(Color.White.copy(alpha = 0.03f)),
+                else Brush.horizontalGradient(
+                    listOf(Color.White.copy(alpha = .03f + .09f*hoverAmount), Color.White.copy(alpha = .03f + .02f*hoverAmount)),
+                ),
             )
             .border(
                 1.dp,
                 if (isCurrent) accent.copy(alpha = 0.50f)
-                else if (isHovered) Color.White.copy(alpha = 0.20f)
-                else Color.Transparent,
+                else Color.White.copy(alpha = .20f*hoverAmount),
                 RoundedCornerShape(12.dp),
             )
             .pointerHoverIcon(PointerIcon.Hand)
@@ -4353,14 +4363,14 @@ private fun QueueRowDesktop(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        if (isCurrent) {
+        if (!compactRow && isCurrent) {
             Icon(
                 imageVector = MobileIcons.graphicEq,
                 contentDescription = "Sonando",
                 tint = accent,
                 modifier = Modifier.size(18.dp),
             )
-        } else {
+        } else if (!compactRow) {
             Text(
                 text = "$index",
                 fontSize = 12.sp,
@@ -4417,24 +4427,7 @@ private fun QueueRowDesktop(
                     .size(28.dp)
                     .clip(CircleShape)
                     .pointerHoverIcon(PointerIcon(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.MOVE_CURSOR)))
-                    .pointerInput(canMoveUp, canMoveDown) {
-                        detectVerticalDragGestures(
-                            onDragStart = { isDragging = true },
-                            onDragEnd = { isDragging = false; dragOffsetY = 0f },
-                            onDragCancel = { isDragging = false; dragOffsetY = 0f },
-                        ) { change, dragAmount ->
-                            change.consume()
-                            dragOffsetY += dragAmount
-                            val step = 44f
-                            if (dragOffsetY > step && canMoveDown) {
-                                onMoveDown()
-                                dragOffsetY -= step
-                            } else if (dragOffsetY < -step && canMoveUp) {
-                                onMoveUp()
-                                dragOffsetY += step
-                            }
-                        }
-                    },
+                    .then(dragModifier),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -4454,6 +4447,7 @@ private fun QueueRowDesktop(
                 Icon(MobileIcons.close, "Quitar", tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
             }
         }
+    }
     }
 }
 
@@ -4571,15 +4565,19 @@ internal fun SettingsAndAccountPane(
                         Text("Vincula el móvil por QR y confirma el envío de la sesión desde allí.", style = OtoType.rowSub, color = Color.White.copy(alpha = 0.62f))
                     }
 
-                    // Inicio de sesión: Chrome temporal con CDP (lo normal) o pegar la cookie a mano.
+                    // Preferir el navegador habitual: Google puede rechazar el perfil temporal con CDP.
                     if (loginMode == 0) {
                         val loginState by login.state.collectAsState()
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            MenuTabPill("Entrar con Google", true, palette.primary) {
+                            MenuTabPill("Entrar con tu navegador", true, palette.primary) {
                                 snippetCopied = false
-                                login.start()
+                                login.start(defaultBrowser = true)
                             }
                             MenuTabPill("Pegar cookie", false, palette.primary) { loginMode = 1 }
+                        }
+                        MenuTabPill("Usar navegador temporal", false, palette.primary) {
+                            snippetCopied = false
+                            login.start()
                         }
 
                         when (val ls = loginState) {
@@ -4595,9 +4593,9 @@ internal fun SettingsAndAccountPane(
                                 ) {
                                     Text(
                                         if (ls.automated) {
-                                            "Se ha abierto Chrome. Entra en YouTube Music con tu cuenta; Oto leerá la sesión y cerrará esa ventana solo."
+                                            "Se ha abierto un navegador temporal. Entra en YouTube Music; Oto leerá la sesión y cerrará esa ventana. Si Google lo rechaza como no seguro, usa «Entrar con tu navegador»."
                                         } else {
-                                            "Se ha abierto el navegador. Pega el comando de abajo en la consola (F12) o instala la extensión."
+                                            "Se ha abierto YouTube Music en tu navegador habitual. Inicia sesión allí si hace falta. Para conectar esa sesión con Oto, usa la extensión o copia el comando de abajo y ejecútalo en la consola (F12) de esa pestaña."
                                         },
                                         style = OtoType.rowSub,
                                         color = Color.White,

@@ -65,6 +65,8 @@ internal class DockSession(val layout: DockLayout, val supportsMaximize: Boolean
     var message by mutableStateOf("")
     var reorderPreview by mutableStateOf<Triple<DockId,DockId,Boolean>?>(null)
     var lastFocused: DockId? = null
+    var draggingGroup = false
+    var geometrySettlesAt = 0L
     val windows = mutableMapOf<DockId, Window>()
     private var raising = false
     init {
@@ -126,7 +128,7 @@ internal class DockVisibility(private val session: DockSession, private val id: 
 internal fun rememberDockState(session: DockSession, id: DockId): WindowState {
     session.revision
     val open = id in session.layout.bounds
-    return key(open) {
+    return key(id, open) {
         val rect = session.layout.bounds[id] ?: DockRect(0,0,id.defaultWidth,580)
         rememberWindowState(position=WindowPosition(rect.x.dp,rect.y.dp),
             size=androidx.compose.ui.unit.DpSize(rect.width.dp,rect.height.dp))
@@ -140,6 +142,7 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
     val scope = rememberCoroutineScope()
     val bridge = remember { object { var applying = false; var job: Job? = null } }
     DisposableEffect(session, id, window) {
+        session.trace("attach $id frame=${System.identityHashCode(window)} title=${window.name} actual=${window.bounds} model=${session.layout.bounds[id]}")
         session.windows[id] = window
         val listener = object : WindowAdapter() {
             override fun windowGainedFocus(e: WindowEvent) {
@@ -153,16 +156,17 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
             private fun reconcile() {
                 bridge.job?.cancel()
                 bridge.job = scope.launch {
-                    delay(80)
-                    while(bridge.applying) delay(32)
+                    delay(16)
+                    while(bridge.applying || session.draggingGroup || System.nanoTime() < session.geometrySettlesAt) delay(16)
                     val expected = session.layout.bounds[id] ?: return@launch
                     if(!window.isShowing || state.placement != WindowPlacement.Floating) return@launch
                     val actual = window.bounds
+                    session.trace("reconcile $id frame=${System.identityHashCode(window)} actual=$actual expected=$expected state=${state.size} revision=${session.revision}")
                     val resized = actual.width != expected.width || actual.height != expected.height
                     if(resized) {
                         session.trace("native resize $id: ${actual.width}x${actual.height}")
                         if(session.layout.group(id).maximized) session.maximize(id)
-                        session.layout.resize(id,actual.width,actual.height)
+                        session.layout.resize(id,actual.width,actual.height,actual.y)
                     }
                     val current = session.layout.bounds.getValue(id)
                     if(!resized && (actual.x != current.x || actual.y != current.y)) {
@@ -182,14 +186,16 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
             window.removeComponentListener(geometry); session.windows.remove(id)
         }
     }
-    LaunchedEffect(revision) {
+    val targetBounds = session.layout.bounds[id]
+    LaunchedEffect(targetBounds) {
         bridge.applying=true
         try {
-            session.layout.bounds[id]?.let { r ->
+            targetBounds?.let { r ->
+                session.trace("apply $id frame=${System.identityHashCode(window)} rect=$r")
                 state.position = WindowPosition(r.x.dp, r.y.dp)
                 state.size = androidx.compose.ui.unit.DpSize(r.width.dp, r.height.dp)
             }
-            delay(150)
+            delay(32)
         } finally { bridge.applying=false }
     }
     LaunchedEffect(state.placement) {
@@ -232,8 +238,8 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
                             val reorder = session.reorderPreview
                             session.trace("release $id reorder=$reorder")
                             if(reorder != null) {
-                                val (moving,target,before) = reorder
-                                session.layout.reorder(moving,target,before)
+                                val (moving,target,_) = reorder
+                                session.layout.reorder(moving,target)
                             } else if(session.supportsMaximize && origin.distance(point) < 8) {
                                 val now = System.currentTimeMillis()
                                 if(now - lastTap < 350 && lastTapPoint.distance(point) < 8) {
@@ -256,7 +262,7 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
                         val threshold = if (group.leader != id || group.maximized) 24 else 4
                         val insideLane = secondary && point.y in (original.y - 24)..(original.y + 68) && point.x in (groupLeft - 24)..(groupRight + 24)
                         if (insideLane && origin.distance(point) >= threshold) {
-                            val target = group.members.filter { it != id && it != group.leader }.firstOrNull { candidate ->
+                            val target = group.members.filter { it != id }.firstOrNull { candidate ->
                                 val r = session.layout.bounds.getValue(candidate)
                                 point.x in r.x until r.x + r.width
                             }
@@ -275,6 +281,7 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
                             val y = point.y - (origin.y - original.y).coerceIn(0, 44)
                             session.layout.move(id, x - current.x, y - current.y)
                             previous = point; active = true
+                            session.draggingGroup = true
                             session.raise(id)
                             session.trace("drag $id: group=" + session.layout.group(id).members)
                         }
@@ -284,7 +291,13 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
                     }
                     if (active) { change.consume(); session.preview = session.layout.candidate(id) }
                 }
-            } finally { session.preview = null; session.reorderPreview = null }
+            } finally {
+                if (active) {
+                    session.geometrySettlesAt = System.nanoTime() + 250_000_000L
+                    session.draggingGroup = false
+                }
+                session.preview = null; session.reorderPreview = null
+            }
         }
     }) { content() }
 }

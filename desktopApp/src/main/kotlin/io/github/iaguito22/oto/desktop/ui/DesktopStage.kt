@@ -871,10 +871,10 @@ private fun SpotifyPlayerColumn(
                 targetState = nowPlaying.id to artwork,
                 transitionSpec = {
                     (fadeIn(tween(360)) +
-                        slideInHorizontally(spring(dampingRatio = 0.72f, stiffness = 300f)) { skipDir * it / 4 } +
+                        slideInHorizontally(spring(dampingRatio = 0.72f, stiffness = 220f)) { skipDir * it * 4 / 5 } +
                         scaleIn(spring(dampingRatio = 0.78f, stiffness = 300f), initialScale = 0.92f)) togetherWith
                         (fadeOut(tween(180)) +
-                            slideOutHorizontally(tween(180)) { -skipDir * it / 5 } +
+                            slideOutHorizontally(tween(260)) { -skipDir * it * 3 / 5 } +
                             scaleOut(tween(180), targetScale = 1.04f))
                 },
                 label = "coverArt",

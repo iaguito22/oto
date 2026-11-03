@@ -20,10 +20,8 @@ import com.google.zxing.MultiFormatWriter
 import kotlinx.coroutines.launch
 import java.awt.image.BufferedImage
 
-private val ShortcutKey = Regex("[A-Z0-9]")
-
 @Composable
-internal fun DevicesPane(devices: DeviceConnection, shortcut: String, setShortcut: (String) -> Unit, revoke: () -> Unit) {
+internal fun DevicesPane(devices: DeviceConnection, revoke: () -> Unit) {
     val status by devices.link.status.collectAsState()
     val syncNotice by devices.syncNotice.collectAsState()
     val syncIssue by devices.syncIssue.collectAsState()
@@ -73,11 +71,6 @@ internal fun DevicesPane(devices: DeviceConnection, shortcut: String, setShortcu
                 OutlinedButton(onClick={devices.requestAccount();accountUntil=System.currentTimeMillis()},enabled=remote!=null,shape=RoundedCornerShape(16.dp)) { Text(if(accountUntil>0) "Esperando al móvil…" else "Recibir cuenta del móvil") }
                 if(accountUntil>0) Text("Pulsa Compartir cuenta en el móvil. Disponible durante 2 minutos.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.primary)
                 Text("${devices.host}:${devices.port}",style=MaterialTheme.typography.bodySmall)
-                if (System.getenv("HYPRLAND_INSTANCE_SIGNATURE") != null) {
-                    var draft by remember(shortcut) { mutableStateOf(shortcut) }
-                    OutlinedTextField(value=draft,onValueChange={draft=it.uppercase()},label={Text("Atajo del reproductor")},singleLine=true,shape=RoundedCornerShape(16.dp),modifier=Modifier.fillMaxWidth())
-                    TextButton(enabled=draft!=shortcut && draft.split(" + ").let { parts -> parts.size>=2 && parts.dropLast(1).all { it in setOf("CTRL","ALT","SUPER","SHIFT") } && parts.last().matches(ShortcutKey) },onClick={setShortcut(draft)}) { Text("Aplicar atajo") }
-                }
                 TextButton(onClick={confirmRevoke=true}) { Text("Desvincular dispositivos",color=MaterialTheme.colorScheme.error) }
             }
         }

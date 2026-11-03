@@ -137,7 +137,7 @@ class LocalLink(
             } finally { ticker.cancel(); commands.close(); worker.cancel(); active.close() }
         } catch (error: Exception) {
             if (error is CancellationException) throw error
-            timber.log.Timber.d(error, "Conexión local interrumpida")
+            timber.log.Timber.d("Conexión local interrumpida (%s): %s", error::class.simpleName, error.message)
             // Una clave incorrecta, una desconexión o una trama inválida cierran el canal completo.
         } finally {
             channel?.close() ?: socket.close(); sockets -= socket

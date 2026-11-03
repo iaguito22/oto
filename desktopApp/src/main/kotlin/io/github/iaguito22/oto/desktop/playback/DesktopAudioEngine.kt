@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,16 +20,17 @@ import javax.sound.sampled.DataLine
 import javax.sound.sampled.FloatControl
 import javax.sound.sampled.SourceDataLine
 import kotlin.math.log10
+import kotlin.math.roundToInt
 
 /**
  * Motor de audio de escritorio para Linux (PipeWire/PulseAudio/ALSA) y Windows (WASAPI/DirectSound).
  *
- * Estrategia dual sin dependencias nativas frágiles:
+ * Descarga y reproducción:
  * 1. Descarga por trozos HTTP de 1 MB (`downloadChunked`), igual que `Chunked.kt` en Android, evitando el
  *    estrangulamiento de ~33 KB/s de YouTube y guardando cada canción en caché de disco (`Tier.key(id)`).
- * 2. Reproducción con `ffplay -nodisp -autoexit -loglevel quiet` cuando `ffplay` está en el `PATH`
- *    (soporta Opus/WebM 251 y AAC/M4A 140 nativos de YouTube Music con seek instantáneo `-ss`), y
- *    respaldo con `javax.sound.sampled.SourceDataLine`.
+ * 2. En Windows, FFmpeg decodifica a PCM y Java Sound entrega las muestras al dispositivo,
+ *    permitiendo ajustar el volumen sin reiniciar la reproducción. En Linux se conserva ffplay.
+ *    Ambos admiten Opus/WebM y AAC/M4A con seek `-ss`; Java Sound sirve de respaldo.
  */
 class DesktopAudioEngine(
     private val cacheDir: File,
@@ -51,7 +53,11 @@ class DesktopAudioEngine(
     @Volatile private var beatFile: String? = null
     @Volatile private var beatLength = 0L
     private var beatJob: Job? = null
-    fun beat(positionMs: Long): Float = if (_state.value.playing) beats.getOrElse((positionMs * 48000 / 512000).toInt()) { 0f } else 0f
+    fun beat(positionMs: Long): Float {
+        if (!_state.value.playing || _state.value.buffering || activeFile?.absolutePath != beatFile) return 0f
+        val position = if (useFfmpegPcm) currentLine?.let { startOffsetMs + it.longFramePosition * 1000 / 48000 } ?: positionMs else positionMs
+        return beats.getOrElse((position.coerceAtLeast(0L) * 48000 / 512000).toInt()) { 0f }
+    }
     private fun analyzeBeat(file: File) {
         if (beatFile == file.absolutePath && beatLength == file.length()) return
         beatJob?.cancel(); beats = FloatArray(0); beatFile = file.absolutePath;beatLength = file.length()
@@ -76,8 +82,11 @@ class DesktopAudioEngine(
 
     private val hasFfplay: Boolean by lazy {
         runCatching {
-            ProcessBuilder("ffplay", "-version").redirectErrorStream(true).start().waitFor() == 0
+            DesktopTools.find("ffplay") != null
         }.getOrDefault(false)
+    }
+    private val useFfmpegPcm: Boolean by lazy {
+        System.getProperty("os.name").startsWith("Windows", true) && DesktopTools.find("ffmpeg") != null
     }
 
     init {
@@ -89,7 +98,7 @@ class DesktopAudioEngine(
         val previous = gainLinear
         gainLinear = linear.coerceIn(0.0f, 2.0f)
         val process = currentProcess
-        if (process != null && previous != gainLinear) {
+        if (process != null && previous != gainLinear && !useFfmpegPcm) {
             volumeJob?.cancel()
             volumeJob = scope.launch {
                 delay(120)
@@ -97,7 +106,7 @@ class DesktopAudioEngine(
                 if (currentProcess === process && _state.value.playing && file != null && file.exists()) startPlaybackAt(file, _state.value.positionMs)
             }
         }
-        currentLine?.let { line ->
+        currentLine?.takeUnless { useFfmpegPcm }?.let { line ->
             runCatching {
                 if (line.isControlSupported(FloatControl.Type.MASTER_GAIN)) {
                     val ctrl = line.getControl(FloatControl.Type.MASTER_GAIN) as FloatControl
@@ -132,13 +141,23 @@ class DesktopAudioEngine(
         downloadJob = scope.launch(Dispatchers.IO) {
             try {
                 if (!targetFile.exists() || targetFile.length() < MIN_PLAYABLE_BYTES || (contentLength != null && contentLength > 0L && targetFile.length() < contentLength)) {
-                    downloadChunked(streamUrl, headers, contentLength, targetFile) { downloaded, total ->
-                        val frac = if (total > 0L) (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0.5f
-                        _state.value = _state.value.copy(bufferedFraction = frac)
-                    }
+                    // Cada descarga usa su temporal: cancelar una preparación no puede dejar una caché
+                    // parcial que otra reproducción interprete como una canción completa.
+                    val partial=File.createTempFile("oto-audio-", ".part",cacheDir)
+                    try {
+                        downloadChunked(streamUrl, headers, contentLength, partial) { downloaded, total ->
+                            val frac = if (total > 0L) (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0.5f
+                            _state.value = _state.value.copy(bufferedFraction = frac)
+                        }
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                        java.nio.file.Files.move(partial.toPath(),targetFile.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    } finally { partial.delete() }
                 } else {
                     _state.value = _state.value.copy(bufferedFraction = 1f)
                 }
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                if (activeFile != targetFile) return@launch
+                _state.value = _state.value.copy(bufferedFraction = 1f)
                 updateDuration(targetFile)
                 if (playJob == null && _state.value.playing && targetFile.exists() && targetFile.length() > 0L) {
                     startPlaybackAt(targetFile, initialPositionMs)
@@ -148,6 +167,7 @@ class DesktopAudioEngine(
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (t: Throwable) {
+                _state.value = _state.value.copy(playing = false, buffering = false)
                 Timber.w(t, "Error descargando stream para $cacheKey")
                 onError(t)
             }
@@ -183,7 +203,7 @@ class DesktopAudioEngine(
 
     private fun updateDuration(file: File) {
         val actual = runCatching {
-            val process = ProcessBuilder("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file.absolutePath)
+            val process = ProcessBuilder(DesktopTools.require("ffprobe"), "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file.absolutePath)
                 .redirectErrorStream(true).start()
             if (!process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) { process.destroyForcibly(); return@runCatching null }
             process.inputStream.bufferedReader().use { it.readText().trim().toDoubleOrNull()?.times(1000)?.toLong() }
@@ -199,17 +219,19 @@ class DesktopAudioEngine(
         killDecodeProcess()
         startOffsetMs = offsetMs.coerceAtLeast(0L)
         playStartedWallMs = System.currentTimeMillis()
-        _state.value = _state.value.copy(playing = true, buffering = hasFfplay, positionMs = startOffsetMs)
+        _state.value = _state.value.copy(playing = true, buffering = hasFfplay || useFfmpegPcm, positionMs = startOffsetMs)
 
-        if (!hasFfplay) startTicker()
+        if (!hasFfplay && !useFfmpegPcm) startTicker()
 
         playJob = scope.launch(Dispatchers.IO) {
             try {
-                if (hasFfplay) {
+                if (useFfmpegPcm) {
+                    playWithFfmpeg(file, startOffsetMs)
+                } else if (hasFfplay) {
                     val sec = String.format(java.util.Locale.US, "%.3f", startOffsetMs / 1000.0)
                     val vol = (gainLinear * 100f).toInt().coerceIn(0, 100)
                     val pb = ProcessBuilder(
-                        "ffplay",
+                        DesktopTools.require("ffplay"),
                         "-nodisp",
                         "-autoexit",
                         "-loglevel", "quiet",
@@ -223,6 +245,7 @@ class DesktopAudioEngine(
                     currentProcess = proc
                     if (!isActive) { proc.destroyForcibly(); return@launch }
                     val status = StringBuilder()
+                    var decodedAudio = false
                     val clockPattern = Regex("^\\s*(-?\\d+(?:\\.\\d+)?)\\s+(?:M-A|:)")
                     proc.errorStream.bufferedReader().use { reader ->
                         while (isActive && currentProcess === proc) {
@@ -231,6 +254,7 @@ class DesktopAudioEngine(
                             if (ch == '\r'.code || ch == '\n'.code) {
                                 val seconds = clockPattern.find(status.toString())?.groupValues?.get(1)?.toDoubleOrNull()
                                 if (seconds != null && currentProcess === proc && _state.value.playing) {
+                                    decodedAudio = true
                                     val position = (startOffsetMs + (seconds * 1000).toLong()).coerceAtLeast(startOffsetMs)
                                         .let { if (activeDurationMs > 0) it.coerceAtMost(activeDurationMs) else it }
                                     _state.value = _state.value.copy(positionMs = position, buffering = false)
@@ -240,10 +264,10 @@ class DesktopAudioEngine(
                         }
                     }
                     val code = proc.waitFor()
-                    if (isActive && currentProcess === proc && code == 0) {
-                        _state.value = _state.value.copy(playing = false, positionMs = activeDurationMs)
+                    if (isActive && currentProcess === proc && code == 0 && decodedAudio) {
+                        _state.value = _state.value.copy(playing = false, buffering = false, positionMs = activeDurationMs)
                         onEnded()
-                    } else if (isActive && currentProcess === proc && code != 0) {
+                    } else if (isActive && currentProcess === proc) {
                         _state.value = _state.value.copy(playing = false, buffering = false)
                         onError(IllegalStateException("No se pudo reproducir el audio (ffplay: $code)"))
                     }
@@ -251,8 +275,67 @@ class DesktopAudioEngine(
                     playWithJavaSound(file, startOffsetMs)
                 }
             } catch (t: Throwable) {
-                if (isActive) Timber.w(t, "Fallo en reproducción de escritorio")
+                if (isActive) {
+                    _state.value = _state.value.copy(playing = false, buffering = false)
+                    Timber.w(t, "Fallo en reproducción de escritorio")
+                    onError(t)
+                }
             }
+        }
+    }
+
+    /** Windows: FFmpeg decodifica y Java Sound entrega PCM al dispositivo. El volumen
+     * se aplica a las muestras, sin cerrar ni reiniciar el proceso por cada ajuste. */
+    private suspend fun playWithFfmpeg(file: File, offsetMs: Long) {
+        val format = AudioFormat(48000f, 16, 2, true, false)
+        val line = AudioSystem.getSourceDataLine(format)
+        var process: Process? = null
+        try {
+            line.open(format, 19200)
+            currentLine = line
+            val seconds = String.format(java.util.Locale.US, "%.3f", offsetMs / 1000.0)
+            val proc = ProcessBuilder(DesktopTools.require("ffmpeg"), "-nostdin", "-v", "error",
+                "-ss", seconds, "-i", file.absolutePath, "-vn", "-ac", "2", "-ar", "48000", "-f", "s16le", "pipe:1")
+                .redirectError(ProcessBuilder.Redirect.DISCARD).start()
+            process = proc
+            currentProcess = proc
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            line.start()
+            var decoded = false
+            proc.inputStream.buffered().use { input ->
+                val buffer = ByteArray(8192)
+                while (kotlinx.coroutines.currentCoroutineContext().isActive && currentProcess === proc && currentLine === line) {
+                    val count = input.readNBytes(buffer, 0, buffer.size)
+                    if (count == 0) break
+                    check(count % format.frameSize == 0) { "FFmpeg devolvió una muestra incompleta" }
+                    val gain = gainLinear
+                    if (gain != 1f) for (index in 0 until count step 2) {
+                        val sample = (((buffer[index + 1].toInt() and 255) shl 8) or (buffer[index].toInt() and 255)).toShort().toInt()
+                        val scaled = (sample * gain).roundToInt().coerceIn(-32768, 32767)
+                        buffer[index] = scaled.toByte(); buffer[index + 1] = (scaled shr 8).toByte()
+                    }
+                    line.write(buffer, 0, count)
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    if (currentProcess !== proc || currentLine !== line) return
+                    decoded = true
+                    val position = offsetMs + line.longFramePosition * 1000 / 48000
+                    _state.value = _state.value.copy(buffering = false,
+                        positionMs = if (activeDurationMs > 0) position.coerceAtMost(activeDurationMs) else position)
+                }
+            }
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            if (currentProcess !== proc || currentLine !== line) return
+            line.drain()
+            check(proc.waitFor() == 0 && decoded) { "No se pudo decodificar el audio con FFmpeg" }
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            if (currentProcess !== proc || currentLine !== line) return
+            _state.value = _state.value.copy(playing = false, buffering = false, positionMs = activeDurationMs)
+            onEnded()
+        } finally {
+            if (currentProcess === process) currentProcess = null
+            if (currentLine === line) currentLine = null
+            process?.destroyForcibly()
+            line.stop(); line.close()
         }
     }
 

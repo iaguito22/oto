@@ -6,7 +6,7 @@ import kotlin.math.max
 /** Coordenadas lógicas de escritorio; las mismas unidades que las ventanas AWT. */
 internal data class DockRect(val x: Int, val y: Int, val width: Int, val height: Int)
 internal enum class DockId(val rank: Int, val defaultWidth: Int, val minWidth: Int, val minHeight: Int) {
-    Library(3, 960, 640, 480), Player(2, 320, 260, 370), Lyrics(1, 480, 260, 250), Queue(1, 420, 260, 250)
+    Library(3, 960, 640, 480), Player(2, 320, 260, 370), Lyrics(1, 480, 220, 250), Queue(1, 420, 240, 250)
 }
 internal data class DockGroup(
     val members: MutableList<DockId>, var leader: DockId,
@@ -58,12 +58,14 @@ internal class DockLayout {
         g.members.forEach { bounds[it] = bounds.getValue(it).let { r -> r.copy(x = r.x + dx, y = r.y + dy) } }
         changed()
     }
-    fun resize(id: DockId, width: Int, height: Int) {
+    fun resize(id: DockId, width: Int, height: Int, top: Int? = null) {
         val g = group(id)
         if (g.maximized) return
         val first = bounds.getValue(g.members.first())
         bounds[id] = bounds.getValue(id).copy(width = max(minWidth(id), width))
-        flow(g, first.x, first.y, max(height, g.members.maxOf { minHeight(it) }))
+        val newHeight = max(height, g.members.maxOf { minHeight(it) })
+        val y = if(top == null) first.y else top + height - newHeight
+        flow(g, first.x, y, newHeight)
         changed()
     }
     /** Los dependientes son las piezas exteriores hasta el siguiente módulo de igual o mayor rango. */
@@ -118,7 +120,8 @@ internal class DockLayout {
         val oldMembers = b.members.toList()
         val oldLeader = b.leader
         val first = bounds.getValue(b.members.first())
-        val height = bounds.getValue(if (a.leader.rank > b.leader.rank) a.leader else b.leader).height
+        // El conjunto ya visible conserva su altura; la pieza entrante se adapta a él.
+        val height = bounds.getValue(b.leader).height
         val index = b.members.indexOf(target) + if (before) 0 else 1
         b.members.addAll(index, a.members)
         if (a.leader.rank > b.leader.rank) b.leader = a.leader
@@ -160,6 +163,16 @@ internal class DockLayout {
             val first = bounds.getValue(g.members.first())
             flow(g, first.x, first.y, bounds.getValue(g.leader).height.coerceAtLeast(g.members.maxOf { minHeight(it) }))
             g.maximized = false; g.area = null; g.restored.clear()
+            if (g.members.sumOf { bounds.getValue(it).width } > area.width) {
+                // Los módulos abiertos durante la maximización no estaban en el ancho
+                // normal original. Ajustarlo evita restaurar el reproductor fuera del monitor.
+                val normal = bounds.getValue(g.members.first())
+                g.area = area.copy(y = normal.y.coerceIn(area.y, max(area.y, area.y + area.height - normal.height)),
+                    height = minOf(normal.height, area.height))
+                fit(g)
+                g.area = null
+            }
+            constrain(id, area)
         } else {
             g.restored.putAll(g.members.associateWith { bounds.getValue(it) })
             g.area = area
@@ -206,19 +219,13 @@ internal class DockLayout {
         constrain(id, area)
         return fits
     }
-    /** Reordenar una pieza no arrastra dependientes: la jefa divide inserción e intercambio. */
-    fun reorder(id: DockId, target: DockId, before: Boolean = false) {
+    /** Intercambia únicamente las dos ventanas señaladas, conservando el resto del conjunto. */
+    fun reorder(id: DockId, target: DockId) {
         val g = group(id)
-        if (id == g.leader || target == g.leader || id == target || target !in g.members) return
-        val root = g.members.indexOf(g.leader)
+        if (id == g.leader || id == target || target !in g.members) return
         val from = g.members.indexOf(id); val to = g.members.indexOf(target)
         val chiefX = bounds.getValue(g.leader).x
-        if ((from < root) != (to < root)) {
-            g.members[from] = target; g.members[to] = id
-        } else {
-            g.members.remove(id)
-            g.members.add(g.members.indexOf(target) + if(before) 0 else 1, id)
-        }
+        g.members[from] = target; g.members[to] = id
         if (g.maximized) fit(g) else {
             val start = chiefX - g.members.take(g.members.indexOf(g.leader)).sumOf { bounds.getValue(it).width }
             val chief = bounds.getValue(g.leader)

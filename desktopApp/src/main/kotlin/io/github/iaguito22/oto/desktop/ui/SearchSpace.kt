@@ -67,7 +67,7 @@ internal fun SearchSpace(state:MenuState,lists:List<LocalPlaylist>,currentId:Str
                             }
                         }
                     } else SearchLine(item.title,subtitle,item.thumbnail,item is ArtistItem,open) {
-                        if(item is SongItem) { val h=item.toHeard();var openMenu by remember(item.id){mutableStateOf(false)};Box{HoverAction(MobileIcons.moreHoriz,"Opciones de ${item.title}",onClick={openMenu=true});DropdownMenu(openMenu,{openMenu=false},shape=RoundedCornerShape(18.dp)){DropdownMenuItem(text={Text("Guardar en…")},onClick={openMenu=false;onSave(h)});DropdownMenuItem(text={Text("Reproducir a continuación")},onClick={openMenu=false;player.playNext(item)});DropdownMenuItem(text={Text("Descargar")},onClick={openMenu=false;scope.launch{prefs.setDownloadSong(h,true)}})}} }
+                        if(item is SongItem) { val h=item.toHeard();var openMenu by remember(item.id){mutableStateOf(false)};Box{HoverAction(MobileIcons.moreHoriz,"Opciones de ${item.title}",onClick={openMenu=true});LibraryDropdownMenu(openMenu,{openMenu=false},shape=RoundedCornerShape(18.dp)){DropdownMenuItem(text={Text("Guardar en…")},onClick={openMenu=false;onSave(h)});DropdownMenuItem(text={Text("Reproducir a continuación")},onClick={openMenu=false;player.playNext(item)});DropdownMenuItem(text={Text("Descargar")},onClick={openMenu=false;scope.launch{prefs.setDownloadSong(h,true)}})}} }
                     }
                 }
             }

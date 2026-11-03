@@ -109,6 +109,10 @@ object LyricsSource {
         val d = json ?: throw IOException("lyricsplus no contesta", failed)
         val arr = d.optJSONArray("lyrics") ?: return null
         val meta = d.optJSONObject("metadata")
+        val resultTitle = meta?.optString("title").orEmpty()
+        if (resultTitle.isNotBlank() && !sameTrackTitle(title, resultTitle)) return null
+        val resultArtist = meta?.optString("artist").orEmpty()
+        if (resultArtist.isNotBlank() && !sameTrackArtist(q.artist, resultArtist)) return null
         val source = when (meta?.optString("source")) {
             "qApple", "Apple" -> "Apple Music"
             "Spotify" -> "Spotify"
@@ -160,14 +164,13 @@ object LyricsSource {
         val firstArtist = q.artist.split(", ", " & ", " x ").first()
         val search = JSONObject(get("https://music.163.com/api/search/get?type=1&limit=8&s=${enc("$title $firstArtist")}") ?: return null)
         val songs = search.optJSONObject("result")?.optJSONArray("songs") ?: return null
-        val nn = norm(title)
         val na = norm(firstArtist)
         var best: JSONObject? = null
         var bestDiff = Long.MAX_VALUE
         for (i in 0 until songs.length()) {
             val s = songs.getJSONObject(i)
             val sn = norm(s.optString("name"))
-            val sameName = sn.isNotEmpty() && (sn == nn || sn.startsWith(nn) || nn.startsWith(sn))
+            val sameName = sn.isNotEmpty() && sameTrackTitle(title, s.optString("name"))
             val artists = s.optJSONArray("artists") ?: JSONArray()
             val sameArtist = (0 until artists.length()).any { k ->
                 val x = norm(artists.getJSONObject(k).optString("name"))
@@ -233,13 +236,18 @@ object LyricsSource {
         // La exacta (título, artista y duración); si no, buscando, y si tampoco, buscando todo junto.
         val direct = retry { get("https://lrclib.net/api/get?track_name=${enc(title)}&artist_name=${enc(artist)}" + (if (secs > 0) "&duration=$secs" else "")) }
             ?.let(::JSONObject)
-        val hit = direct ?: sequenceOf(
+        fun matches(item: JSONObject): Boolean {
+            val foundTitle=item.optString("trackName")
+            val foundArtist=item.optString("artistName")
+            return foundTitle.isNotBlank() && sameTrackTitle(title,foundTitle) && sameTrackArtist(artist,foundArtist) && (secs <= 0 || abs(item.optDouble("duration") - secs) <= 3)
+        }
+        val hit = direct?.takeIf(::matches) ?: sequenceOf(
             "https://lrclib.net/api/search?track_name=${enc(title)}&artist_name=${enc(artist)}",
             "https://lrclib.net/api/search?q=${enc("$title $artist")}",
         ).firstNotNullOfOrNull { url ->
             val arr = JSONArray(retry { get(url) } ?: return@firstNotNullOfOrNull null)
             (0 until arr.length()).map(arr::getJSONObject)
-                .filter { secs <= 0 || abs(it.optDouble("duration") - secs) <= 3 }
+                .filter(::matches)
                 .maxByOrNull { if (it.optString("syncedLyrics").isNotBlank() && it.optString("syncedLyrics") != "null") 1 else 0 }
         } ?: return null
         val synced = hit.optString("syncedLyrics").takeIf { it.isNotBlank() && it != "null" }
@@ -451,6 +459,15 @@ object LyricsSource {
     private fun firstArtist(a: String) = a.split(", ", " & ").first().trim()
 
     private fun norm(t: String) = t.lowercase().filter { it.isLetterOrDigit() }
+
+    internal fun sameTrackTitle(requested: String, found: String): Boolean {
+        val a=norm(cleanTitle(requested)); val b=norm(cleanTitle(found))
+        return a.isNotEmpty() && a == b
+    }
+    internal fun sameTrackArtist(requested: String, found: String): Boolean {
+        val a=norm(firstArtist(requested)); val b=norm(found)
+        return a.isNotEmpty() && b.isNotEmpty() && (a.contains(b) || b.contains(a))
+    }
 
     // «(Official Video)», «[Lyrics]»…: ninguna web de letras los tiene en el título.
     private val NOISE = Regex(

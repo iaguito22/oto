@@ -6,6 +6,7 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -21,11 +22,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.LIKED_ID
+import io.github.iaguito22.oto.account.YOUTUBE_LIKES_LIST_ID
 import io.github.iaguito22.oto.account.Cloud
 import io.github.iaguito22.oto.account.CloudSelection
 import kotlinx.coroutines.launch
 
-private data class AccountListChoice(val id: String, val name: String, val detail: String)
+private data class AccountListChoice(val id: String, val name: String, val detail: String, val artwork: String? = null)
 
 @Composable
 internal fun CloudChoices(cloud: Cloud, local: List<LocalPlaylist>) {
@@ -44,11 +46,11 @@ internal fun CloudChoices(cloud: Cloud, local: List<LocalPlaylist>) {
     LaunchedEffect(saved) { if(!busy) { val choice=CloudSelection.decode(saved);imports=choice?.imports.orEmpty();exports=choice?.exports.orEmpty() } }
     LaunchedEffect(revision) {
         loading=true;failure=null
-        try { catalog=cloud.available().map { AccountListChoice(it.id.removePrefix("VL"),it.title,it.songCountText.orEmpty()) } }
+        try { catalog=cloud.available().map { AccountListChoice(it.id.removePrefix("VL"),it.title,it.songCountText.orEmpty(),it.thumbnail) } }
         catch(e:Exception) { if(e is kotlinx.coroutines.CancellationException) throw e; failure="No se pudieron cargar las listas. Comprueba la conexión y reintenta." }
         finally { loading=false }
     }
-    val entries=if(importing) listOf(AccountListChoice("LM","Me gusta","De YouTube Music a Oto"))+catalog else listOf(AccountListChoice(LIKED_ID,"Me gusta","Sincronizar tus Me gusta con YouTube Music"))+local.map { AccountListChoice(it.id,it.name,"${it.songs.size} canciones") }
+    val entries=if(importing) listOf(AccountListChoice("LM","Me gusta de YouTube Music","Importar como lista independiente"))+catalog else listOf(AccountListChoice(LIKED_ID,"Me gusta de Oto","Guardar como lista independiente en YouTube Music"))+local.filter { it.id != YOUTUBE_LIKES_LIST_ID }.map { AccountListChoice(it.id,it.name,"${it.songs.size} canciones",it.songs.firstOrNull()?.artwork) }
     val filtered=entries.filter { it.name.contains(query,ignoreCase=true) }
     val selected=if(importing) imports else exports
     val accent=MaterialTheme.colorScheme.primary
@@ -70,20 +72,25 @@ internal fun CloudChoices(cloud: Cloud, local: List<LocalPlaylist>) {
             TextButton(enabled=!busy && (!importing || !loading),onClick={if(importing)imports=imports+filtered.map{it.id}else exports=exports+filtered.map{it.id}}) { Text("Todas") }
         }
         if(importing && loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        LazyColumn(Modifier.fillMaxWidth().heightIn(min=100.dp,max=220.dp),verticalArrangement=Arrangement.spacedBy(3.dp)) {
+        val listState=rememberLazyListState()
+        Box(Modifier.fillMaxWidth().heightIn(min=100.dp,max=220.dp)) {
+        LazyColumn(Modifier.fillMaxWidth().padding(end=10.dp),state=listState,verticalArrangement=Arrangement.spacedBy(3.dp)) {
             if(filtered.isEmpty()) item { Text("No hay listas con ese nombre",Modifier.padding(14.dp),style=MaterialTheme.typography.bodySmall) }
             items(filtered,key={it.id}) { item ->
                 val checked=item.id in selected
                 val interaction=remember { MutableInteractionSource() }
                 val hover by interaction.collectIsHoveredAsState()
-                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(if(checked)accent.copy(alpha=.06f)else Color.Transparent).hoverable(interaction).clickable(interactionSource=interaction,indication=null,enabled=!busy) { if(importing) imports=if(checked)imports-item.id else imports+item.id else exports=if(checked)exports-item.id else exports+item.id }.semantics { role=Role.Checkbox; stateDescription=if(checked)"Seleccionada"else"Sin seleccionar" }.padding(horizontal=12.dp,vertical=11.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(if(checked)accent.copy(alpha=.06f)else if(hover)Color.White.copy(alpha=.04f)else Color.Transparent).hoverable(interaction).clickable(interactionSource=interaction,indication=null,enabled=!busy) { if(importing) imports=if(checked)imports-item.id else imports+item.id else exports=if(checked)exports-item.id else exports+item.id }.semantics { role=Role.Checkbox; stateDescription=if(checked)"Seleccionada"else"Sin seleccionar" }.padding(horizontal=12.dp,vertical=11.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                    LibraryArt(item.artwork,Modifier.size(40.dp))
                     Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(3.dp)) {
-                        Text(item.name,style=MaterialTheme.typography.bodyMedium.copy(fontSize=MaterialTheme.typography.bodyMedium.fontSize*(if(hover)1.04f else 1f)),maxLines=1,overflow=TextOverflow.Ellipsis)
+                        Text(item.name,style=MaterialTheme.typography.bodyMedium,maxLines=1,overflow=TextOverflow.Ellipsis)
                         if(item.detail.isNotBlank())Text(item.detail,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.4f),maxLines=1,overflow=TextOverflow.Ellipsis)
                     }
                     Box(Modifier.size(22.dp).border(1.5.dp,if(checked)accent else MaterialTheme.colorScheme.onSurface.copy(alpha=.3f),CircleShape),contentAlignment=Alignment.Center) { if(checked)Box(Modifier.size(12.dp).background(accent,CircleShape)) }
                 }
             }
+        }
+        VerticalScrollbar(rememberScrollbarAdapter(listState),Modifier.align(Alignment.CenterEnd).fillMaxHeight())
         }
         failure?.let { Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall);TextButton(onClick={revision++},enabled=!busy){Text("Volver a cargar")} }
         result?.let { Text(it,color=accent,style=MaterialTheme.typography.bodySmall) }
@@ -95,6 +102,6 @@ internal fun CloudChoices(cloud: Cloud, local: List<LocalPlaylist>) {
                 finally { busy=false }
             }
         }) { Text(if(busy) "Preparando tus listas…" else if(imports.isEmpty()&&exports.isEmpty()) "Continuar sin sincronizar listas" else "Aplicar selección") }
-        Text("Desmarcar una lista no la borra. Puedes cambiar tu selección aquí cuando quieras.",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.4f))
+        Text("Los Me gusta de Oto y YouTube Music se guardan por separado. Desmarcar una lista no la borra.",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.4f))
     }
 }

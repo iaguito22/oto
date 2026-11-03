@@ -3,8 +3,10 @@ package io.github.iaguito22.oto.desktop.playback
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.EOFException
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URI
@@ -61,6 +63,7 @@ suspend fun downloadChunked(
                     total = range?.substringAfterLast('/')?.toLongOrNull()?.takeIf { it > 0L } ?: -1L
                 }
                 val cl = conn.contentLengthLong
+                if (code == HttpURLConnection.HTTP_OK && cl >= 0L) total = cl
                 if (total < 0L && cl > 0L && cl < DOWNLOAD_CHUNK_BYTES) {
                     total = offset + cl
                 }
@@ -76,13 +79,18 @@ suspend fun downloadChunked(
                         onProgress(offset, if (total > 0L) total else 0L)
                     }
                 }
-                // Un trozo corto es el último: el total real es lo que llevamos.
-                if (readInChunk < DOWNLOAD_CHUNK_BYTES) total = offset
+                currentCoroutineContext().ensureActive()
+                // Un cuerpo corto no completa una descarga cuyo tamaño ya conocemos.
+                if (total >= 0L && offset < minOf(end + 1, total)) {
+                    throw EOFException("El audio se interrumpió: $offset de $total bytes")
+                }
+                if (code == HttpURLConnection.HTTP_OK || (total < 0L && readInChunk < DOWNLOAD_CHUNK_BYTES)) total = offset
             } finally {
                 conn.disconnect()
             }
         }
     }
+    currentCoroutineContext().ensureActive()
     onProgress(offset, offset)
     offset
 }

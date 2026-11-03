@@ -22,7 +22,7 @@ internal object DesktopBeat {
     fun analyze(file: File, cancelled: () -> Boolean): FloatArray {
         val values=ArrayList<Float>()
         val detector=Detector { values.add(it) }
-        val process=ProcessBuilder("ffmpeg","-v","error","-i",file.absolutePath,"-vn","-ac","1","-ar","48000","-f","s16le","pipe:1").redirectError(ProcessBuilder.Redirect.DISCARD).start()
+        val process=ProcessBuilder(DesktopTools.require("ffmpeg"),"-v","error","-i",file.absolutePath,"-vn","-ac","1","-ar","48000","-f","s16le","pipe:1").redirectError(ProcessBuilder.Redirect.DISCARD).start()
         try {
             BufferedInputStream(process.inputStream).use { input ->
                 while(!cancelled()) {

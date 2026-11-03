@@ -22,6 +22,10 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
@@ -44,6 +48,7 @@ const val DOWNLOADS_ID = "downloads"
 class DesktopDownloads(
     private val prefs: Prefs,
     private val scope: CoroutineScope,
+    private val resolve: suspend (String, Tier) -> Result<InnerTubeXPlayer.Stream> = InnerTubeXPlayer::resolve,
 ) {
     enum class State { Queued, Downloading, Done, Failed }
 
@@ -74,6 +79,8 @@ class DesktopDownloads(
     private var started = false
     private var syncJob: Job? = null
     private var retryJob: Job? = null
+    private val workers = mutableListOf<Job>()
+    private val active = ConcurrentHashMap<String, Job>()
 
     fun start() {
         if (started) return
@@ -82,12 +89,17 @@ class DesktopDownloads(
         loadIndex()
 
         repeat(PARALLEL) {
-            scope.launch(Dispatchers.IO) {
+            workers += scope.launch(Dispatchers.IO) {
                 for (id in queue) {
                     val heard = _wanted.value[id] ?: continue
                     if (_entries.value[id]?.state == State.Done && localFile(id) != null) continue
-                    runCatching { download(id, heard) }
-                        .onFailure { if (it !is CancellationException) Timber.w(it, "descarga %s", id) }
+                    coroutineScope {
+                        val task = launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+                            if (id in _wanted.value) download(id, heard)
+                        }
+                        active[id] = task
+                        try { task.start(); task.join() } finally { active.remove(id, task) }
+                    }
                 }
             }
         }
@@ -130,6 +142,12 @@ class DesktopDownloads(
         syncJob = null
         retryJob?.cancel()
         retryJob = null
+        workers.forEach { it.cancel() }
+        workers.clear()
+        active.values.forEach { it.cancel() }
+        active.clear()
+        while (queue.tryReceive().isSuccess) { /* No conservar trabajos de la ejecución anterior. */ }
+        _entries.update { it.filterValues { entry -> entry.state == State.Done } }
         started = false
     }
 
@@ -161,6 +179,10 @@ class DesktopDownloads(
         queue.trySend(id)
     }
 
+    fun retry(id: String) {
+        if (_entries.value[id]?.state == State.Failed) _wanted.value[id]?.let { enqueue(id, it) }
+    }
+
     private suspend fun download(id: String, heard: Heard) {
         val before = _entries.value[id]
         update(id) {
@@ -178,7 +200,7 @@ class DesktopDownloads(
         while (currentCoroutineContext().isActive) {
             attempt++
             try {
-                val stream = InnerTubeXPlayer.resolve(id, Tier.High).getOrElse { throw it }
+                val stream = resolve(id, Tier.High).getOrElse { throw it }
                 val ext = if (
                     stream.quality.codec.contains("opus", ignoreCase = true) ||
                     stream.quality.codec.contains("webm", ignoreCase = true)
@@ -263,17 +285,20 @@ class DesktopDownloads(
     fun bytes(): Long =
         dir.listFiles()?.filter { it.isFile && it.name != indexFile.name }?.sumOf { it.length() } ?: 0L
 
-    fun remove(id: String) {
-        val entry = _entries.value[id] ?: return
+    suspend fun remove(id: String) = withContext(Dispatchers.IO) {
+        active.remove(id)?.cancelAndJoin()
+        val entry = _entries.value[id] ?: return@withContext
         runCatching { if (entry.file.isNotEmpty()) File(dir, entry.file).delete() }
         runCatching { File(dir, "$id.part").delete() }
         _entries.update { it - id }
-        scope.launch(Dispatchers.IO) { saveIndex() }
+        saveIndex()
     }
 
     /** Todo fuera: lo pedido en Prefs y lo bajado. */
     suspend fun clear() {
         prefs.clearDownloads()
+        _wanted.value = emptyMap()
+        active.values.toList().forEach { it.cancelAndJoin() }
         dir.listFiles()?.forEach { it.delete() }
         _entries.value = emptyMap()
         saveIndex()

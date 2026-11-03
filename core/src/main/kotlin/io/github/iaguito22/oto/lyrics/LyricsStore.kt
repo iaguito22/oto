@@ -68,6 +68,7 @@ class LyricsStore(private val dir: File) {
         if (!file.exists()) return@withContext null
         runCatching {
             val o = JSONObject(file.readText())
+            if (o.optInt("matchVersion") != 2) return@runCatching null
             when (o.getString("t")) {
                 "missing" -> Lyrics.Missing.takeIf { System.currentTimeMillis() - file.lastModified() < MISSING_MS }
                 "plain" -> Lyrics.Plain(o.getJSONArray("l").strings(), o.getString("src"))
@@ -84,6 +85,7 @@ class LyricsStore(private val dir: File) {
         }
         runCatching {
             dir.mkdirs()
+            o.put("matchVersion", 2)
             File(dir, "$id.json").writeText(o.toString())
             trim()
         }.onFailure { Timber.w(it, "No se pudo guardar la letra") }

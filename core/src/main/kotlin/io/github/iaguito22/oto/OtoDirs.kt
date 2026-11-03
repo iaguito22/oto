@@ -65,7 +65,7 @@ object OtoDirs {
             "win" in os -> System.getenv("LOCALAPPDATA")?.let(::File) ?: File(System.getProperty("user.home"), "AppData/Local")
             else -> System.getenv("XDG_CACHE_HOME")?.let(::File) ?: File(System.getProperty("user.home"), ".cache")
         }
-        return File(base, "oto").apply { mkdirs() }
+        return desktopCacheDirectory(os, base).apply { mkdirs() }
     }
 
     private const val DJ_BYTES = 20L shl 20
@@ -83,6 +83,10 @@ object OtoDirs {
         }
     }
 }
+
+/** En Windows la raíz antigua también podía contener la instalación por usuario. */
+internal fun desktopCacheDirectory(os: String, base: File): File =
+    File(base, if (os.startsWith("Windows", true)) "oto/Cache" else "oto")
 
 /** Almacén ligero clave-valor en JSON para configuraciones como `oto_player_config`, `innertubex_player_config` y `oto_visitor`. */
 class KeyValueFile(private val file: File) {
