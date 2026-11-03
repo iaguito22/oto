@@ -7,7 +7,9 @@ on:
         required: true
         default: v1.2.3
 permissions:
-  contents: read
+  # GitHub exige acceso de escritura al contenido para ver releases en borrador.
+  # El trabajo solo descarga sus paquetes; no publica ni modifica la release.
+  contents: write
 jobs:
   linux:
     runs-on: ubuntu-22.04
