@@ -44,11 +44,10 @@ jobs:
             app_pid=$!
             trap "kill $app_pid 2>/dev/null || true" EXIT
             for attempt in $(seq 1 40); do
-              if xdotool search --name "Oto · Bienvenida" >/dev/null 2>&1; then break; fi
+              if xdotool search --onlyvisible --name "Oto · Bienvenida" >/dev/null 2>&1; then break; fi
               sleep 1
             done
-            welcome=$(xdotool search --name "Oto · Bienvenida" | head -1)
-            xdotool windowfocus --sync "$welcome"
+            welcome=$(xdotool search --onlyvisible --name "Oto · Bienvenida" | head -1)
             sleep 6
             xdotool windowclose "$welcome"
             for attempt in $(seq 1 20); do
