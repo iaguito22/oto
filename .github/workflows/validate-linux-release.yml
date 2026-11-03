@@ -38,7 +38,8 @@ jobs:
           /opt/oto/runtime/bin/java -version
           xvfb-run -a bash -euc '
             openbox > /tmp/openbox.log 2>&1 &
-            export XDG_DATA_HOME="$RUNNER_TEMP/oto-data" XDG_CACHE_HOME="$RUNNER_TEMP/oto-cache"
+            sleep 2
+            export XDG_DATA_HOME="$RUNNER_TEMP/oto-data" XDG_CACHE_HOME="$RUNNER_TEMP/oto-cache" SKIKO_RENDER_API=SOFTWARE_FAST
             /opt/oto/bin/Oto > oto-linux.log 2>&1 &
             app_pid=$!
             trap "kill $app_pid 2>/dev/null || true" EXIT
@@ -47,11 +48,14 @@ jobs:
               sleep 1
             done
             welcome=$(xdotool search --name "Oto · Bienvenida" | head -1)
-            xdotool windowactivate --sync "$welcome"
+            xdotool windowfocus --sync "$welcome"
             sleep 6
-            xdotool key Escape
-            sleep 3
-            xdotool search --name "Oto · Reproductor"
+            xdotool windowclose "$welcome"
+            for attempt in $(seq 1 20); do
+              if xdotool search --onlyvisible --name "Oto · Reproductor" >/dev/null 2>&1 && ! xdotool search --onlyvisible --name "Oto · Bienvenida" >/dev/null 2>&1; then break; fi
+              sleep 1
+            done
+            xdotool search --onlyvisible --name "Oto · Reproductor"
             if xdotool search --name "Oto · Tu música" >/dev/null 2>&1; then echo "La biblioteca no debe abrir en el primer arranque"; exit 1; fi
             if grep -E "UnsatisfiedLinkError|NoClassDefFoundError|Exception in thread|No se pudo abrir la bienvenida" oto-linux.log; then exit 1; fi
           '
