@@ -113,7 +113,7 @@ class PlaybackService : MediaLibraryService() {
     private val recent = ArrayDeque<String>()
 
     private val app by lazy { application as OtoApp }
-    private val library by lazy { Library(prefs) }
+    private val library by lazy { Library(prefs, this) }
     /** La última búsqueda desde Android Auto: la pide en dos pasos (cuántos hay, luego cuáles). */
     private var found: Pair<String, List<MediaItem>> = "" to emptyList()
     private val prefs by lazy { app.prefs }
@@ -817,14 +817,18 @@ class PlaybackService : MediaLibraryService() {
                 }
                 return f
             }
-            if (one != null && (Library.inList(one.mediaId) != null || one.mediaId.isEmpty())) return future {
+            if (one != null && (Library.listAction(one.mediaId) != null || Library.inList(one.mediaId) != null || one.mediaId.isEmpty())) return future {
                 val expanded = library.expand(one)
                 if (expanded != null) {
                     stopDj(); stopRadio()
                     list = true
+                    val action = Library.listAction(one.mediaId)
+                    if (action != null) player.shuffleModeEnabled = action.second
                     autoplay()
-                    MediaSession.MediaItemsWithStartPosition(expanded.first.map { it.withPlaybackUri() }, expanded.second, 0)
+                    val start = if (action?.second == true) expanded.first.indices.random() else expanded.second
+                    MediaSession.MediaItemsWithStartPosition(expanded.first.map { it.withPlaybackUri() }, start, 0)
                 } else {
+                    if (Library.listAction(one.mediaId) != null) return@future MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0)
                     val found = resolve(one).map { it.withPlaybackUri() }
                     stopDj()
                     list = false

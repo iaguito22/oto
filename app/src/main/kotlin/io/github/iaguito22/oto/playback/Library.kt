@@ -1,7 +1,7 @@
 package io.github.iaguito22.oto.playback
 
 import android.os.Bundle
-import androidx.core.net.toUri
+import android.content.Context
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.session.MediaConstants
@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.first
  * listas, en el orden de la app) y lo oído hace poco. Una canción tocada dentro de una lista lleva la lista en su id
  * ([inList]), para que suene la lista entera desde ella y no solo esa.
  */
-class Library(private val prefs: Prefs) {
+class Library(private val prefs: Prefs, private val context: Context) {
     fun root(): MediaItem = browsable(ROOT, "Oto")
 
     suspend fun children(parent: String): List<MediaItem> = when {
@@ -33,7 +33,7 @@ class Library(private val prefs: Prefs) {
                     .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST).build(),
             ).build())
             val liked = prefs.liked.first()
-            add(browsable(LIST + LIKED_ID, "Me gusta", count(liked.size), liked.firstOrNull()?.artwork))
+            add(browsable(LIST + LIKED_ID, "Me gusta", count(liked.size), liked.firstOrNull { it.artwork != null }?.artwork))
             val lists = prefs.playlists.first()
             val pinned = prefs.pinned.first()
             // Como en la app: lo fijado delante; una carpeta va donde su primera lista.
@@ -47,12 +47,19 @@ class Library(private val prefs: Prefs) {
         }
         parent == RECENT -> prefs.history.first().map { song(it, RECENT_ID) }
         parent.startsWith(FOLDER) -> prefs.playlists.first().filter { it.folder == parent.removePrefix(FOLDER) }.map(::list)
-        parent.startsWith(LIST) -> songsOf(parent.removePrefix(LIST))?.let { (id, songs) -> songs.map { song(it, id) } }.orEmpty()
+        parent.startsWith(LIST) -> songsOf(parent.removePrefix(LIST))?.let { (id, songs) ->
+            if (songs.isEmpty()) emptyList() else listOf(action(id, false), action(id, true)) + songs.map { song(it, id) }
+        }.orEmpty()
         else -> emptyList()
     }
 
     /** Lo que suena al tocar [item]: la lista entera desde ella si viene de una; si no, null (suena sola, con radio). */
     suspend fun expand(item: MediaItem): Pair<List<MediaItem>, Int>? {
+        listAction(item.mediaId)?.let { (id, _) ->
+            val songs = songsOf(id)?.second.orEmpty()
+            if (songs.isEmpty()) return null
+            return songs.map { it.toSong().toMediaItem() } to 0
+        }
         val (listId, songId) = inList(item.mediaId) ?: return null
         val songs = (if (listId == RECENT_ID) prefs.history.first() else songsOf(listId)?.second) ?: return null
         val at = songs.indexOfFirst { it.id == songId }.coerceAtLeast(0)
@@ -74,13 +81,19 @@ class Library(private val prefs: Prefs) {
         return base.buildUpon().setMediaId(IN + listId + SEP + h.id).build()
     }
 
+    private fun action(id: String, shuffle: Boolean) = MediaItem.Builder()
+        .setMediaId((if (shuffle) SHUFFLE else PLAY) + id)
+        .setMediaMetadata(MediaMetadata.Builder().setTitle(if (shuffle) "Reproducir en aleatorio" else "Reproducir")
+            .setIsBrowsable(false).setIsPlayable(true).setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST).build())
+        .build()
+
     private fun browsable(id: String, title: String, subtitle: String? = null, art: String? = null, grid: Boolean = false) = MediaItem.Builder()
         .setMediaId(id)
         .setMediaMetadata(
             MediaMetadata.Builder()
                 .setTitle(title)
                 .setSubtitle(subtitle)
-                .setArtworkUri(art?.toUri())
+                .setArtworkUri(art?.let { CarArtworkProvider.uri(context, it) })
                 .setIsBrowsable(true)
                 .setIsPlayable(false)
                 .setMediaType(if (id.startsWith(FOLDER) || id == MUSIC || id == RECENT || id == ROOT) MediaMetadata.MEDIA_TYPE_FOLDER_MIXED else MediaMetadata.MEDIA_TYPE_PLAYLIST)
@@ -103,9 +116,17 @@ class Library(private val prefs: Prefs) {
         private const val LIST = "list:"
         private const val FOLDER = "folder:"
         private const val IN = "in|"
+        private const val PLAY = "play|"
+        private const val SHUFFLE = "shuffle|"
         private const val SEP = "|"
         private const val RECENT_ID = "recent"
         private const val SEARCH_MAX = 30
+
+        fun listAction(mediaId: String): Pair<String, Boolean>? = when {
+            mediaId.startsWith(PLAY) && mediaId.length > PLAY.length -> mediaId.removePrefix(PLAY) to false
+            mediaId.startsWith(SHUFFLE) && mediaId.length > SHUFFLE.length -> mediaId.removePrefix(SHUFFLE) to true
+            else -> null
+        }
 
         /** «in|lista|canción» → (lista, canción). */
         fun inList(mediaId: String): Pair<String, String>? {

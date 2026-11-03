@@ -221,6 +221,8 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
 
     private fun setList(c: MediaController, items: List<MediaItem>, start: Int) {
         // Antes que la cola: el servicio mira el bucle al recibirla para decidir si seguirá con parecidas.
+        // La app ya entrega la cola ordenada; Auto puede haber activado el aleatorio nativo antes.
+        c.shuffleModeEnabled = false
         c.repeatMode = repeatModeOf(_loopMode.value)
         c.setMediaItems(items, start, 0)
         c.prepare()
@@ -245,6 +247,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         val items = original ?: return
         shuffling?.cancel()
         withController { c ->
+            c.shuffleModeEnabled = false
             val current = c.currentMediaItem ?: return@withController
             val at = items.indexOfFirst { it.mediaId == current.mediaId }
             if (at < 0) return@withController

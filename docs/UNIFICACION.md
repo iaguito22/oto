@@ -13,4 +13,6 @@ La integración parte de `7710312` (escritorio), incorpora el historial de Andro
 
 La vinculación se comprobó hasta el estado «Conectado · Red local». Quedan por comprobar con datos de prueba la sincronización de biblioteca, los controles y el traspaso de reproducción entre dispositivos, así como esta integración concreta en Windows. El informe de la validación anterior en Windows está en `VALIDACION_WINDOWS.md`.
 
+Android Auto ofrece acciones de reproducción normal y aleatoria al entrar en una lista y recibe las carátulas mediante un proveedor local. Falta comprobar estas funciones en una pantalla de Android Auto o con la unidad principal de escritorio.
+
 Para pruebas en un móvil con datos reales, usa una variante con identificador independiente y evita reinstalar sobre la aplicación habitual. Nunca incluyas claves de firma, credenciales ni códigos de vinculación en Git.
