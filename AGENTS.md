@@ -1,13 +1,17 @@
 # Oto — continuidad después de /clear
 
-Actualizado: 03/11/2026, preparación y validación de la release 1.2.3. Actualizar este archivo después de cambios importantes o antes de un /clear. Distinguir implementado, probado, instalado y publicado.
+Actualizado: 03/11/2026, cierre de la release 1.2.3. Actualizar este archivo después de cambios importantes o antes de un /clear. Distinguir implementado, probado, instalado y publicado.
 
 ## Punto de partida
 
 - Repo: https://github.com/iaguito22/oto; rama canónica `main` (unificación de la antigua rama `feat/prueba-acoplamiento`).
 - Clon: `C:\Users\iago\Documents\Codex\2026-11-02\files-pasted-by-the-user-encargo\work\oto`.
-- Hay MUCHOS cambios sin commit acumulados de esta sesión. Conservarlos. Empezar con `git status --short --branch`; no resetear, cambiar de rama ni asumir que Linux los tiene.
-- Tarea ACTIVA: Iago pidió arreglar el tirón de apertura de biblioteca después de instalar la mejora de consumo. **Los últimos cambios de apertura están solo en fuentes/JAR de prueba, NO instalados ni empaquetados aún.** Último mensaje: actualizar AGENTS.md para conservar contexto. Retomar desde la sección final «Arreglo de apertura EN CURSO», sin repetir la auditoría de toda la app. Bienvenida y valores por defecto siguen para después.
+- Los cambios acumulados ya están confirmados y subidos. Empezar con `git status --short --branch` y conservar cualquier cambio posterior del usuario.
+- Estado vigente: bienvenida, valores por defecto, instalador y paquetes 1.2.3 terminados. Windows instalado y probado con el perfil habitual conservado. Las secciones antiguas «EN CURSO» son históricas; este punto de partida prevalece.
+- Validación final: core 56 pruebas (5 omitidas), desktop 71 (5 omitidas), sin fallos; compilación y pruebas Android correctas. Ubuntu instalado y arrancado bajo Xvfb, incluidos tres ciclos de ocultar/mostrar: Actions 41724981355. Arch instalado y comprobado en contenedor: Actions 41724548965.
+- Corregido el cierre involuntario de la composición al ocultar la última ventana: ventana invisible de sesión mantiene bandeja y servidor DesktopAccess activos. Probado también en Windows instalado. Regresión en `tools/check-desktop-session.py`.
+- Defender terminó el análisis del MSI final sin amenazas. MSI y lanzador siguen sin firma Authenticode: no garantizar ausencia de avisos SmartScreen ni desactivar protecciones.
+- Release: https://github.com/iaguito22/oto/releases/tag/v1.2.3; MSI Windows, DEB Ubuntu, paquete Arch, APK Android phone y SHA256SUMS. El APK phone conserva la firma personal y el identificador `.debug`; la clave de la antigua variante pública sin `.debug` no está disponible. La ruta de `prompt.md` correspondía a la clave personal, no a la pública.
 - El AGENTS anterior completo está preservado en `docs/AGENTS_HISTORICO_20261102.md`. Consultarlo por tema; sus fechas y pendientes son históricos. Este estado y las peticiones nuevas prevalecen ante contradicciones.
 
 ## Cómo trabajar con Iago
@@ -33,7 +37,7 @@ Desde la raíz del repositorio, PowerShell:
 
 - `../env.ps1` configura JDK 21, FFmpeg y **GRADLE_USER_HOME=../gradle**. Sin ello puede parecer que faltan Java/dependencias ya disponibles.
 - Wrapper actual Gradle 9.8.0. WiX/empaquetado falla con configuration cache: usar el indicador anterior.
-- MSI: `desktopApp/build/compose/binaries/main/msi/Oto-1.2.2.msi`.
+- Empaquetado Windows actual: `desktopApp/package-windows.ps1`; MSI: `desktopApp/build/dist/Oto-1.2.3.msi`. Ver `docs/PUBLICACION.md` para WiX y los paquetes Linux.
 - Instalación: `%LOCALAPPDATA%\Oto Desktop\Oto.exe`.
 - Actualizar misma versión ha requerido desinstalar paquete y después instalar MSI con msiexec `/qn /norestart`; comprobar códigos 0. Obtener UninstallString actual del registro; no asumir GUID antiguo. Datos conservados aparte.
 - Usar `Start-Process -WindowStyle Hidden`. No matar todos los java.exe (hay daemons Gradle).
