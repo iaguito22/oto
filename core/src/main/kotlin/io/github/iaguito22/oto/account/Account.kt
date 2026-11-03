@@ -28,6 +28,9 @@ data class Session(
     val photo: String? = null,
 )
 
+internal fun sameKnownAccount(previous: Session?, incoming: Session): Boolean =
+    previous != null && previous.dataSyncId.isNotBlank() && previous.dataSyncId == incoming.dataSyncId && previous.authUser == incoming.authUser
+
 private val SESSION = stringPreferencesKey("session")
 
 /**
@@ -52,8 +55,10 @@ class Account(
     }
 
     suspend fun signIn(s: Session) {
-        prefs.setCloudSelection(null)
-        prefs.setCloud(null)
+        if (!sameKnownAccount(_session.value, s)) {
+            prefs.setCloudSelection(null)
+            prefs.setCloud(null)
+        }
         apply(s)
         // Con la sesión puesta, YouTube dice quién eres.
         val info = withContext(Dispatchers.IO) { YouTube.accountInfo() }.getOrNull()

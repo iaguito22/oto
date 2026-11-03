@@ -42,25 +42,32 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
     var rom by remember(id) { mutableStateOf<Map<String,String>?>(null) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(id, lyrics) { rom = if (id != null && lyrics is Lyrics.Synced) store.romanized(id, lyrics) else null }
-    LaunchedEffect(id, playing, leadMs) {
+    LaunchedEffect(id, playing, leadMs, lyrics is Lyrics.Synced) {
+        if (lyrics !is Lyrics.Synced) return@LaunchedEffect
         if (!playing) {
             while (true) { clock.ms = position() + leadMs; delay(150) }
         }
         var anchorPos = position().toDouble()
         var anchorTime = -1L
-        while (true) withFrameNanos { now ->
-            if (anchorTime < 0) anchorTime = now
-            val estimate = anchorPos + (now-anchorTime)/1e6
-            val difference = position().toDouble()-estimate
-            if (abs(difference)>180) { anchorPos=position().toDouble();anchorTime=now } else anchorPos+=difference*.08
-            clock.ms=(anchorPos+(now-anchorTime)/1e6).toLong()+leadMs
+        while (true) {
+            withFrameNanos { now ->
+                if (anchorTime < 0) anchorTime = now
+                val estimate = anchorPos + (now-anchorTime)/1e6
+                val difference = position().toDouble()-estimate
+                if (abs(difference)>180) { anchorPos=position().toDouble();anchorTime=now } else anchorPos+=difference*.08
+                clock.ms=(anchorPos+(now-anchorTime)/1e6).toLong()+leadMs
+            }
+            delay(10)
         }
     }
     when {
         loading -> LyricsSkeleton()
         lyrics is Lyrics.Synced -> {
             val rows = remember(lyrics) { rowsOf(lyrics.lines) }
-            val active by remember(rows) { derivedStateOf { rows.indexOfLast { it.start <= clock.ms } } }
+            val active by remember(rows) { derivedStateOf(structuralEqualityPolicy()) {
+                val now=clock.ms
+                rows.indexOfLast { it.start <= now }
+            } }
             val list = remember(rows) { LazyListState(active.coerceAtLeast(0)) }
             val dragged by list.interactionSource.collectIsDraggedAsState()
             var following by remember(rows) { mutableStateOf(true) }
@@ -81,7 +88,7 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
                     if (toAnchor(i) == null) { list.scrollToItem(i); return@LaunchedEffect }
                     if (abs(toAnchor(i)!!) < 1f) return@LaunchedEffect
                     var moved = 0f
-                    Animatable(0f).animateTo(1f, tween(400, easing = EaseOutQuart)) {
+                    Animatable(0f).animateTo(1f, tween(620, easing = EaseOutQuart)) {
                         val left = toAnchor(i) ?: return@animateTo
                         val step = left - (1 - value) * (moved + left)
                         moved += list.dispatchRawDelta(step)
@@ -340,9 +347,15 @@ private fun LitWord(g: List<Word>, style: TextStyle, color: Color, clock: Lyrics
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val text = remember(g) { g.joinToString("") { it.text } }
     val pieces = remember(g, letters) { piecesOf(g, letters) }
+    val canVibrate = remember(pieces, text, letters) { pieces.map { p -> letters && p.letter && text.substring(p.from, p.to).any { it.isLetterOrDigit() } } }
     val shapes = remember(pieces, style) { pieces.map { measurer.measure(text.substring(it.from, it.to), style, softWrap = false, maxLines = 1) } }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val hold = g.last().end
+    // Una palabra que aún no ha empezado o ya ha terminado de asentarse no
+    // cambia visualmente. Evita volver a dibujarla en cada fotograma.
+    val wordTime = remember(clock, g) {
+        derivedStateOf(structuralEqualityPolicy()) { clock.ms.coerceIn(g.first().start, (hold + 900L).coerceAtLeast(g.first().start)) }
+    }
     val sw = min(0.085f, 0.032f + (hold - g.first().start) / 1000f * 0.03f)
     val full = remember(color) { SolidColor(color) }
     val dim = remember(color) { SolidColor(color.copy(alpha = color.alpha * 0.62f)) }
@@ -350,7 +363,7 @@ private fun LitWord(g: List<Word>, style: TextStyle, color: Color, clock: Lyrics
         text,
         modifier.drawWithContent {
             val l = layout ?: return@drawWithContent
-            val t = clock.ms
+            val t = wordTime.value
             val lift = sw * style.fontSize.toPx() * 1.05f
             pieces.forEachIndexed { k, p ->
                 val box = l.getBoundingBox(p.from)
@@ -362,10 +375,12 @@ private fun LitWord(g: List<Word>, style: TextStyle, color: Color, clock: Lyrics
                         t < p.start + ud -> Overshoot.transform((t - p.start) / ud.toFloat())
                         else -> 1f
                     }
-                    val settle = up * if (t > hold) 1f - EaseOutExpo.transform(((t - hold) / 320f).coerceIn(0f, 1f)) else 1f
-                    if (settle < .015f) 0f else settle
+                    up * if (t > hold) 1f - EaseOutExpo.transform(((t - hold) / 900f).coerceIn(0f, 1f)) else 1f
                 }
                 val f = ((t - p.start).toFloat() / max(1L, p.end - p.start)).coerceIn(0f, 1f)
+                val vibrato = letterVibrato(t, p.start, p.end, canVibrate[k])
+                val vibratoX = vibrato * .35.dp.toPx()
+                val vibratoY = vibrato * .7.dp.toPx()
                 val brush = when {
                     f <= 0f -> dim
                     f >= 1f -> full
@@ -380,6 +395,7 @@ private fun LitWord(g: List<Word>, style: TextStyle, color: Color, clock: Lyrics
                     }
                 }
                 withTransform({
+                    if (vibrato != 0f) translate(vibratoX, vibratoY)
                     if (r != 0f) {
                         translate(0f, -lift * r)
                         scale(1f + sw * r, 1f + sw * r, Offset(box.left + w / 2, box.top + box.height * 0.88f))
@@ -392,6 +408,15 @@ private fun LitWord(g: List<Word>, style: TextStyle, color: Color, clock: Lyrics
         style = style,
         onTextLayout = { layout = it },
     )
+}
+
+/** Solo vibra una letra sostenida, entrando y saliendo sin saltos durante su propio tiempo. */
+internal fun letterVibrato(now: Long, start: Long, end: Long, eligible: Boolean): Float {
+    if (!eligible || end - start <= 550L || now <= start + 350L || now >= end) return 0f
+    val elapsed = now - start
+    val fadeIn = ((elapsed - 350L) / 350f).coerceIn(0f, 1f)
+    val fadeOut = ((end - now) / 200f).coerceIn(0f, 1f)
+    return sin((elapsed - 350L) * (2.0 * PI * 5.2 / 1000.0)).toFloat() * fadeIn * fadeOut
 }
 
 /** Hasta dónde llega el relleno dentro del trozo, en px: el progreso repartido por letras según su peso. */

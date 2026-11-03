@@ -4,9 +4,12 @@ import android.app.Activity
 import android.os.Bundle
 import android.content.Intent
 import io.github.iaguito22.oto.OtoApp
+import io.github.iaguito22.oto.BuildConfig
+import io.github.iaguito22.oto.Heard
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.File
 
 /** Punto de prueba solo debug y protegido por DUMP (shell); nunca entra en una release. */
@@ -23,10 +26,35 @@ class DebugLinkActivity : Activity() {
         commands.launch {
             try {
                 when(command.getStringExtra("action")) {
-                    "pair" -> { app.devices.pair(command.getStringExtra("pair") ?: error("Falta código"));startActivity(Intent(this@DebugLinkActivity,DevicesActivity::class.java)) }
+                    "capture-habitual" -> usualSession(this@DebugLinkActivity,false)
+                    "restore-habitual" -> usualSession(this@DebugLinkActivity,true)
+                    "pair" -> {
+                        val pair=command.getStringExtra("pair") ?: run {
+                            check(BuildConfig.APPLICATION_ID.endsWith(".linktest"))
+                            File(filesDir,"debug-pair.json").readText()
+                        }
+                        app.devices.pair(pair)
+                        startActivity(Intent(this@DebugLinkActivity,DevicesActivity::class.java))
+                    }
+                    "test-like" -> {
+                        check(BuildConfig.APPLICATION_ID.endsWith(".linktest"))
+                        val id=command.getStringExtra("id") ?: error("Falta canción")
+                        check(id.startsWith("oto-link-test-"))
+                        app.prefs.setLiked(Heard(id,"Prueba de sincronización","Oto",null),command.getBooleanExtra("on",false))
+                    }
+                    "test-queue" -> {
+                        check(BuildConfig.APPLICATION_ID.endsWith(".linktest"))
+                        app.devices.addToRemoteQueue(Heard("oto-link-test-queue", "Prueba de cola remota", "Oto", null))
+                    }
                     "capture" -> {
                         delay(800)
                         val snapshot=app.devices.adapter.snapshot().put("remote",app.devices.link.remote.value).put("status",app.devices.link.status.value)
+                        if(BuildConfig.APPLICATION_ID.endsWith(".linktest")) {
+                            val library=app.prefs.linkedLibrarySnapshot()
+                            snapshot.put("captureId",command.getStringExtra("captureId"))
+                                .put("likes",JSONArray(library.likes.map { it.id }))
+                                .put("lists",JSONArray(library.lists.map { list -> JSONObject().put("id",list.id).put("songs",JSONArray(list.songs.map { it.id })) }))
+                        }
                         withTimeoutOrNull(1500) { app.prefs.history.first() }?.firstOrNull()?.let { h -> snapshot.put("recent",JSONObject().put("id",h.id).put("title",h.title).put("artist",h.artist).put("artwork",h.artwork)) }
                         File(filesDir,"debug-session.json").writeText(snapshot.toString())
                     }

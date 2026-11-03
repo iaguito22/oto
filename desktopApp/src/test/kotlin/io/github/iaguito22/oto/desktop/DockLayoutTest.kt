@@ -53,11 +53,43 @@ class DockLayoutTest {
         assertEquals(650,l.bounds.getValue(DockId.Library).height)
         assertJoined(l,DockId.Player)
     }
+    @Test fun dividerResizesAdjacentWindowsEvenWhenMaximized() {
+        val l=layout()
+        assertTrue(l.maximize(DockId.Library,DockRect(0,0,1600,900)))
+        l.resizeDivider(DockId.Library,-200)
+        assertEquals(1080,l.bounds.getValue(DockId.Library).width)
+        assertEquals(520,l.bounds.getValue(DockId.Player).width)
+        assertEquals(0,l.bounds.getValue(DockId.Library).x)
+        assertEquals(1600,l.bounds.getValue(DockId.Player).let { it.x+it.width })
+        l.resizeDivider(DockId.Library,9999)
+        assertEquals(DockId.Player.minWidth,l.bounds.getValue(DockId.Player).width)
+        assertJoined(l,DockId.Library)
+        assertTrue(l.group(DockId.Library).maximized)
+    }
+    @Test fun closingAddedLibraryRestoresMaximizedWidthsAcrossRestart() {
+        val l=DockLayout()
+        l.create(DockId.Lyrics,DockRect(0,0,800,740))
+        l.create(DockId.Player,DockRect(800,0,800,740))
+        assertTrue(l.dock(DockId.Lyrics,DockId.Player,true))
+        val area=DockRect(0,0,1600,900)
+        assertTrue(l.maximize(DockId.Player,area))
+        val before=l.bounds.toMap()
+        assertTrue(l.open(DockId.Library,DockId.Player,area))
+        val restored=decodeDockLayout(l.encode())!!
+        restored.close(DockId.Library)
+        assertEquals(before[DockId.Lyrics],restored.bounds[DockId.Lyrics])
+        assertEquals(before[DockId.Player],restored.bounds[DockId.Player])
+        assertJoined(restored,DockId.Player)
+    }
     @Test fun secondaryCanSwapWithPrincipal() {
         val l=layout()
+        val left=l.bounds.getValue(DockId.Library).x
+        val right=l.bounds.getValue(DockId.Player).let { it.x + it.width }
         l.reorder(DockId.Player,DockId.Library)
         assertEquals(listOf(DockId.Player,DockId.Library),l.group(DockId.Library).members)
         assertEquals(DockId.Library,l.group(DockId.Player).leader)
+        assertEquals(left,l.bounds.getValue(DockId.Player).x)
+        assertEquals(right,l.bounds.getValue(DockId.Library).let { it.x + it.width })
         assertJoined(l,DockId.Library)
     }
     @Test fun detachCarriesOutwardDependents() {
@@ -162,8 +194,12 @@ class DockLayoutTest {
         val l=layout()
         l.create(DockId.Lyrics,DockRect(0,0,480,740));l.dock(DockId.Lyrics,DockId.Library,true)
         l.create(DockId.Queue,DockRect(0,0,420,740));l.dock(DockId.Queue,DockId.Player,false)
+        val left=l.bounds.getValue(DockId.Lyrics).x
+        val right=l.bounds.getValue(DockId.Queue).let { it.x + it.width }
         l.reorder(DockId.Player,DockId.Lyrics)
         assertEquals(listOf(DockId.Player,DockId.Library,DockId.Lyrics,DockId.Queue),l.group(DockId.Library).members)
+        assertEquals(left,l.bounds.getValue(DockId.Player).x)
+        assertEquals(right,l.bounds.getValue(DockId.Queue).let { it.x + it.width })
         l.detach(DockId.Player)
         assertEquals(listOf(DockId.Player),l.group(DockId.Player).members)
         assertEquals(listOf(DockId.Library,DockId.Lyrics,DockId.Queue),l.group(DockId.Library).members)

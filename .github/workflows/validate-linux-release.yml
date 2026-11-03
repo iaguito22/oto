@@ -1,0 +1,62 @@
+name: Comprobar paquetes Linux
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Etiqueta de la release con los paquetes
+        required: true
+        default: v1.2.3
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Descargar paquetes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mkdir packages
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --pattern '*.pkg.tar.zst' --dir packages
+      - name: Instalar dependencias de escritorio
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg xvfb openbox xdotool zstd libx11-6 libxext6 libxrender1 libxtst6 libxi6 libfreetype6 libfontconfig1 libasound2 libgl1 libegl1
+      - name: Verificar paquetes y ejecutar Oto
+        shell: bash
+        run: |
+          set -euo pipefail
+          dpkg-deb --info packages/*.deb
+          tar --zstd -tf packages/*.pkg.tar.zst > arch-files.txt
+          grep -q '^.PKGINFO$' arch-files.txt
+          grep -q '^opt/oto/runtime/bin/java$' arch-files.txt
+          sudo dpkg -i packages/*.deb
+          /opt/oto/runtime/bin/java -version
+          xvfb-run -a bash -euc '
+            openbox > /tmp/openbox.log 2>&1 &
+            export XDG_DATA_HOME="$RUNNER_TEMP/oto-data" XDG_CACHE_HOME="$RUNNER_TEMP/oto-cache"
+            /opt/oto/bin/Oto > oto-linux.log 2>&1 &
+            app_pid=$!
+            trap "kill $app_pid 2>/dev/null || true" EXIT
+            for attempt in $(seq 1 40); do
+              if xdotool search --name "Oto · Bienvenida" >/dev/null 2>&1; then break; fi
+              sleep 1
+            done
+            welcome=$(xdotool search --name "Oto · Bienvenida" | head -1)
+            xdotool windowactivate --sync "$welcome"
+            sleep 6
+            xdotool key Escape
+            sleep 3
+            xdotool search --name "Oto · Reproductor"
+            if xdotool search --name "Oto · Tu música" >/dev/null 2>&1; then echo "La biblioteca no debe abrir en el primer arranque"; exit 1; fi
+            if grep -E "UnsatisfiedLinkError|NoClassDefFoundError|Exception in thread|No se pudo abrir la bienvenida" oto-linux.log; then exit 1; fi
+          '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: comprobacion-linux
+          path: |
+            oto-linux.log
+            arch-files.txt

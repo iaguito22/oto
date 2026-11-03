@@ -1,661 +1,274 @@
-# AGENTS.md — Oto: continuidad completa y validación en Windows
+# Oto — continuidad después de /clear
 
-Actualizado el 02/11/2026. Este documento permite continuar sin el historial del chat.
-La tarea vigente es **probar y arreglar toda la aplicación en Windows**, incluyendo la modularidad y todas las funciones existentes. El usuario lo ha aclarado expresamente: no limitarse a las ventanas.
+Actualizado: 03/11/2026, 21:14 aprox., arreglo EN CURSO del tirón de apertura de biblioteca. Actualizar este archivo después de cambios importantes o antes de un /clear. Distinguir implementado, probado, instalado y publicado.
 
-## 1. Identidad del proyecto y punto de partida
+## Punto de partida
 
-- Repositorio: https://github.com/iaguito22/oto
-- Rama de continuidad: `feat/prueba-acoplamiento`.
-- Trabajar desde esa rama: `main` no contiene necesariamente el escritorio y los cambios que se quieren probar.
-- Oto es un reproductor personal de música sobre InnerTube/YouTube Music, con un cliente Android y otro de escritorio Kotlin/Compose Desktop para Linux y Windows.
-- Licencia GPL-3. El usuario es Iago (`iaguito22` en GitHub). Textos, respuestas y commits van en español.
-- El móvil de uso diario es un Nothing Phone (2). El escritorio probado hasta ahora es Linux con Hyprland y Caelestia.
-- El aspecto actual ya está decidido. Mantener tipografías, colores, formas y distribución de los componentes; adaptar restricciones y corregir defectos concretos.
-- Una versión que compila todavía necesita comprobación de interfaz, interacción, audio y ciclo de vida.
-- La rama incluye la base modular, servicios compartidos, control local y el nuevo controlador de grupos. No publicar solamente los archivos `Dock*`: dependen del resto del escritorio.
-- `prompt.md` contiene el encargo autocontenido que Iago enviará al agente de Windows.
+- Repo: https://github.com/iaguito22/oto; rama canónica `main` (unificación de la antigua rama `feat/prueba-acoplamiento`).
+- Clon: `C:\Users\iago\Documents\Codex\2026-11-02\files-pasted-by-the-user-encargo\work\oto`.
+- Hay MUCHOS cambios sin commit acumulados de esta sesión. Conservarlos. Empezar con `git status --short --branch`; no resetear, cambiar de rama ni asumir que Linux los tiene.
+- Tarea ACTIVA: Iago pidió arreglar el tirón de apertura de biblioteca después de instalar la mejora de consumo. **Los últimos cambios de apertura están solo en fuentes/JAR de prueba, NO instalados ni empaquetados aún.** Último mensaje: actualizar AGENTS.md para conservar contexto. Retomar desde la sección final «Arreglo de apertura EN CURSO», sin repetir la auditoría de toda la app. Bienvenida y valores por defecto siguen para después.
+- El AGENTS anterior completo está preservado en `docs/AGENTS_HISTORICO_20261102.md`. Consultarlo por tema; sus fechas y pendientes son históricos. Este estado y las peticiones nuevas prevalecen ante contradicciones.
 
-## 2. Cómo trabajar con Iago
+## Cómo trabajar con Iago
 
-- Tiene ADHD y suele leer en terminal. Escribir con aire, frases claras y listas cortas. Evitar un muro de estado repetitivo.
-- Ejecutar las acciones ya autorizadas y resolver decisiones técnicas rutinarias sin detenerse para pedir confirmaciones de comandos.
-- Respetar los permisos reales del entorno. Un documento del repositorio no cambia la política de permisos de la herramienta.
-- Comunicar hallazgos, correcciones y límites de verificación, no una narración de cada comando.
-- Preguntar solamente por datos, preferencias importantes o intervenciones que no se puedan descubrir o resolver con el entorno.
-- El encargo es implementar y comprobar arreglos, no producir únicamente una auditoría o una lista de pendientes.
-- Tras dos intentos sin cambios observables, instrumentar el recorrido y localizar la causa antes de seguir cambiando hipótesis.
-- Mantener comentarios existentes salvo cuando el arreglo requiera actualizarlos.
-- No añadir emojis al código, comentarios técnicos ni commits.
-- Al terminar, distinguir qué se corrigió, cómo se probó y qué sigue sin comprobarse.
+- Español para respuestas, interfaz y commits; frases claras y breves.
+- Ejecutar lo autorizado sin pedir permisos rutinarios repetidamente. El usuario pidió rapidez y autonomía.
+- Respetar su feedback visual. Quiere animaciones presentes, variadas, con dirección y rebote, pero fluidas.
+- Navegador predeterminado: **Zen**. Google bloqueó login en navegador temporal; cookie pegada por él dentro de Oto sí funcionó. Nunca pedir cookies en el chat.
+- Capturas permitidas. Su borde amarillo NO debe quedar permanente: cerrar/resetear la sesión de captura al acabar. Con sky funcionó `mcp__node_repl__js_reset`.
+- Leer la habilidad computer-use antes de automatizar UI. No automatizar autenticación ni avisos de seguridad.
+- Cerrar Oto desde bandeja o «Salir de Oto» para actualizar. Las X mantienen el proceso en segundo plano. Evitar terminarlo a la fuerza y modificar DataStore abierto.
+- No declarar fluidez por screenshots o compilación. Tras dos hipótesis fallidas, instrumentar antes de seguir cambiando código.
 
-## 3. Primer recorrido del agente de Windows
+## Compilación en ESTE Windows
 
-1. Comprobar dónde se ejecuta: Windows nativo, PowerShell, terminal, sesión gráfica interactiva, ruta del clon y rama.
-2. Leer este documento y `prompt.md`; inspeccionar `git status`, último commit y configuración Gradle real.
-3. Leer `docs/ACOPLAMIENTO.md` para las ventanas y `ESTADO_MODULAR.md` para el escritorio y el enlace móvil.
-4. Tratar `PLAN_IMPLEMENTACION.md` y `PLAN_DESKTOP_MOVIL.md` como historia y orientación. Algunas tareas que allí figuran pendientes ya están implementadas.
-5. Comprobar JDK 21, Git, Gradle Wrapper y herramientas de audio. Localizar el SDK Android si Gradle lo reclama.
-6. Ejecutar primero las pruebas automatizadas y después abrir la aplicación real en Windows.
-7. Probar cada área funcional de la matriz de este documento. Registrar reproducción, resultado esperado y evidencia del fallo.
-8. Corregir por cambios lógicos pequeños; volver a probar el recorrido que fallaba y las funciones vecinas que el cambio pueda afectar.
-9. Actualizar `docs/VALIDACION_WINDOWS.md` con entorno, resultados, arreglos y límites. No dar por probadas las filas sin evidencia.
-10. Comprobar instalación y arranque del paquete Windows después de validar la ejecución de desarrollo.
-
-**Criterio de continuidad:** seguir trabajando mientras existan fallos reproducibles que se puedan resolver con el equipo y los accesos disponibles. Si falta una cuenta, teléfono o segundo monitor, completar las áreas independientes y documentar exactamente qué falta.
-
-## 4. Arquitectura y fuentes de verdad
-
-| Módulo | Responsabilidad | Restricción |
-|---|---|---|
-| `:app` | Cliente Android, UI móvil, Media3 y servicio multimedia | Preservar datos, firma y funcionamiento del móvil |
-| `:core` | Preferencias, cuenta, catálogo, listas, DJ, letras y control local | JVM compartida; un cambio puede afectar a Android y escritorio |
-| `:desktopApp` | Compose Desktop, ventanas, audio y adaptadores de escritorio | Probar con Windows nativo y mantener Linux |
-| `:innertube` | Cliente de YouTube Music y dependencias de extracción | Respetar versiones y compatibilidad existentes |
-
-Antes de modificar una API, leer su firma real y sus usos. No implementar contra una firma copiada de un documento antiguo.
-
-### Entradas y servicios de escritorio
-
-- `desktopApp/.../desktop/Main.kt`: inicialización, instancia única, servicios y entrada al escritorio modular.
-- `ModularDesktop.kt`: composición de las ventanas reales, acciones, atajos y marcos compartidos.
-- `DesktopInstance.kt`: bloqueo de instancia y recuperación de la instancia ya abierta.
-- `DesktopAccess.kt`: endpoint local para mostrar/ocultar y registro de atajo en Hyprland.
-- `BrowserLogin.kt`: login mediante navegador temporal y CDP, con ruta alternativa de extensión/consola.
-- `DeviceConnection.kt`, `DevicesPane.kt`, `RemoteActions.kt`: integración del escritorio con el móvil.
-- `playback/DesktopPlayerConnection.kt`: estado y comandos de reproducción, cola, biblioteca y servicios.
-- `playback/DesktopAudioEngine.kt`: audio, descarga por trozos, procesos y volumen.
-- `playback/DesktopBeat.kt`: análisis de graves a partir de audio decodificado con FFmpeg.
-
-### Vistas de escritorio
-
-- `ui/LibrarySpace.kt`: biblioteca actual, navegación lateral, búsqueda, colección y accesos.
-- `ui/SearchSpace.kt`: búsqueda y sus resultados.
-- `ui/AlbumSpace.kt`, `ArtistSpace.kt`, `LocalPlaylistView.kt`: navegación a álbum, artista y lista local.
-- `ui/DownloadsSpace.kt`: descargas y operaciones relacionadas.
-- `ui/SettingsSpace.kt`: ajustes del escritorio.
-- `ui/CloudChoices.kt`: selecciones explícitas de importación/exportación de cuenta.
-- `ui/PlayerSurface.kt`, `PlayerOptions.kt`: reproductor y menú de tres puntos compartido con biblioteca.
-- `ui/MobileLyrics.kt`: renderizado de letras portado del móvil.
-- `ui/PlayerBackdrop.kt`, `OtoSnackbar.kt`: fondo y avisos de la estética actual.
-- `ui/DesktopMenuSheet.kt` y `DesktopStage.kt` conservan código anterior y componentes reutilizados. Seguir las llamadas reales desde `Main.kt` para distinguir UI activa de código heredado.
-
-### Control local y cuenta
-
-- `core/.../remote/LocalLink.kt`: transporte autenticado y comandos.
-- `LinkedPlayback.kt`: control y transferencia de sesión.
-- `LibraryReplica.kt`: réplica de biblioteca y resolución de cambios.
-- `LocalDiscovery.kt`: descubrimiento local.
-- `core/.../account/Account.kt`, `Cloud.kt`, `CloudSelection.kt`: cuenta y selección de listas.
-- Las copias del transporte en el árbol móvil de Linux se mantuvieron temporalmente iguales. Ese otro árbol no se clona automáticamente con este repositorio.
-- Un arreglo del protocolo compartido exige revisar compatibilidad con el móvil; no cambiar mensajes o cifrado por una adaptación de Windows.
-
-## 5. Entorno de compilación y ejecución
-
-### Windows: comprobaciones iniciales
+Desde la raíz del repositorio, PowerShell:
 
 ```powershell
-Get-Location
-git status --short --branch
-git log -1 --oneline
-java -version
-Get-Command java, git
-.\gradlew.bat --version
-Get-Command ffmpeg, ffplay -ErrorAction SilentlyContinue
+. ..\env.ps1
+.\gradlew.bat :core:test :desktopApp:test --offline --no-configuration-cache
+.\gradlew.bat :desktopApp:packageMsi --offline --no-configuration-cache
 ```
 
-- JDK 21 es la versión requerida por el proyecto. Resolver `JAVA_HOME` a una instalación real y verificar la versión; no copiar una ruta Linux.
-- En PowerShell se usa `&` para ejecutar un programa cuya ruta está entre comillas o en una variable.
-- Revisar también qué Java está usando Gradle, que puede diferir de `java` en el PATH.
-- Utilizar el Wrapper del repositorio; las versiones declaradas en Gradle son la fuente de verdad.
-- Una máquina nueva necesita descargar dependencias. Empezar sin `--offline`; usar ese indicador solo cuando la caché esté completa.
-- Si Gradle falla por SDK Android, diagnosticar qué proyecto lo solicita. Configurar el SDK local o corregir de forma deliberada la configuración del escritorio; no eliminar módulos Android a ciegas.
-- El `compileSdk` Android del código de esta entrega es 37. Confirmarlo en `app/build.gradle.kts` antes de instalar plataformas.
-- La ausencia de claves privadas de firma o de PoToken no se resuelve añadiendo credenciales al repositorio.
+- `../env.ps1` configura JDK 21, FFmpeg y **GRADLE_USER_HOME=../gradle**. Sin ello puede parecer que faltan Java/dependencias ya disponibles.
+- Wrapper actual Gradle 9.8.0. WiX/empaquetado falla con configuration cache: usar el indicador anterior.
+- MSI: `desktopApp/build/compose/binaries/main/msi/Oto-1.2.2.msi`.
+- Instalación: `%LOCALAPPDATA%\Oto Desktop\Oto.exe`.
+- Actualizar misma versión ha requerido desinstalar paquete y después instalar MSI con msiexec `/qn /norestart`; comprobar códigos 0. Obtener UninstallString actual del registro; no asumir GUID antiguo. Datos conservados aparte.
+- Usar `Start-Process -WindowStyle Hidden`. No matar todos los java.exe (hay daemons Gradle).
+- Dos Oto.exe pueden ser lanzador y JVM; medir el de mayor memoria.
 
-### Pruebas y ejecución del escritorio en Windows
+## Arquitectura y archivos útiles
+
+- `:core`: preferencias, cuenta, listas, letras, DJ y enlace compartido; los cambios pueden afectar Android. `:desktopApp`: Compose Desktop y audio. `:app`: Android.
+- Entrada: `desktopApp/.../desktop/Main.kt`, `ModularDesktop.kt`.
+- Ventanas: `DockLayout.kt` geometría pura; `DockWindows.kt` AWT/gestos; `DockPersistence.kt`; pruebas `DockLayoutTest.kt`.
+- UI activa: `ui/LibrarySpace.kt`, `SettingsSpace.kt`, `DownloadsSpace.kt`, `PlayerSurface.kt`, `MobileLyrics.kt`. `DesktopStage.kt` y `DesktopMenuSheet.kt` contienen código antiguo y componentes reutilizados: seguir llamadas reales.
+- Audio/cola/fundido: `playback/DesktopPlayerConnection.kt`, `DesktopAudioEngine.kt`, `DesktopBeat.kt`.
+- Carátulas: `ui/DesktopTheme.kt` (ArtworkLoader), `PlayerBackdrop.kt`.
+- Cuenta: `core/.../account/Account.kt`, `Cloud.kt`. Enlace móvil: `DeviceConnection.kt`, `remote/LibraryReplica.kt`, `LinkedPlayback.kt`.
+
+## Datos y sincronización
+
+- Perfil real: `%APPDATA%\oto`, DataStore en `datastore/`, distribución `modular_windows.json`. Caché Windows actual: `%LOCALAPPDATA%\oto\Cache`; descargas: `%APPDATA%\oto\downloads`.
+- Hay perfiles de prueba en `../perfil visual`, `../perfil geometria`, etc. Confirmar perfil efectivo, no inferirlo de un log antiguo.
+- Nunca subir cookies, secretos QR, DataStore, claves de firma, perfiles o logs privados a Git. Nunca restaurar respaldo antiguo sobre cambios nuevos del móvil.
+- No ejecutar connectedAndroidTest contra móvil real. Ver reglas Android históricas si hace falta.
+- Usuario quiere Me gusta de Oto separados de YouTube, sobre todo importación/exportación. Backup remoto «Me gusta de Oto»; likes YouTube como lista independiente.
+- Se vaciaron SOLO likes del PC, con respaldo y retirando registros locales de réplica sin tombstones para móvil. UI verificada con 0 canciones. Último vaciado: 115 entradas; otro anterior: 440. No confundir fechas/perfiles.
+- Decisión vigente: Me gusta de Oto SÍ compartidos entre PC y móvil; separados únicamente de los likes de YouTube. La primera vinculación reúne los de Oto de ambos, sin duplicados por id. No volver a vaciar ni separar likes entre dispositivos por la interpretación anterior. Los desmarcados explícitos se conservan. Queda verificar la vinculación de los perfiles habituales; las pruebas con teléfono real usaron datos aislados.
+
+## Cambios recientes instalados y con tests pasados
+
+- Ahorro RAM persistente `Prefs.ramSaver`, false por defecto: ahora limita la caché de imágenes por memoria estimada (48 a 8 MiB, máximo 96 entradas), además de cancelar precarga de siguientes portadas y precarga de audio/fundido. Al quitarlo recupera duración de fundido elegida. No fuerza GC ni promete liberar memoria inmediatamente.
+- Ajustes indican cualitativamente CPU/GPU/RAM. Fundido señala RAM y CPU y aparece desactivado con ahorro RAM.
+- `MemCache.resize` desaloja LRU excedentes inmediatamente; `MemCacheTest` lo cubre.
+- Descargas internas: archivos .webm/.m4a con nombre por id; no cambiar nombres sin migrar índice. Se retiró el botón «Abrir carpeta de descargas»; ahora se exportan copias MP3 reproducibles desde «Exportar como MP3…».
+- Latido: State leído dentro de graphicsLayer, evitando recomponer toda biblioteca/reproductor por frame; margen en portada para no cortar crecimiento.
+- Letras: reloj detenido sin letra sincronizada; tiempo por palabra limitado al intervalo con cambios visuales para reducir invalidaciones estáticas. Mantiene sincronización; vibrato solo letra a letra.
+- Apertura: sin Offscreen forzado; espera frames estables antes de transición (mínimo 150 ms, máximo 1200 ms, tres intervalos <35 ms). Cierre desmonta al terminar animación, no con temporizador fijo de 380 ms.
+- Última instalación contiene ese arreglo de espera. Últimos tests core/desktop y MSI pasaron. Quedan mejoras de animaciones, no afirmar que todo esté resuelto.
+
+## Evidencia de rendimiento: 03/11/2026
+
+- Prueba real de **9 min 48 s**, tres ventanas, reproducción y cambios automáticos. CSV local `../performance-long-20261103.csv`.
+- CPU principal media 49.13 % de UN núcleo, intervalos 20.96–78.71 %. No es porcentaje de todo el equipo, ni incluye CPU FFmpeg.
+- Residente 759.29–821.20 MB, media 791.34 MB; privada 910.57–957.97 MB. Sin crecimiento sostenido en esa muestra; no descarta fugas a largo plazo.
+- Muestras cortas: pausa ~1.4 % de núcleo; reproduciendo sin letra ~37 %. Canciones/cargas distintas: no afirmar A/B concluyente.
+- Diagnóstico optativo `OTO_MOTION_TRACE=1`: escribe `%APPDATA%\oto\motion-frames.jsonl`. Mide intervalos de callbacks de animación, NO presentación GPU ni FPS reales. En la medición histórica se arrancó con diagnóstico activo; no asumir que la instancia actual lo tiene habilitado.
+- Antes: aperturas iniciales solo 2–5 callbacks, pausas 200–750 ms. Después: reproductor/letra ~50 callbacks, medias ~9–10 ms; biblioteca inicial pico 116 ms.
+- Última biblioteca: cierre 39 callbacks, media 8.8 ms, máximo 22.9 ms; reapertura 38 callbacks, media 13 ms, máximo 66 ms (excluyendo primer intervalo). Sigue pendiente ese pico.
+- JFR no disponible en runtime empaquetado (falta jdk.jfr). jcmd Thread.print sí funcionó; no confundir muestreo de hilos con perfil completo.
+- CSV usa decimales españoles: para estadística Parse con cultura es-ES; cast PowerShell/invariant puede interpretar comas como miles.
+- Al terminar aquella medición se cerró la captura y se dejó el escritorio sin canción. Para el estado más reciente del móvil, ver la sección de instalación más abajo.
+
+## Pendientes reales para retomar
+
+1. Vincular el móvil habitual con el Windows mediante Dispositivos/QR si aún no lo ha hecho Iago; comprobar sincronización con sus perfiles reales. Canal y reglas probados con teléfono físico y datos aislados. No afirmar que los perfiles habituales ya están sincronizados.
+2. Para después, por petición explícita: pantalla de bienvenida del primer arranque, revisar valores por defecto y pulir fluidez/animaciones (incluido pico de biblioteca). No cambiarlo de oficio al retomar otro tema.
+3. Medir ahorro RAM on/off con misma carga. Implementado/instalado, sin A/B prolongado todavía.
+4. Duplicados YouTube: eliminadas 14 copias comparadas, conservando otra de cada lista. Quedan grupos distintos o sin auditar. Local `../playlist-audit.json`. No borrar por nombre solo.
+5. Cloud anti-duplicados reutiliza ids, bloquea nombres y reintentos ambiguos, pero consulta Music; listas visibles solo en YouTube normal pueden escapar. NO garantizar resolución total.
+6. Muchos cambios locales sin publicar. Revisar diff y datos privados antes de commit/push. No asumir que Codex Linux tiene este estado.
+
+## Decisiones visuales recientes que conservar
+
+- Fondo integrado entre ventanas, esquinas redondas incluso interiores, sin líneas rectas de unión. Carátula completa con laterales reflejados/extendidos evitando franjas planas grandes. Intensidad inicial 75 %.
+- Conservar posición/tamaños al intercambiar, abrir/cerrar módulos, atajo y cambiar canción. Letra/cola no pueden quedar únicas; cerrar principales conserva conjunto para restaurarlo con atajo.
+- Cambiar vista del reproductor acoplado DEBE desacoplarlo, petición explícita del usuario.
+- Atajo global capturado por teclas en Ajustes; oculta/restaura todo el grupo. X de todas ventanas deja Oto en bandeja. Una entrada de tareas por grupo; minimizar/restaurar afecta grupo.
+- Chincheta solo reproductor solo; vertical abajo izquierda, oculta hasta hover y estado reconocible.
+- Biblioteca sin tres puntos; miniaturas listas con primeras cuatro canciones; pista inferior lleva a origen. Me gusta sin relleno si no está marcado.
+- Letra con aspecto Android, subidas/bajadas/vibrato; no copiar sincronización a ciegas. Awaken francés fue corregido y usuario confirmó inglés.
+
+## Referencias bajo demanda
+
+`docs/AGENTS_HISTORICO_20261102.md`, `docs/ACOPLAMIENTO.md`, `ESTADO_MODULAR.md`, `docs/VALIDACION_WINDOWS.md`. Contrastar sus fechas con código. No cargar toda la historia tras cada /clear: empezar aquí, git status y archivos de la tarea concreta.
+
+## Exportación MP3: implementada, probada e instalada
+
+- Descargas → «Exportar como MP3…», con icono de descarga: todas o una canción, incluidas las de listas. Copias independientes `artista - título.mp3`, etiquetas y sufijos numéricos sin sobrescribir. Originales internos intactos.
+- `playback/Mp3Export.kt`: FFmpeg incluido, libmp3lame VBR q2, temporales y limpieza al cancelar/fallar. `Mp3ExportTask.kt`: lote ligado al appScope de DesktopDownloads, independiente de la pantalla; progreso, Cancelar y errores detallados en `ui/Mp3ExportControls.kt`.
+- Cambiar de pantalla o dejar Oto en bandeja mantiene el trabajo. Salir por completo termina la exportación; los MP3 ya guardados permanecen. No se reanudan lotes tras reiniciar la app.
+- Preferencia final de Iago: selector habitual de Windows/Java moderno. `WindowsExportFolder.kt` usa IFileOpenDialog nativo mediante JNA ya incluido; respeta apariencia del sistema, probado oscuro. Fuera de Windows, JFileChooser. El navegador Compose propio fue descartado: NO recuperarlo.
+- Eliminado «Abrir carpeta de descargas» de ambas vistas. Controles compartidos entre DownloadsSpace y DesktopDownloadsPane.
+- Pruebas Mp3ExportTest: conversión real WebM→MP3, etiquetas, colisiones, originales y limpieza tras error. Mp3ExportTaskTest: independencia del scope de pantalla, rechazo de lotes simultáneos, cancelación y errores.
+- :desktopApp:test y :desktopApp:packageMsi correctos; MSI actualizado con códigos 0/0 y app verificada. Cambios locales sin commit/push.
+
+## Me gusta de Oto: implementados y probados en ambos dispositivos
+
+- Objetivo confirmado: una colección de Me gusta de Oto compartida entre PC/móvil. Los likes de YouTube Music van a una lista independiente `youtube:LM`. El corazón de Oto no modifica los likes de YouTube.
+- Prefs guarda decisiones por canción (tiempo/token/estado) atómicamente con LIKED, incluso quitar una canción ya ausente. LibraryReplica intercambia registros compatibles con el formato previo, conserva eliminaciones, resuelve empates igual y ordena por fecha reciente. El cambio se fecha al tocar el corazón, no al reconectar.
+- Recuperar una copia Oto respeta los desmarcados conocidos; canciones recuperadas sin decisión previa tienen antigüedad 0 para que una eliminación remota posterior recibida prevalezca. Un corazón explícito puede volver a añadirlas.
+- Cloud protege `youtube:LM` incluso si los metadatos antiguos dicen `liked`. Account ya no envía corazones a YouTube. No se han limpiado ni reinterpretado likes antiguos del perfil real.
+- :core:test y :desktopApp:test pasaron. Seis pruebas LikeSynchronizationTest cubren unión inicial, separación YouTube, reinicios, desmarcado de ausente, orden de reconexión, copias antiguas y edición durante recepción. CloudLikesTest amplía el caso de origen LM.
+- `MobileLikeIntegrationTest` pasó en el Nothing real con APK `.linktest` y perfil Windows temporal: alta PC→móvil, alta/baja móvil→PC, cierre/reconexión con baja offline, likes YouTube aparte y nuevo marcado explícito.
+- La prueba usa LocalLink real y `adb reverse` temporal, sin cambiar cortafuegos ni cuentas. Variables optativas `OTO_LINK_TEST_ADB` (ruta adb) y `OTO_LINK_TEST_SERIAL` (dispositivo explícito). Requiere APK aislada ya instalada; sin variables se omite.
+- Informes locales: `../mobile-likes-real.log` y `core/build/test-results/test/TEST-io.github.iaguito22.oto.remote.MobileLikeIntegrationTest.xml`. Los primeros intentos fallaron por reutilización de la actividad diagnóstica, corregida con `--activity-multiple-task`.
+- Escritorio con estas reglas instalado. Móvil habitual también actualizado (ver abajo). Queda la vinculación/validación de los perfiles habituales: no confundirla con la prueba aislada.
+
+## Integración Android recibida y estado del teléfono
+
+- Remoto integrado: `0313034` de `feat/prueba-acoplamiento`. Ya incluye Android/Dispositivos; la anterior falta de la rama móvil está RESUELTA.
+- Para actualizar el árbol se guardó todo Windows con `git stash push -u`, fast-forward y `stash apply` sin conflictos. Stash «respaldo Windows antes de integrar movil 2026-11-03» conservado. No se han confirmado ni subido los cambios locales Windows.
+- `MobileConnection.kt` adaptado a addToQueue de LinkPlayer; `PlayerConnection.enqueue` añade al final de la cola.
+- Botón `ic_link_devices` añadido JUNTO A DESCARGAS en el menú DEL MÓVIL, con descripción accesible. No era una petición para la barra lateral Windows. Verificado visualmente en la app habitual optimizada y, en la aislada, que abre DevicesActivity.
+- DevicesActivity y DevicesPane explican sincronización de Oto y separación de YouTube.
+- ADB local: `../tools/android-sdk/platform-tools/adb.exe`; último teléfono `<dirección local variable>`, Nothing Phone (2) A065. Puerto/IP pueden cambiar. No escanear ni reinstalar otros dispositivos por suposición.
+- App habitual: `io.github.iaguito22.oto.debug`, variante `phone` optimizada con R8, NO depurable, versión 1.2.2 código12. Actualizada mediante `adb install -r` con Success el 03/11/2026 a las 20:08. No se desinstaló ni se sustituyeron sus DataStore/cookies. Interfaz habitual con biblioteca conservada y botón nuevo comprobada.
+- Cola conservada: 50 canciones, índice0, posición225957 ms, pausada. Verificada tras actualizar mediante dumpsys y pantalla real de la misma canción. Al cerrar esta tarea, móvil abierto en el menú de Tu música; no se inició reproducción.
+- Pruebas Android LibraryActions/Loop/Blur/SearchHarness correctas; :app:assemblePhone y :app:testDebugUnitTest pasaron. La primera build offline necesitó descargar dependencias faltantes; ya están disponibles.
+- La corrección previa de escáner/R8 vino de Linux (docs/UNIFICACION.md). Aquí se verificó el enlace físico por ADB reverse y la navegación a Dispositivos; no afirmar un nuevo escaneo óptico real desde Windows.
+
+## Firma móvil en Windows: resuelta sin perder datos
+
+- Clave Linux recibida en `../tools/signing/oto-mobile-linux.keystore`, FUERA del repo. Entrada privada verificada, alias `androiddebugkey`; certificado coincide con el APK habitual:
+  `717d8f898485e2643bc0ebce7b2ac878f0fecc928f217f21a3804c0faf5fcbbc` (huella pública SHA-256).
+- Nunca subir/copiar el keystore, contraseñas, perfiles, QR ni datos de sesión a Git o entregables. No se cambió la clave debug de Windows (`~/.android/debug.keystore`); tiene una firma distinta.
+- `app/build.gradle.kts` admite `OTO_PHONE_KEYSTORE` para `phone`; opciones `OTO_PHONE_STORE_PASSWORD`, `OTO_PHONE_KEY_ALIAS`, `OTO_PHONE_KEY_PASSWORD` si no son las convenciones habituales de debug. No poner contraseñas en comandos compartidos ni en este archivo. `debug` y `bench` conservan su firma Windows.
+- Compilación habitual, desde raíz y en PowerShell:
 
 ```powershell
-.\gradlew.bat :core:test :desktopApp:test
-.\gradlew.bat :desktopApp:run
+. ..\env.ps1
+$env:ANDROID_HOME = (Resolve-Path ..\tools\android-sdk).Path
+$env:OTO_PHONE_KEYSTORE = (Resolve-Path ..\tools\signing\oto-mobile-linux.keystore).Path
+.\gradlew.bat :app:assemblePhone :app:testDebugUnitTest --offline --no-configuration-cache
 ```
 
-- Los informes de pruebas quedan bajo `core/build/reports/tests/` y `desktopApp/build/reports/tests/`.
-- Guardar logs de arranque con una ruta local apropiada; revisar excepciones completas con consultas acotadas.
-- Para probar geometría sin servicios, cerrar la aplicación real o identificar con claridad qué ventanas pertenecen a cada proceso y lanzar el arnés:
-
-```powershell
-$env:OTO_DOCK_HARNESS = '1'
-$env:OTO_DOCK_TRACE = '1'
-.\gradlew.bat :desktopApp:run
-```
-
-Al terminar el arnés, limpiar esas variables antes de abrir Oto real:
-
-```powershell
-Remove-Item Env:OTO_DOCK_HARNESS -ErrorAction SilentlyContinue
-Remove-Item Env:OTO_DOCK_TRACE -ErrorAction SilentlyContinue
-.\gradlew.bat :desktopApp:run
-```
-
-El arnés usa el mismo marco y controlador con contenido de prueba. No inicia reproducción, cuenta, sincronización ni preferencias del usuario. Probarlo no sustituye a comprobar las vistas reales.
-
-### Linux: comandos ya utilizados
-
-```sh
-JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :core:test :desktopApp:test --offline
-JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :desktopApp:run
-./tools/run-dock-harness.sh --offline
-```
-
-- En esta máquina se usan Hyprland 0.56 y Caelestia. `agy-pantalla` está instalado y se utilizó para la revisión visual.
-- Las herramientas locales de Iago no aparecen automáticamente en Windows. Comprobar herramientas disponibles antes de construir la prueba alrededor de ellas.
-- Una prueba realizada en WSL o con una ventana Linux no acredita el comportamiento de la aplicación nativa Windows.
-- Para configuración propia de Codex, consultar la documentación oficial vigente: https://developers.openai.com/codex/windows . No copiar permisos o rutas privadas de la máquina Linux.
-
-### Verificación cuando cambie código compartido
-
-```powershell
-.\gradlew.bat :core:test :desktopApp:test :desktopApp:compileKotlin :app:compileDebugKotlin
-```
-
-Si no se dispone del SDK Android, completar las pruebas independientes y registrar la compilación Android como pendiente, con el error concreto. No presentarla como pasada.
-
-### Empaquetado Windows
-
-```powershell
-.\gradlew.bat :desktopApp:tasks --all
-.\gradlew.bat :desktopApp:packageMsi
-.\gradlew.bat :desktopApp:packageExe
-```
-
-- Verificar las tareas disponibles y las dependencias de `jpackage` en esa máquina antes de diagnosticar un fallo de la aplicación.
-- Los instaladores Windows se generan y comprueban en Windows. Un build Linux no valida un MSI.
-- Probar también la aplicación empaquetada: un PATH o directorio de trabajo diferente puede romper audio, navegador, recursos o datos.
-- La versión de escritorio declarada al preparar esta entrega es 1.2.2; confirmar en Gradle. La versión del módulo Android puede ser distinta.
-
-## 6. Datos, credenciales y aislamiento de pruebas
-
-### Rutas de datos
-
-- `OtoDirs` determina las rutas efectivas; leer su implementación si algo no coincide.
-- Linux: datos en `~/.local/share/oto`; caché en `~/.cache/oto`.
-- Windows: datos normalmente en `%APPDATA%\oto`; caché normalmente en `%LOCALAPPDATA%\oto`.
-- Preferencias de ventanas: `modular_windows.json`, con `docking_v1` para la distribución agrupada.
-- DataStore guarda preferencias y listas; no es una base de datos Room.
-- Las cachés de audio, descargas y DJ cumplen funciones diferentes. No borrar una para arreglar un problema de otra.
-
-### Protección de los datos reales
-
-- Elegir un perfil de prueba o un directorio aislado cuando se necesite un arranque limpio. El arnés ya proporciona un entorno sin datos reales para geometría.
-- Hacer respaldo antes de una migración necesaria, pero no restaurar después una copia antigua sobre datos que el usuario o el móvil hayan modificado mientras tanto.
-- Para limpiar una prueba, retirar exclusivamente las entradas de prueba identificadas.
-- Registrar el estado de reproducción y los procesos propios antes de reiniciar una aplicación real durante una prueba.
-- Iniciar sesión no autoriza importar o exportar toda la biblioteca. Las selecciones explícitas del usuario siguen siendo obligatorias.
-- Probar primero las vistas de importación/exportación sin ejecutar operaciones remotas de escritura sobre listas reales.
-- Nunca publicar cookies, tokens, secretos de vinculación, QR utilizables, archivos DataStore, claves de firma ni `local.properties`.
-- En los logs y capturas destinados a Git, ocultar datos de sesión y direcciones o secretos que no sean necesarios para reproducir un fallo.
-
-### Procesos y herramientas
-
-- Identificar los PID de la aplicación y de sus procesos de audio antes de detenerlos.
-- Cerrar primero desde la UI cuando funcione. Si se necesita terminar un proceso, hacerlo sobre el proceso propio concreto.
-- No matar todos los procesos Java: también hay daemons de Gradle y otras aplicaciones.
-- No recompilar o reemplazar un JAR que esté usando una aplicación abierta. Cerrar/reiniciar o ejecutar desde una copia inmutable de los artefactos.
-- No confundir un fallo de dispositivo remoto desconectado con un fallo del controlador de ventanas.
-
-## 7. Diseño de ventanas acordado con Iago
-
-Estas son decisiones del usuario. Una corrección de Windows debe conservarlas salvo que Iago las cambie expresamente.
-
-### Inicio, estética y módulos
-
-- En una instalación sin distribución previa se abren biblioteca y reproductor, con reproductor a la derecha de biblioteca.
-- Mantener la estética y los controles de los módulos actuales.
-- Ventanas agrupables: biblioteca, reproductor, letra y cola.
-- Dispositivos y Guardar siguen siendo ventanas auxiliares; no incorporarlas a la jerarquía sin una petición nueva.
-- Las uniones son exclusivamente laterales. No añadir acoplamiento por arriba o abajo.
-- Biblioteca y reproductor ofrecen accesos a módulos. Por petición de Iago del 02/11/2026 durante la revisión Windows, biblioteca no lleva menú de tres puntos; las opciones siguen en reproductor y en sus ubicaciones existentes.
-- Las ventanas nuevas se reparten a ambos lados de la jefa, prefiriendo el lado con menos ancho ocupado. Si ambos están vacíos, se empieza por la derecha.
-- La distribución guardada prevalece sobre ese reparto inicial.
-
-### Jefa y dependencias
-
-- Prioridad de mando: biblioteca > reproductor > letra/cola.
-- «Secundaria» significa cualquier ventana que no sea la jefa de su grupo; incluye reproductor cuando hay biblioteca.
-- Entre ventanas del mismo rango, manda la que recibió a la otra al unirse.
-- Arrastrar la cabecera de la jefa mueve todo el grupo.
-- Sacar una secundaria fuera del grupo la separa con los dependientes que le corresponden por la distribución actual.
-- Ejemplo: `Biblioteca · Reproductor · Letra · Cola`; separar reproductor se lleva letra y cola.
-- Ejemplo: `Biblioteca · Letra · Reproductor · Cola`; separar reproductor se lleva cola, mientras letra queda con biblioteca.
-- Las relaciones se recalculan al reordenar: no conservar asociaciones invisibles antiguas.
-- Quitar una secundaria de la izquierda debe mantener la jefa en su posición normal, salvo ajustes necesarios para mantener el conjunto visible.
-
-### Reordenación
-
-- Se usa la cabecera, con una franja de tolerancia para distinguir reorganizar de separar.
-- Dentro del grupo se mueve solamente la ventana elegida, aunque tenga dependientes.
-- Mismo lado de la jefa: inserción y desplazamiento de las demás.
-- Lados opuestos: intercambio de origen y destino; la jefa no cambia de puesto.
-- Ejemplo de inserción: `Biblioteca · Reproductor · Letra · Cola` pasa a `Biblioteca · Letra · Cola · Reproductor`.
-- Ejemplo de intercambio: `Reproductor · Biblioteca · Letra · Cola` pasa a `Cola · Biblioteca · Letra · Reproductor`.
-- Mostrar una previsualización antes de confirmar al soltar. Resaltar el borde de inserción; distinguir el caso de intercambio.
-- Los valores iniciales del código son 24 dp para separar y 12 para proximidad del imán. Revisar la conversión real de unidades antes de retocar sensaciones en Windows.
-
-### Geometría, altura y foco
-
-- Todas las ventanas unidas comparten altura y se alinean arriba.
-- Redimensionar la altura desde cualquier miembro afecta al grupo completo.
-- Al unir grupos de alturas distintas manda la altura de la ventana de mayor prioridad. Entre iguales se mantiene la del grupo receptor.
-- Conservar anchos individuales y respetar los mínimos del contenido.
-- Mover y limitar a pantalla el conjunto como unidad; no ajustar cada ventana independientemente y romper las uniones.
-- Hacer clic en una ventana eleva el grupo completo y conserva el foco de teclado en la pulsada.
-- Cerrar una ventana afecta solo a ella. El resto sigue abierto y se compacta; cambia la jefa si hace falta.
-- Recuperar el tamaño y la asociación guardados al reabrir una ventana. Si no cabe acoplada, abrirla suelta y avisar.
-
-### Maximización: política por plataforma
-
-- **Hyprland: Iago no quiere maximización propia.** No mostrar el control y no maximizar con doble clic.
-- **Windows y otros escritorios Linux: sí hay maximización.** La acción afecta al conjunto.
-- Usar el área útil del monitor, descontando barra de tareas o paneles.
-- Maximizar y restaurar deben conservar la distribución normal anterior.
-- Incorporar una ventana a un conjunto maximizado redistribuye sus anchos sin sacar al grupo de ese estado.
-- Biblioteca absorbe el ancho flexible.
-- Antes de estrechar biblioteca, reducir el exceso de ancho de las secundarias, solo lo necesario y hasta su ancho predeterminado.
-- Después se puede reducir biblioteca hasta su mínimo.
-- Si todavía falta espacio, la nueva ventana aparece suelta, con un aviso breve. No sustituir automáticamente otra ventana ni comprimir secundarias por debajo del límite acordado.
-- Sin biblioteca, absorbe el ancho sobrante letra; después cola y, si está solo, reproductor.
-- Separar reproductor de un conjunto maximizado recupera su tamaño normal bajo el cursor, junto con sus dependientes.
-- El grupo restante sigue maximizado y aprovecha el espacio liberado.
-- Verificar botón, doble clic y cambios nativos de maximización en Windows. Esta última ruta fue implementada pero no se ha comprobado allí.
-
-### Chincheta
-
-- Solo aparece cuando reproductor está completamente solo.
-- Sirve para usarlo como reproductor multimedia flotante por encima de otras aplicaciones.
-- Unirlo a cualquier otra ventana desactiva la chincheta y oculta su control.
-- Separarlo otra vez deja la chincheta desactivada: Iago quiere fijarlo manualmente cada vez.
-- No extender la chincheta al grupo entero.
-- En vista Vertical, la chincheta va abajo, tras los accesos a módulos (petición de Iago durante la revisión Windows). La cabecera estrecha conserva menú y cierre.
-- Letra y Cola admiten anchos menores que los predeterminados: mínimos actuales 220 y 240 dp, respectivamente; predeterminados 480 y 420 dp.
-
-## 8. Implementación del acoplamiento: dónde intervenir
-
-- `DockLayout.kt`: geometría pura, grupos, prioridades, apertura/cierre, dependencias, inserción/intercambio, maximización y recuperación de pantallas.
-- `DockWindows.kt`: puente Compose/AWT, entrada de ratón, foco, cambios nativos, áreas útiles y política de plataforma.
-- `DockPersistence.kt`: codificación/lectura y distribución inicial.
-- `DockHarness.kt`: contenido de prueba que usa los mismos marcos de la aplicación.
-- `ModularDesktop.kt`: conexión de ventanas reales, menús, chincheta y persistencia.
-- `DockLayoutTest.kt`: pruebas del modelo, persistencia y cálculo de áreas.
-
-### Trampas ya encontradas durante la implementación
-
-- Aplicar `setBounds` demasiado pronto puede perder la geometría inicial al aparecer una ventana. Se crean estados a partir del modelo y se sincronizan con Compose.
-- Un estado creado mientras una ventana estaba cerrada puede conservar el tamaño genérico de 800 × 600 al abrirla. `rememberDockState` renueva el estado con la visibilidad.
-- Consultar solamente la posición global del ratón al recibir un evento tardío puede perder el inicio de un arrastre rápido. El código usa la posición local del primer contacto y la densidad.
-- El escritorio puede capturar el redimensionado antes de Compose. El adaptador escucha cambios nativos y los reconcilia con el modelo.
-- Distinguir esos cambios externos de los provocados por el controlador para evitar bucles de realimentación.
-- Un `toFront()` por cada evento de foco puede producir ciclos y cerrar menús emergentes. El código eleva el grupo al pulsar y separa esa acción del registro de foco.
-- Evitar que los botones de cabecera inicien a la vez un arrastre.
-- Al acoplar un grupo que no cabe, restaurar completamente el estado anterior; no dejar anchos o asociaciones modificados a medias.
-- Los cambios nativos pueden llegar después del evento de ratón. Esperar a que se estabilicen y medir, en vez de inferir el resultado de una captura demasiado temprana.
-- El área útil de AWT bajo XWayland no reflejaba los paneles de Caelestia. En Hyprland se usa el área reservada que informa el compositor.
-- AWT usa coordenadas lógicas de escritorio. Revisar con cuidado los píxeles físicos de capturas y el escalado de Compose/Windows.
-- Hay tests de monitores con coordenadas negativas, escala y rotación, pero falta comprobación con monitores físicos de escalas distintas.
-
-## 9. Matriz de pruebas de TODA la aplicación en Windows
-
-Crear un registro con una fila por recorrido y estados `pendiente`, `pasa`, `falla` o `bloqueado`. En cada fallo incluir pasos, resultado esperado, resultado observado y evidencia. Un test del modelo no convierte automáticamente una prueba de interfaz en `pasa`.
-
-### A. Preparación, inicio y ciclo de vida
-
-- Clon limpio de la rama correcta con JDK 21 y dependencias descargadas.
-- Arranque de desarrollo desde PowerShell y desde un directorio con espacios.
-- Primera apertura sin distribución; apertura posterior con preferencias.
-- Segunda ejecución: recuperar la instancia existente sin duplicar ventanas, servidores ni audio.
-- Cierre de una ventana, cierre de todas, bandeja y salida completa.
-- Reinicio después de una salida normal y después de un cierre inesperado del proceso propio.
-- Suspensión/reanudación del equipo y cambio de dispositivo de salida, cuando estén disponibles.
-- Persistencia de volumen, forma del reproductor, tamaño, posición y módulos abiertos.
-- Ausencia de procesos huérfanos de audio o navegador al salir.
-
-### B. Ventanas e interacción de escritorio
-
-- Acoplar por izquierda y derecha, separar y volver a unir.
-- Mover desde la jefa y desde una secundaria con dependientes.
-- Reordenar en el mismo lado; intercambiar cruzando una jefa central.
-- Recalcular dependientes después de reordenar.
-- Cambiar anchos, altura compartida y límites mínimos desde los bordes disponibles.
-- Botones de cabecera, menús, foco de teclado y atajos con un campo de texto enfocado.
-- Abrir/cerrar desde biblioteca, reproductor, bandeja y atajos.
-- Maximizar/restaurar por botón, doble clic y controles del sistema Windows.
-- Añadir/quitar módulos maximizados y probar el caso de espacio insuficiente.
-- Extraer un subgrupo maximizado bajo el cursor y restaurar sus tamaños.
-- Chincheta en reproductor solo; desactivación al unir; nueva separación sin fijado automático.
-- Barra de tareas, Alt+Tab y relación entre ventanas cuando otra aplicación las tapa.
-- Escalas Windows de 100 %, 125 %, 150 % y, si cabe, 200 %.
-- Cambio de escala en caliente, monitores secundarios, posiciones negativas, distinta escala por monitor y desconexión del monitor que contiene Oto.
-- Datos de ventanas incompletos o inválidos y recuperación de ventanas fuera de pantalla en un perfil de prueba.
-
-### C. Reproducción y audio
-
-- Elegir una canción desde búsqueda, biblioteca, álbum, artista, lista y DJ.
-- Inicio, pausa, reanudación, anterior, siguiente y final natural de pista.
-- Buscar posición al principio, en mitad y cerca del final; no duplicar procesos de audio.
-- Volumen, silencio y persistencia de volumen sin reinicios o saltos inesperados.
-- Cambio rápido de canciones mientras carga audio.
-- Audio largo, distintos formatos y ruta de reproducción alternativa cuando proceda.
-- Medir inicio, carga y latido con audio real; distinguir silencio de fallo del reproductor.
-- Pérdida de red durante preparación y reproducción, reconexión y errores de extracción.
-- Salida de la aplicación mientras descarga o reproduce.
-- Teclas multimedia y atajos documentados; detectar lo que no esté implementado realmente en Windows.
-
-### D. Biblioteca, búsqueda y navegación
-
-- Tu música, Explorar, recientes y navegación de vuelta.
-- Búsqueda por canción, artista, álbum y lista, con y sin resultados.
-- Escribir espacios en búsqueda sin pausar involuntariamente la música.
-- Abrir artista/álbum/lista desde resultados y desde la pista actual.
-- Listas largas: desplazamiento, paginación si existe, cambio de vista y selección.
-- Crear, renombrar, borrar y recuperar mediante deshacer una lista de prueba.
-- Crear carpetas vacías, mover listas, entrar/salir, renombrar y borrar la carpeta de prueba.
-- Fijar/desfijar listas y carpetas, sin duplicarlas en las secciones.
-- Arrastrar/reordenar listas, incluido desplazamiento automático y persistencia.
-- Guardar una canción o álbum en una lista, retirar elementos y comprobar el deshacer.
-- Me gusta y su sincronización visual entre vistas.
-
-### E. Cola y modos de reproducción
-
-- Iniciar una lista y comprobar orden de cola y canción actual.
-- Reordenar, quitar, vaciar y saltar a una entrada.
-- Quitar la canción actual y una anterior sin que reaparezcan al cambiar aleatorio.
-- Aleatorio, bucle y transiciones entre modos.
-- Cola vacía, una canción, muchas canciones y canciones repetidas.
-- Radio/autoplay después de una canción elegida individualmente, respetando la lógica existente.
-- Navegación al origen de la pista desde reproductor.
-
-### F. Letras y apariencia
-
-- Letra sincronizada, letra sin sincronizar y canción instrumental/sin letra.
-- Romanización, cambio de tamaño y persistencia del ajuste.
-- Desplazamiento manual, retorno al seguimiento y salto de reproducción al pulsar una línea.
-- Palabras largas, líneas iniciales/finales, duetos, coros y pausas.
-- Cambiar de canción con letra abierta sin enseñar la anterior como si perteneciera a la nueva.
-- Carátulas que faltan, fallos de descarga de imagen y cambios de paleta.
-- Formas Carátula, Horizontal y Vertical, unidas y separadas.
-- Fondo, contraste, hover, tooltips, menús y avisos en cada escala.
-- Revisar recortes de texto y botones inaccesibles en tamaños mínimos.
-
-### G. Descargas y funcionamiento sin red
-
-- Añadir una descarga de prueba, observar progreso y reproducirla al terminar.
-- Cancelar, reintentar y retirar la descarga de prueba.
-- Reabrir Oto y reconocer descargas existentes.
-- Reproducir con red desactivada y volver a activarla.
-- Rutas Windows con espacios y caracteres no ASCII.
-- Caché parcial, archivo ausente, error de disco o permiso denegado en un perfil aislado.
-- Ajustes de almacenamiento y limpieza sin borrar descargas o biblioteca equivocadas.
-
-### H. Cuenta, importación y exportación
-
-- Apertura del navegador de login, cancelación, timeout y cierre del navegador temporal.
-- Descubrimiento de Chrome/Edge/Brave según las rutas reales de esa máquina.
-- Si hay cuenta disponible, login y restauración después de reiniciar.
-- Selecciones independientes de listas para importar y exportar; buscar y seleccionar múltiples.
-- Confirmar que Me gusta requiere selección y que desmarcar exportación no borra la copia remota.
-- Importación de archivo vacío, inválido y una muestra válida de prueba.
-- Importación Spotify por archivo o enlace según las capacidades actuales; no declarar una importación real probada con un archivo vacío.
-- Cerrar sesión y verificar que se limpia la sesión adecuada sin borrar biblioteca local.
-- Marcar como bloqueadas las escrituras remotas que requieran una selección o cuenta que el usuario no haya facilitado.
-
-### I. Dispositivos y conexión con el móvil
-
-- Pantalla Dispositivos sin móvil, con móvil desconectado y durante reconexión.
-- Generación de QR, revocación de secreto y desconexión.
-- Descubrimiento y conexión directa cuando el descubrimiento falle.
-- Si hay móvil disponible, vincular y probar controles en ambos sentidos.
-- Cola completa: anteriores, actual y siguientes, orden, posición y estado de pausa.
-- Continuar aquí/allí con éxito y con fallo; evitar que suenen los dos al mismo tiempo.
-- Sincronización con bibliotecas grandes y cambios concurrentes usando datos de prueba identificados.
-- Reconexión tras cerrar el escritorio, suspender o cambiar de red.
-- Firewall Windows: diagnosticar aplicación y perfil de red; no desactivar globalmente la protección para ocultar un fallo.
-- Probar móvil desconectado sin cascadas de excepciones ni bloqueo del hilo gráfico.
-
-### J. Instalación y distribución
-
-- Generar el instalador disponible y revisar la salida de `jpackage`.
-- Instalar para el usuario actual y abrir desde menú Inicio/acceso directo.
-- Comprobar iconos, fuentes, recursos y rutas de datos fuera del repositorio.
-- Verificar disponibilidad de FFmpeg/ffplay desde la aplicación instalada, no solo desde la terminal de desarrollo.
-- Repetir reproducción, búsqueda, persistencia, ventanas y login desde el paquete.
-- Actualizar/reinstalar sin perder los datos del perfil de prueba.
-- Desinstalar la aplicación de prueba y comprobar la política de conservación de datos.
-
-## 10. Riesgos concretos que conviene investigar en Windows
-
-Son puntos de inspección, no afirmaciones de que todos estén fallando.
-
-1. **Atajo global:** `DesktopAccess` registra un atajo del compositor solo cuando detecta Hyprland. El endpoint local por sí solo no implementa un atajo global Windows. Comprobar y resolver el soporte que falte sin capturar el teclado de forma permanente.
-2. **FFmpeg/ffplay:** `DesktopAudioEngine` detecta `ffplay` en PATH y `DesktopBeat` usa `ffmpeg`. Probar nombres `.exe`, instalación, empaquetado y rutas con espacios.
-3. **Audio alternativo:** la ruta Java Sound no implica soporte real de todos los formatos de YouTube. Probar audio efectivo, no solo ausencia de excepción.
-4. **Procesos de audio:** revisar pausa, seek, volumen y terminación en Windows; un proceso arrancado no acredita que reproduzca lo esperado.
-5. **Navegador:** `BrowserLogin` contempla rutas de Windows y también tiene búsqueda con `which` en su lógica. Inspeccionar qué rama se ejecuta realmente y la limpieza del perfil temporal.
-6. **Coordenadas y DPI:** Windows/AWT/Compose/capturas pueden usar escalas distintas. Medir geometría y observar el resultado con varias escalas.
-7. **Ventanas transparentes:** probar recorte, sombra, borde de arrastre y cambios nativos de tamaño/foco con ventanas sin decoración.
-8. **Maximización:** se implementó en el controlador y se conectó con `WindowPlacement`, pero falta validar la transición nativa Windows.
-9. **Bandeja e instancia única:** comprobar soporte y comportamiento cuando no se ve ninguna ventana.
-10. **Sincronización local:** durante la revisión Linux se observaron errores repetidos «El otro dispositivo no está conectado» desde `DeviceConnection`/`LocalLink`. Reproducir y resolver si aparece en Windows, sin cambiar el protocolo por intuición.
-11. **Configuración Gradle:** una clonación nueva carece de `local.properties`, cachés y claves locales; diferenciar esos prerrequisitos de un defecto de portabilidad.
-12. **Planes antiguos:** algunas rutas y pantallas se rediseñaron. No restaurar el escritorio anterior para que encaje con un plan histórico.
-
-## 11. Evidencia disponible al entregar esta rama
-
-### Comprobado en la sesión Linux de acoplamiento
-
-- Compilación del escritorio con JDK 21.
-- 25 pruebas de escritorio: 23 de acoplamiento y 2 del detector de audio, sin fallos en la última comprobación de esa implementación.
-- Arrastre conjunto de biblioteca y reproductor.
-- Separación de reproductor con cola asociada, manteniendo maximizado el resto durante la prueba inicial.
-- Maximización de grupo y añadido de cola en la prueba inicial, antes de retirar esa acción de la interfaz Hyprland por petición del usuario.
-- Inserción de secundarias dentro del mismo lado de la jefa.
-- Intercambio entre lados con biblioteca en medio.
-- Imán por el borde izquierdo y alineación de ventanas.
-- Altura compartida desde el borde capturado por Hyprland.
-- Cierre/reapertura y recuperación del orden tras reiniciar la aplicación.
-- Menú de tres puntos compartido desde biblioteca.
-- Aviso visible y grupo intacto cuando no cabe acoplar letra.
-- Chincheta con reproductor solo; desactivación al unir y ausencia de recuperación automática al separar.
-- Ajuste a áreas reservadas de Caelestia; casos de escala/rotación/coordenadas negativas cubiertos por pruebas de cálculo.
-
-### Historial de funciones anteriores
-
-`ESTADO_MODULAR.md` recoge pruebas Linux y móvil anteriores del transporte, bibliotecas grandes, transferencia y selectors de cuenta. Sus fechas y cifras son históricas: confirmar el resultado de la revisión Windows por separado.
-
-### No comprobado todavía al escribir esta entrega
-
-- Interfaz e interacción en Windows nativo.
-- Instaladores Windows y comportamiento de la aplicación instalada.
-- Atajo global Windows.
-- Monitores físicos de distintas escalas y cambios de DPI Windows.
-- Login completo Google en el escritorio con cuenta real.
-- Importación Spotify real durante esta revisión.
-- Escaneo físico del QR con cámara en la sesión anterior.
-- Medición prolongada de batería del móvil.
-
-No convertir estos pendientes en hechos verificados por haber leído el código o pasado una prueba JVM.
-
-## 12. Cómo registrar y cerrar la revisión Windows
-
-En `docs/VALIDACION_WINDOWS.md`, registrar:
-
-- Fecha, rama y commit probado.
-- Versión/edición de Windows, escala, resolución, monitores y JDK.
-- Herramientas reales de captura/automatización usadas.
-- Tareas Gradle ejecutadas y número real de pruebas.
-- Resultado por área de la matriz, con evidencia de los fallos relevantes.
-- Arreglos realizados y regresiones comprobadas.
-- Resultado del paquete instalado.
-- Pendientes con su requisito concreto: cuenta, móvil, segundo monitor o hardware.
-
-Para cada arreglo, conservar pasos de reproducción suficientes para repetirlo después de un cambio. Si un gesto falla, registrar coordenadas, estado del grupo, escala, tamaños y eventos que recibió el adaptador. Si falla audio, registrar backend, formato, proceso y error sin URL firmada ni cookies.
-
-El cierre debe expresar qué funciona de verdad y qué no se pudo comprobar. No sustituir ese balance por «todo arreglado» si quedan áreas bloqueadas.
-
-## 13. Git y continuidad entre máquinas
-
-- Esta entrega se publica en `feat/prueba-acoplamiento` para que Windows tenga el código completo y el contexto.
-- `main` se conserva; no hacer force-push ni cambiar la rama por defecto para este traspaso.
-- Antes de tocar, inspeccionar `git status`; conservar los cambios ajenos. Si hay trabajo concurrente, usar un worktree propio.
-- Cuando se hayan pedido commits, uno por cambio lógico, con `tipo: resumen` en español.
-- Email de commits del proyecto: `164151388+iaguito22@users.noreply.github.com`.
-- Subir cambios solo cuando esté autorizado. No publicar paquetes/release ni enviar mensajes externos por asumir que una validación lo requiere.
-- Nunca subir directorios de compilación, cachés de Gradle, datos de usuario ni secretos para facilitar un clon.
-- Una corrección hecha en Windows debe mantener los límites de plataforma: código Hyprland condicionado y comportamiento Windows propio.
-- Antes de transferir nuevas conclusiones, actualizar este documento si cambian reglas o trampas, y el informe de Windows con la evidencia real.
-
-## 14. Referencia Android heredada
-
-El contenido siguiente conserva las instrucciones originales del proyecto, especialmente las precauciones sobre el móvil real, audio, letras y datos. Sus versiones, rutas Linux y cifras de rendimiento son contexto histórico; contrastarlas con el código y el equipo actual antes de usarlas como estado presente.
-
-
-# Referencia original — Oto
-
-Reproductor de música Android (Kotlin + Compose + Media3) sobre InnerTube de YouTube Music.
-Es personal: lo usa un solo usuario en su Nothing Phone (2). Se distribuye como APK en GitHub, nunca en Play Store.
-Licencia GPL-3 (por usar InnerTubeX). Repo: https://github.com/iaguito22/oto
-
-El usuario habla español: textos de la app, commits y respuestas en español.
-
-## Reglas que no se discuten
-
-- **Nunca** meter la clave `AIza...` (PoToken) en el código: va en `local.properties` -> `BuildConfig.GOOGLE_API_KEY`.
-- **Nunca** `connectedAndroidTest` sin `ANDROID_SERIAL=emulator-5554`: sin eso corre en el móvil real y desinstala la app.
-- **Nunca** restaurar una copia anterior de los datos del móvil (`oto.preferences_pb`, etc.): el usuario usa el móvil a la vez y se pierden sus cambios. Para limpiar pruebas, borrar solo las entradas que añadió la prueba.
-- **Nunca** `Regex(...)` dentro de funciones calientes: causó un OOM nativo al pasar canciones rápido (233 MB -> 1,2 GB). Compilar fuera, una vez.
-- **Nunca** reusar el token anónimo de `open.spotify.com/embed` para saltarse límites: se bloqueó. La API oficial de Spotify exige Premium del dueño.
-- La clave de firma `~/.config/oto/oto-release.jks` (contraseña en `local.properties`, `OTO_KEYSTORE*`) no se pierde ni se sube: sin ella las actualizaciones no se instalan encima.
-- Otra IA puede estar trabajando a la vez en el árbol. Mirar `git status` antes de tocar; si hay cambios sin commit ajenos, usar un worktree (`git worktree add ~/PROYECTOS/oto-<tema> -b <rama>`) y no mezclar.
-- Fiarse de lo que el usuario ve en el móvil, no solo de las medidas propias (un recorte de letra que las medidas no cazaron).
-
-## Compilar y probar
-
-- JDK 21 obligatorio (el de por defecto es el 25):
-  `JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :app:assembleDebug` (~3,5 min la primera vez).
-- Tests JVM: `./gradlew testDebugUnitTest` (la variante se llama `Debug`, no `Phone`).
-- SDK en `~/Android/Sdk`. `adb` no está en el PATH: `~/Android/Sdk/platform-tools/adb`.
-- Emulador `oto36` (Android 16, x86_64). **Se cuelga con la letra abierta** (sin GPU real): probar la letra en el móvil.
-- Sin ImageMagick: para capturas, `ffmpeg`.
-- Crashes: `adb logcat -b crash -d`; desofuscar con `app/build/outputs/mapping/phone/mapping.txt`.
-
-### Variantes
-
-| Variante | Qué es |
-|---|---|
-| `debug` | sufijo `.debug` |
-| `phone` | release con sufijo `.debug`: es donde están los datos del usuario; no depurable |
-| `bench` | release R8 firmada con clave debug, sufijo `.bench`, para medir fotogramas |
-| release | paquete `io.github.iaguito22.oto`, firmada con la clave propia |
-
-- Tras instalar `phone` o `bench` se pierde la cola: devolverle lo que sonaba.
-- Con la `bench` delante, «atrás» lleva a su Oto real y los toques caen ahí: no usar `keyevent 4`.
-- Para limpiar datos de `phone` hay que poner `isDebuggable` temporal (`run-as` necesita rutas `/data/data/...`).
-
-### Móvil real
-
-- Nothing Phone (2), A065, Android 16 / API 36, 1080x2412, 420 dpi, 120 Hz.
-- adb inalámbrico a `192.168.1.147`. **El mDNS de adb no funciona en su red**: escanear puertos 30000-50000 (`bash /dev/tcp` en paralelo) y `adb connect`. El puerto cambia al reactivar la depuración.
-- Su volumen multimedia suele estar a 0 y a veces está en una llamada de Discord: probar en silencio. Con cascos se puede poner música.
-- No se puede bajar el volumen de BT por adb.
-- `pgrep/pkill -f` con el patrón en la línea de comandos mata la propia shell: buscar pids con `ps -eo pid,comm | awk`.
-
-### Medir rendimiento
-
-- Medir en el móvil, no dar animaciones por buenas. Objetivo: casi 0 % de fotogramas tarde (hoy 0,13-0,28 % con gestos y hojas).
-- `framestats` engaña si hay fotogramas en reposo y guarda solo 120 (1 s a 120 Hz): usar `dumpsys gfxinfo` (histograma) o perfetto + `trace_processor`.
-- `input swipe` desde `y < 200` baja la cortina de notificaciones.
-
-## Estructura
-
-Módulos Gradle: `:app`, `:core` (lógica compartida), `:desktopApp` (Linux/Windows) y `:innertube`. Ver `PLAN_IMPLEMENTACION.md` para el escritorio. Antes: `:app` y `:innertube` (copiado de Metrolist b1dd1d0, con el paquete `com.metrolist.innertube` sin cambiar; InnerTubeX v0.10.0).
-Paquete de la app: `io.github.iaguito22.oto`, en `app/src/main/kotlin/...`.
-
-| Carpeta | Contenido |
-|---|---|
-| `playback/` | `PlaybackService` (MediaLibraryService + ExoPlayer), `Chunked`, `Fidelity`, `Downloads`, `Crossfade`, `Radio`, `Autoplay`, `Shuffle`, `Library` (Android Auto), `potoken/` |
-| `ui/isla/` | La pantalla única: `Drop.kt` (AGSL + física de la gota), `Sheet`, `Lyrics`, `Tutorial`, `Panels`, `Output` |
-| `ui/menu/` | La hoja Menú: `MenuSheet`, `MenuViewModel`, `Search`, `SaveTo`, `DownloadsView`, `Import`, `Suggest`, `MenuMemory` |
-| `ui/theme/` | Tokens de Caelestia (`Tokens.kt`), tipografía Rubik variable empaquetada |
-| `lyrics/` | `LyricsSource` (fuentes), `LyricsStore` (caché memoria + disco) |
-| `dj/` | DJ, perfil de gusto, `Smart` (Explorar «Hecho con lo tuyo») |
-| `importer/` | Importar de Spotify: enlace público o JSON de la extensión; `Matcher` |
-| `account/` | Login de YouTube Music (WebView + cookies), copia de listas en la cuenta |
-| `Prefs.kt`, `Storage.kt` | Preferencias (DataStore) y topes de caché |
-| `tools/spicetify/` | `oto-export.js`, `install.sh`, `install.ps1` (extensión para exportar de Spotify) |
-| `docs/` | Capturas y gifs del README (grabados con `screenrecord` en el móvil) |
-
-Hay un `PatientExtractor.java` en `app/src/main/java/...` porque las clases de InnerTubeX son `internal` en Kotlin.
-
-## Diseño del producto
-
-- Concepto «La isla»: una pantalla con una **gota redonda** (forma B1, núcleo de luz, filtro goo; variante «Aro» por defecto, «Líquida» en Ajustes) que se transforma.
-- La gota **no tiene controles ni texto «Buscar»**: minimalista, que dé ganas de tocarla.
-- Gestos: tocar = pausa, a los lados = otra canción, subir = **Menú**, mantener = cola, bajar = letra. Se enseñan con un tutorial al abrir. Tocar solo cuenta en 52 dp del centro.
-- Menú: pestañas **Explorar | Tu música**, buscador abajo, engranaje de Ajustes en la esquina. «Tu música» es la primera.
-- Doble toque en la carátula = Me gusta (solo da, nunca quita). Mantener la carátula o tocar su marca = «Guardar en...» (`SaveTo.kt`).
-- Mantener una lista/carpeta = opciones, incluido «Mover». No hay arrastre al mantener (no funcionaba).
-- Ajustes: lista única en el orden de siempre. Probó apartados/páginas y lo descartó.
-- Estética parecida a Caelestia / Spicetify, con interfaz distinta a la del resto de apps. Le gustan los bordes suaves y las filas de texto en columnas de 4 para canciones.
-- Nombre: **Oto** (音). Descartados: Tsuyu, Gota, Marea, Rocío, Shizuku.
-- Icono: anillo + núcleo blancos sobre `#252525`.
-- Escala fija: `MainActivity.attachBaseContext` fuerza `densityDpi = ladoCortoPx * 160 / 411.43` y `fontScale = 1`, para que se vea igual que en su móvil con cualquier pantalla o tamaño de letra. En tabletas (lado corto >= 3,5") se respeta el sistema. Para probar: `wm density 540` + `settings put system font_scale 1.15`, y luego `wm density reset` + font_scale 1.0.
-
-## Reproducción: lo aprendido
-
-- **YouTube frena el audio pedido de una vez a ~33 KB/s**; a trozos de 1 MB va a ~5 MB/s: por eso existe `playback/Chunked.kt`. No pedir el audio entero.
-- `Fidelity.kt`: `Tier` alta = clave `id`, baja = `id~l`; nunca se mezclan formatos. Auto/Máxima + ahorro de datos. Auto pasa a baja si no arranca en 6 s **y hay red validada**.
-- `WholeSongLoadControl`: actual + siguiente enteras y nada más. No usar `PreloadConfiguration`.
-- `PatientErrorPolicy`: sin red reintenta sin fin.
-- `config` y `visitorData` se guardan (`oto_player_config`, `oto_visitor`). `/player` tiene 30 s (InnerTubeX daba 8 s).
-- Caché de audio: SimpleCache 1 GB. Descargas: SimpleCache aparte en `filesDir/downloads` sin evictor; `OfflineFirstDataSource` va delante de todo.
-- Topes en `Storage.kt`: audio 1 GB, carátulas 200 MB, HTTP 50 MB, DJ 20 MB.
-- Poner UNA canción desde un controlador = radio detrás (`onSetMediaItems`). Radio = `RDAMVM` + id, se resiembra con la última de la cola; sin repetir (historial + `songKey` título+artista).
-- El MediaController da un instante el id nuevo con `mediaMetadata` de la anterior: leer `currentMediaItem.mediaMetadata`.
-- Fundido (`Crossfade`): cortar con `playWhenReady`, no `isPlaying`. `Crossfade.align` corrige el desfase (+-6 ms). El usuario lo tiene en «No».
-- Android Auto: `PlaybackService` es `MediaLibraryService`; ids `in|lista|canción`. Hace falta `DEFAULT_SESSION_AND_LIBRARY_COMMANDS` en `onConnect` (si no, «Oto no funciona»). Probar con el DHU (`~/Android/Sdk/extras/google/auto/desktop-head-unit`: necesita libc++/libc++abi, `SDL_VIDEODRIVER=x11 DISPLAY=:1`, sin sandbox, `adb forward tcp:5277 tcp:5277`, comandos por stdin: `tap x y`, `screenshot f`).
-- «Anterior» de la gota = siempre la anterior (caché de disco, ~0,2 s). El botón del sistema reinicia pasados 3 s.
-- InnerTube devuelve un 403 lento en ~1 de cada 11 lecturas: `InnerTube.hedged` (módulo innertube) lanza otra a 1,5 s o al fallar, hasta 3.
-- Explorar sin ánimo pide la portada **sin sesión** (`YouTube.home(guest = true)`); con ánimo, con cuenta. Sin repetidos entre estanterías.
-
-## Letra
-
-- Fuentes en orden: lyricsplus (binimum; el workers.dev daba error 1042) -> NetEase -> LRCLIB (`estimate` portado del `theme.js` de Spicetify) -> YT plano. Romanización Google `dt=rm` (desde el móvil va, desde el PC no).
-- lyricsplus limita a **2 peticiones / 10 s** (429: esperar y reintentar).
-- Relleno y salto **letra a letra** con `drawText` sobre la palabra entera (kerning intacto). Pasar `alpha = 1f` a `drawText` con degradado o hereda la opacidad anterior.
-- La letra sincronizada va en `LazyColumn`. La capa de la línea (`graphicsLayer`) va de borde a borde, con padding `EDGE` dentro: con alfa < 1 se pintaba recortada y comía la primera letra.
-- `LEAD` 250 ms. Mantener la letra = romanización (`Prefs.romanize`).
-- Arnés `LyricsHarness` (`OTO_LYRICS`, `_N`, `_PACE` >= 5500).
-
-## Rendimiento de UI: trampas
-
-- Si algo bajo una hoja cambia, se re-desenfoca el `Stage` entero cada fotograma: `LocalCovered` (barra, letra, hojas) para no dibujar lo tapado. Gota quieta en pausa a 30 fps.
-- Fondo desenfocado en CPU (`blurredArtwork`, sigma ~9,8 px sobre la de 240).
-- Descartado tras probarlo: fundido por franjas en vez de `Offscreen`; quitar `currentId` del menú.
-- Pendiente conocido: el cambio de canción aún tiene un fotograma de ~40 ms.
-- Arranque en frío 257 ms: `Prefs` decodifica listas/me gusta/historial una vez con `shareIn`. No volver a decodificar por canción en `MenuSheet` (rehacer `Taste` y `Smart.lists` en cada canción causó el OOM).
-- Cola editable con `sh.calvin.reorderable` 3.1.0: no hacer el arrastre a mano. El gesto de reorderable se queda con el cierre del primer frame: estado único + `rememberUpdatedState`, no `remember(entries)`. En el deslizar para quitar, fondo por offset, no `progress` (vale 1 en reposo). Quitar de la cola también borra de `original` (si no vuelve con el aleatorio).
-- Quitar/borrar en listas = `removeLater` (oculto en `gone`, se borra al irse el aviso).
-
-## Datos
-
-- DataStore (no Room): `oto` (prefs), `oto_lists` (listas locales), `oto_menu` (`MenuMemory`), `oto_account`.
-- Me gusta = `LIKED_ID` tratado como `LocalPlaylist`. Carpetas = campo `folder` en `LocalPlaylist` + `folders` en prefs para las vacías.
-- Copia en cuenta YT: manifiesto v2 (refs de 8 caracteres) + `ListMeta` en la descripción de cada lista.
-- Importar de Spotify: enlace público (`__NEXT_DATA__`, **máx. 100 canciones**) o `oto-spotify.json` de la extensión. `Matcher` empareja por título/artista/duración (198/200 en su muestra). Arnés `MatchHarness` (`OTO_HARNESS=tsv`).
-- Reinstalar la `phone` borra la cola.
-
-## Flujo de trabajo
-
-- Commits con el email noreply: `git -c user.email=164151388+iaguito22@users.noreply.github.com commit ...`. Mensaje `tipo: resumen` en español.
-- Push con la cuenta `iaguito22` (la activa de `gh` puede ser otra): `gh auth switch -u iaguito22`, o `credential.helper` en línea con `gh auth token -u iaguito22`.
-- Release: subir `versionCode`, APK firmado y `oto-export.js` a GitHub. Última conocida: **v1.2.0** (versionCode 10). Si se rehace una versión, borrar release y tag antiguos.
-- Tests y arneses JVM viven en `app/src/test/`: `DjTest`, `SmartTest`, `AutoplayTest`, `ShuffleTest`, `BlurTest`, `ManifestTest` y los `*Harness` (leen variables de entorno `OTO_*`).
+- APK: `app/build/outputs/apk/phone/app-phone.apk`. Antes de instalar, verificar con apksigner que el certificado coincide, paquete `.debug` y que NO es application-debuggable. Usar `adb -s <dispositivo> install -r`, nunca desinstalar la habitual para resolver una firma incorrecta.
+- `prompt.md` en raíz fue el encargo para transferir/verificar la clave desde Linux: encargo YA CUMPLIDO. No volver a pedir la clave ni volver a transferirla.
+
+## Herramientas de prueba y conservación de la cola
+
+- `-PotoLinkTest` cambia SOLO el applicationId de debug a `.linktest`, para probar sin tocar la app habitual. No usar debug normal para pruebas contra datos reales.
+- `DebugLinkActivity` solo en src/debug y protegida por DUMP; `test-like` solo admite `.linktest` e ids `oto-link-test-…`. `capture` de pruebas no contiene credenciales. Nunca añadir estos accesos a phone/release.
+- `.linktest` sigue instalada y detenida. La revisión automática rechazó un comando de limpieza que incluía desinstalarla; no se ejecutó ni se reintentó. No confundirla con `.debug` ni declararla eliminada.
+- `src/debug/.../UsualSession.kt` conserva/restaura únicamente la cola mediante MediaController y Parcel en `.linktest`, sin restaurar preferencias. Debug manifest permite consultar el paquete habitual; el servicio se resuelve con PackageManager.
+- Si hay que conservar cola en otra actualización: instalar APK aislada, ejecutar DebugLinkActivity `capture-habitual` con `--activity-multiple-task`, comprobar `habitual-session-result.json` antes de actualizar. La copia privada está en files/habitual-session.bin de `.linktest`; NO publicarla ni limpiar la app aislada antes de recuperar.
+- Tras instalar phone, ABRIR PRIMERO MainActivity habitual para mantener el controlador; ejecutar después `restore-habitual`. Sin UI habitual, soltar el controlador puede destruir la sesión pausada y perder la cola recién restaurada. Verificar cola/posición en el servicio y pantalla; luego detener `.linktest`.
+- Capturas e informes privados se guardaron fuera del repo, en `../`. No incluirlos en un commit. Última captura Windows cerrada/resetada; no dejar bordes de captura activos.
+
+## Cola del ordenador desde el móvil: 03/11/2026
+
+- La recepción `addToQueue` ya existía en el protocolo y en ambos adaptadores, pero faltaba ofrecerla desde Android.
+- `MenuSheet` ahora muestra «Añadir a la cola del ordenador» en el menú de pulsación larga de cada canción cuando `link.remote` está conectado. Añade al final; la opción local «Reproducir a continuación» conserva su función.
+- `MobileConnection.addToRemoteQueue` envía id/título/artista/portada y espera la respuesta antes del aviso de éxito. Una desconexión o error se muestra en la misma hoja.
+- `MobileQueueIntegrationTest` optativa en desktopApp: teléfono real `.linktest` → DeviceConnection y DesktopPlayerConnection reales con perfil Windows temporal. Dos envíos llegaron al final en orden; conservó el elemento actual de la cola, índice, posición observada y pausa. Sin audio: tareas del reproductor retenidas por StandardTestDispatcher. No prueba reproducción sonora ni UI de pulsación larga.
+- Requiere `OTO_LINK_TEST_ADB` y `OTO_LINK_TEST_SERIAL`; usa adb reverse temporal, no vacía la app habitual ni la aislada. `DebugLinkActivity/test-queue` solo se permite en `.linktest` y llama al mismo método que la UI.
+- :core:test, :app:testDebugUnitTest, :desktopApp:test (incluida la integración con `<dirección local variable>`), :app:assemblePhone y assembleDebug -PotoLinkTest pasaron.
+- App habitual phone actualizada con `install -r`, firma habitual verificada y no depurable. Cola capturada/restaurada y comprobada: 50 canciones, índice 0, posición 225957 ms, pausada. `.linktest` detenida. No se ha comprobado este menú con los perfiles habituales vinculados; necesitan vincularse desde Dispositivos si aún no lo están.
+- Cambios locales sin commit/push. Logs privados fuera del repo: `../remote-queue-build.log`, `../remote-queue-debug-build.log`, `../remote-queue-integration.log`.
+
+## Fluidez y consumo de escritorio: revisión del 03/11/2026
+
+- Petición de Iago: trabajar en fluidez y consumo, sin cambiar bienvenida ni valores por defecto. No retirar las animaciones existentes.
+- Progreso aislado en `PlayerProgress`: la posición de audio ya no recompone toda PlayerSurface/PlayerContents. Contadores por segundos; slider conserva precisión. Probados los tres formatos y clic de seek horizontal (saltó a unos 00:53 manteniendo reproducción).
+- Miniaturas de LibraryArt/mosaicos según píxeles físicos (64/128/256/544), portada principal 544 con paleta. ArtworkLoader usa caché LRU por memoria estimada 48 MiB / ahorro 8 MiB, máximo 96 entradas; ocho cerrojos comparten cargas iguales, con timeouts y cancelación correcta. `ArtworkCacheTest` y `ArtworkLoaderTest` pasan: expulsión por presupuesto, recencia, reducción, doce peticiones compartidas y reintento tras HTTP fallido.
+- Latido y reloj de letra dejan 10 ms entre solicitudes de frame, reduciendo trabajo continuo en pantallas rápidas sin cambiar el cálculo temporal ni las transiciones de interacción. Políticas de igualdad explícitas en estados derivados de la letra.
+- Apertura: preparación con dibujo a alfa .001 y espera del primer dibujo de ESA ventana antes de contar frames estables. OTO_MOTION_TRACE registra firstDrawDelayMs para aperturas. Mejora de apertura NO acreditada de forma concluyente: biblioteca sigue con picos, no prometer que esté fluida del todo.
+- Comparación A/B corta con audio local, mismas tres ventanas, biblioteca en Tu música y mismo JDK 21.0.13: calentamiento ~50 s y 21 muestras cada 2 s sobre 00:30–01:10. CPU de proceso **67.95 → 55.18 % de un núcleo** (−18.8 %); residente medio **727.02 → 619.84 MiB** (−107.18 MiB, −14.7 %). No es CPU total del ordenador ni incluye FFmpeg. La comparación es anterior al último ajuste de espera del primer dibujo, que solo afecta a la entrada de las ventanas.
+- No usar primeros ensayos con Downloads o JVM fría como A/B. CSV, JFR, scripts y logs privados: `C:\Users\iago\Documents\Codex\2026-11-03\q-x20\work`. Los CSV guardan decimales es-ES: parsearlos con esa cultura.
+- Reapertura final instrumentada sin reproducción: media 14.2 ms, máximo 63.4 ms entre callbacks. Primer arranque: biblioteca pico ~134 ms; reproductor/letra ~58 ms en la última muestra con JDK completo. Son callbacks, NO FPS GPU; no comparar directamente con muestras históricas de otra carga.
+- Registro detallado: `docs/RENDIMIENTO_20261103.md`. Tests escritorio y MSI pasaron. Instalación Windows actualizada, conserva cuenta/biblioteca. Se restauraron carátula y agrupación tras probar otras vistas. Cambios locales sin commit/push.
+- Pendientes: pico de apertura en frío de biblioteca, sesión prolongada de consumo y A/B con ahorro RAM activado/desactivado. Bienvenida y valores por defecto siguen fuera de esta revisión.
+- Cierre de la tarea: MSI final instalado con códigos 0/0; hash SHA-256 del JAR instalado coincide con el compilado. 59 pruebas escritorio, 5 omitidas por condiciones externas, 0 fallos. Tres ventanas iniciadas y canal local responde; escritorio sin canción, cola vacía y pausado. Diagnóstico de movimiento desactivado en el arranque final y captura Windows cerrada/resetada.
+
+## Arreglo de apertura EN CURSO — estado para /clear, 03/11/2026
+
+### Petición y estado instalado
+
+- Tras informar del tirón pendiente, Iago dijo «si se puede arreglar hazlo». Después pidió actualizar este AGENTS.md.
+- La app habitual sigue siendo la instalación de la sección anterior (mejora de consumo, JAR SHA-256 `4A5DB16F04373FC99908E7EC61E66CA7A1AB771FF1235F59DD703CA43C0579C2`). **Ningún cambio nuevo de esta sección está instalado.** Oto habitual sigue abierto, sin que estas pruebas cambien su perfil o distribución.
+- Hay muchos cambios previos sin commit: conservarlos. No dar por terminado el tirón ni presentar los callbacks como FPS reales.
+
+### Herramientas y reproducción nueva
+
+- Todo el material privado está en `C:\Users\iago\Documents\Codex\2026-11-03\q-x20\work`.
+- `run-window-probe.ps1 <nombre-nuevo>` copia el JAR compilado a un perfil NUEVO `window-<nombre>`, copia SOLO los DataStore de preferencias/listas y los JSON de ventanas/biblioteca desde el perfil habitual, sin cuenta ni secretos, y ejecuta con JDK 21 y JFR. Cada nombre debe ser nuevo: el script rechaza una carpeta ya existente.
+- El arnés usa `OTO_MOTION_TRACE=1`, `OTO_MOTION_PROBE=1` y el marcador `motion-probe.marker` dentro del perfil aislado. `ModularDesktop` espera 4 s, cierra/abre biblioteca cinco veces (1.2 s cerrada, 2.2 s abierta) y sale por `quit()`. Solo funciona con variable Y marcador. No activar esas dos condiciones sobre el perfil habitual.
+- Las pruebas aisladas han terminado solas; no quedan procesos de arnés esperando. La app habitual tiene dos procesos Oto (lanzador/JVM), no confundirlos con los Java de Gradle.
+- `WindowWorkTrace.kt` es NUEVO, sin seguimiento Git: diagnóstico optativo que mide CPU/tiempo de dibujo, iconos, llamada de barra de tareas y foco. Registra solo etiquetas/tiempos en `window-work.jsonl`, con escritor IO. Desactivado sin OTO_MOTION_TRACE.
+- `motion-frames.jsonl` incorpora `animationStartedMs` además de intervalos y primer dibujo. `analyze-window-probe.mjs` correlaciona picos con JFR. Para leer JFR: `. ..\env.ps1; & "$env:JAVA_HOME\bin\jfr.exe" print --json --stack-depth 40 --events jdk.ExecutionSample,jdk.NativeMethodSample,jdk.GCPhasePause <archivo.jfr> > <events.json>`; **sin --stack-depth, jfr print recorta a cinco frames**.
+- Los perfiles de prueba no tienen los archivos descargados aunque las preferencias pueden pedirlos: hay trabajo inicial anónimo de red/descargas. Tenerlo en cuenta al comparar arranques en frío; las cinco reaperturas son más consistentes. No restaurar esos perfiles sobre el habitual.
+
+### Hallazgos y cambios actuales
+
+- Las imágenes en caché volvían a entrar desde un bitmap null y lanzaban transiciones Crossfade al reabrir. `ArtworkLoader.cached(url,size)` permite consultar la caché sin red.
+- `LibraryArt` ahora espera su tamaño físico antes de montar la imagen; si está en caché la primera composición ya la muestra. Los nuevos bitmaps mantienen fundido de 220 ms mediante Animatable + alpha en graphicsLayer. Si cambia el tamaño y falla la carga, conserva la imagen anterior.
+- Además, su nodo de imagen es ahora un **Canvas permanente**: dibuja con recorte centrado equivalente a ContentScale.Crop. La llegada del bitmap invalida el dibujo, sin insertar un Image nuevo ni volver a medir toda la cuadrícula. Hay que verificar visualmente miniaturas/mosaicos y redimensionado.
+- La preparación anterior esperaba ticks del reloj con alfa fijo .001; no garantizaba ejercitar el renderizado real. Ahora alterna `.01f` / `.015f` durante la preparación y pide tres intervalos <20 ms (antes 35 ms), mínimo 150 ms, máximo 1200 ms, después del primer dibujo. Animación visible mantiene spring y dirección.
+- **Última variante en fuentes/JAR:** también alterna en esa fase una traslación de .25 px y escala de 1 a .9999 para ejercitar matrices/posiciones antes de mostrar el movimiento. Su mejora adicional NO es concluyente: comparar con la variante previa `fixed1` antes de conservarla por defecto.
+- Probado y REVERTIDO: retrasar el foco del buscador hasta acabar la entrada. No eliminó los picos; foco vuelve a su demora original de 120 ms.
+- Probado y REVERTIDO: desplazar el dibujo con Canvas en la raíz de ModuleWindow en vez de graphicsLayer, bloqueando clicks durante la transición. No mejoró; **la raíz mantiene graphicsLayer y el manejo de entrada original**. El Canvas que sí queda es SOLO el de cada miniatura.
+- JFR muestra medidas/layout de tarjetas y callbacks de posiciones/foco durante algunos picos. Iconos, foco inicial y barra de tareas se midieron; no se atribuye todo el tirón a una única llamada de Windows. No seguir inventando hipótesis sin comparar las tandas.
+
+### Resultados exactos de las tandas (picos entre callbacks, ms)
+
+Cada tanda incluye un arranque en frío y cinco reaperturas. JFR activo en todas; misma biblioteca copiada, tres ventanas, sin reproducción.
+
+| Perfil | Primer arranque biblioteca | Cinco reaperturas biblioteca |
+|---|---:|---|
+| `window-control1` (código antes de esta sección, con instrumentación) | 114.3 | 57.8, 52.7, 41.7, 33.8, 44.5 |
+| `window-cached1` (caché sin Crossfade inicial) | 109.0 | 43.7, 35.0, 42.8, 33.4, 35.2 |
+| `window-focus1` (foco retrasado, descartado) | 127.6 | 39.0, 49.1, 42.7, 33.7, 34.9 |
+| `window-drawing1` (transformación raíz Canvas, descartada) | 121.6 | 47.4, 51.4, 44.4, 34.4, 46.1 |
+| `window-warmed1` (alfa de preparación variable) | 58.5 | 28.6, 33.6, 24.2, 20.4, 20.2 |
+| `window-fixed1` (lo anterior + Canvas permanente en miniaturas y umbral20ms) | 125.6 | **22.8, 21.0, 19.5, 18.3, 18.8** |
+| `window-matrix1` (última variante, minúsculas variaciones de matriz preparatoria) | **51.4** | 29.4, 27.7, **52.3**, 19.7, 19.0 |
+
+- La variante `fixed1` dejó las cinco reaperturas sin intervalos >33.4 ms; medias 8.6–8.9 ms. La última `matrix1` deja una excepción de 52.3 ms, por lo que no afirmar que todo esté arreglado ni que supere siempre a fixed1.
+- Los resultados iniciales en frío siguen siendo variables. Falta repetir control/candidata, comprobar reproducción activa y validar UI. No se ha repetido aún la prueba larga de CPU/RAM.
+- El JAR control está preservado en `window-control1/probe.jar`; el de cada variante en su carpeta. El script actual toma `desktopApp/build/libs/desktopApp.jar`; para reproducir control, adaptar un parámetro de ruta al JAR sin sobrescribir fuentes ni archivos usados por un proceso.
+
+### Compilación y próximos pasos concretos
+
+- Las tandas `cached1`, `focus1`, `drawing1`, `fixed1` se compilaron con `:desktopApp:test :desktopApp:jar`; pasaron 59 tests (5 omitidos). En una ejecución intermedia falló por timeout de 5 s el test existente `DesktopDownloadsTest.removingActiveDownloadCancelsWorkBeforeDeletingWindowsFiles`; se repitió SOLO ese test sin cambiar código y pasó. La ejecución completa posterior de fixed1 pasó.
+- La **última** variación matrix1 se compiló solo con `:desktopApp:jar` (BUILD SUCCESSFUL), después de la suite completa previa. Repetir la suite al decidir la variante final.
+- No se ha creado un MSI de estos cambios. No reutilizar como si fuese nuevo el MSI de la tarea anterior.
+- Siguiente: comparar/repetir `fixed1` y `matrix1` contra control; elegir lo que realmente mejora y descartar ajustes sin evidencia. Revisar visualmente (habilidad computer-use) mosaicos, apertura, foco/búsqueda, redimensionado y botones; probar también con audio local y letra activos.
+- Después: `:desktopApp:test :desktopApp:packageMsi --offline --no-configuration-cache`; cerrar Oto desde «Salir de Oto», instalar respetando datos/firma de escritorio (reglas anteriores), verificar hash del JAR instalado y arranque. Guardar la geometría ANTES de tocar formatos; las pruebas de esta sección no han cambiado la habitual.
+- Actualizar `docs/RENDIMIENTO_20261103.md` con resultados nuevos cuando se elija/instale el arreglo. Su contenido actual corresponde a la revisión anterior de consumo; no darlo por actualizado con esta sección.
+- No se ha iniciado una nueva captura Windows en esta sección; no hay borde de captura pendiente de cerrar. No se han hecho commits ni push.
+
+## Bienvenida Windows — 03/11/2026, implementada y en vista previa
+
+- Petición nueva de Iago en otro chat: bienvenida breve centrada en ventanas; sin muchos «Siguiente», con carrusel de clips relacionados, sin audio y recortando la barra de tareas. Incluye biblioteca/reproductor, reproductor/letra, las tres con letra o cola, intercambio, y reproductor horizontal a una esquina y fijado. **El horizontal debe mostrarse con altura mínima (108 px lógicos).**
+- `WelcomeWindow.kt`: una pantalla, pestañas «Combina ventanas», «Cambia el orden» y «Reproductor», selección de las cuatro combinaciones, avance automático, pausa, Omitir y Empezar. Marco habitual de Oto. Decodifica WebP con Skia, un bitmap mutable y un decoder; libera recursos al salir/cambiar. Sin red, audio ni procesos FFmpeg en ejecución de bienvenida.
+- `ModularDesktop.kt`: preferencia independiente `desktop_welcome.json`, seen_version=1 al cerrar/omitir; reabrir desde «Ver bienvenida» en PlayerOptions. Se amplió el diálogo de opciones horizontal a 430 px para no recortar la nueva fila.
+- Corrección adicional de `changeForm`: actualizar minimumSize de AWT ANTES de reducir los bounds, evitando que el formato horizontal herede los 370 px mínimos del reproductor con carátula. La demostración utiliza 108 px de alto.
+- Medios en `desktopApp/src/main/resources/welcome/`: 6 WebP locales (~1.5 MiB en conjunto), procedentes de capturas de la app habitual. El intercambio es animación explicativa a partir de sus paneles; el horizontal es un montaje de grabaciones con movimiento sobre fondo neutro. No presentar ambos como una grabación continua sin editar.
+- MP4 finales sin pista de audio, 1280x680 y sin barra de tareas. Entregables y ZIP en `C:\Users\iago\Documents\Codex\2026-11-03\quier\outputs`. Grabaciones originales y herramientas SOLO en `...\quier\work`, fuera del repo. No se copiaron cookies, cuenta, perfiles ni QR a recursos/entregables.
+- `WelcomeMediaTest` decodifica todos los fotogramas de los seis assets durante dos vueltas y comprueba reinicio idéntico, duración, tamaño y presupuesto. `:desktopApp:test :desktopApp:jar --offline --no-configuration-cache`: 60 tests, 5 omitidos por condiciones externas, 0 fallos. Último cambio posterior: activar Timber en modo preview, JAR recompilado con éxito.
+- `OTO_WELCOME_PREVIEW=1` abre SOLO la bienvenida, antes de inicializar preferencias/servicios/single-instance. Se deja una vista previa independiente abierta con COPIA del JAR: `...\quier\work\welcome-preview-final.jar`. PID inicial 18348, log `welcome-final-err.log`. **No sobrescribir el JAR que esté usando ese proceso.** Un primer preview apuntó directamente a build/libs y perdió lectura de recursos al recompilar; se cerró y corrigió usando copia estable. No era fallo de los assets, que pasan la prueba de decodificación completa.
+- UI comprobada: carrusel y paso entre clips, pestaña reproductor y chincheta activada en el montaje. No se ha creado MSI, instalado, hecho commit ni push de esta bienvenida. No mezclar su estado con el arreglo de rendimiento EN CURSO descrito arriba.
+- Durante la grabación se cambiaron las ventanas reales, y también hubo interacción manual del usuario. No restaurar a ciegas el respaldo inicial: su último estado fue reproductor horizontal, 351x108, esquina inferior derecha y fijado. Se ocultó mediante Ctrl+Alt+O para que no tapara la vista previa; reproducción continúa. Respaldo inicial privado en `...\quier\work\modular_windows-before-welcome.json`. La vista previa no modifica el perfil real.
+
+## Valores por defecto y tamaños de reproductor — 03/11/2026
+
+- Iago pidió inventariar TODOS los valores iniciales para decidir cuáles cambiar, y autorizó estas reglas: horizontal SIEMPRE aparece con altura mínima (108); vertical con ancho mínimo (96); carátula con proporción de móvil, elegida 9:16 y tamaño inicial 360x640.
+- `PlayerForm.Full` pasa de 390x656 a 360x640. `PlayerWindowSizing.kt` centraliza mínimos y tamaños de apertura: horizontal conserva ancho y fuerza 108 de alto; vertical conserva alto y fuerza 96 de ancho; carátula conserva ancho válido y calcula alto 16/9. En conjunto acoplado, carátula adapta ancho a la altura compartida. Los tamaños se pueden cambiar manualmente después; se normalizan al seleccionar/abrir/restaurar la vista.
+- `initialDockLayout()` inicia biblioteca y reproductor con altura 640 si cabe y reproductor 9:16. Biblioteca mantiene ancho adaptable 640–960. Se aplican reglas también al restaurar la distribución y al mostrar/abrir el reproductor. Horizontal se separa si estaba acoplado, porque una altura de 108 no es compatible con biblioteca; una maximización guardada del reproductor se deshace al normalizar su aparición.
+- Continúa la corrección de minimumSize AWT antes de reducir geometría. `PlayerWindowSizingTest` cubre preferencias antiguas expandidas, proporción, normalización de layout serializado, compatibilidad del grupo, reapertura y posibilidad de redimensionar manualmente.
+- Compilación y suite de escritorio correctas: 66 tests, 5 omitidos, 0 fallos. Comando `:desktopApp:test :desktopApp:jar --offline --no-configuration-cache`. Log en `C:\Users\iago\Documents\Codex\2026-11-03\quier\work\defaults-tests.log`. Sin instalación, MSI, commit ni push de estos cambios. La vista previa anterior usa copia estable y no se ha sobrescrito.
+- Inventario completo para Iago en `C:\Users\iago\Documents\Codex\2026-11-03\quier\outputs\valores-por-defecto-oto.md`. Se basa en defaults de código, no en su perfil personal. No se han cambiado las demás preferencias: calidad Auto, volumen100%, fundido3s, ahorro datos/RAM off, aleatorio/repetición off, fondo on75%, latido on, romanización on, letra120%, tarjetas medianas, inicio Tu música. La afirmación antigua de Ajustes sobre caché RAM «12 carátulas» está desactualizada respecto al presupuesto 8MiB; no usarla como default real.

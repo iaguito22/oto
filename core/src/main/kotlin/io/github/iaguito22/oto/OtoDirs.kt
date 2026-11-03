@@ -32,7 +32,7 @@ object OtoDirs {
 
     private val stores = ConcurrentHashMap<String, DataStore<Preferences>>()
 
-    fun dataStore(
+    @Synchronized fun dataStore(
         name: String,
         migrations: (DataStore<Preferences>) -> List<DataMigration<Preferences>> = { emptyList() },
     ): DataStore<Preferences> = stores.getOrPut(name) {
@@ -132,7 +132,7 @@ class KeyValueFile(private val file: File) {
 }
 
 /** Caché LRU en memoria seguro entre hilos (reemplaza `android.util.LruCache` en `:core`). */
-class MemCache<K : Any, V : Any>(private val maxSize: Int) {
+class MemCache<K : Any, V : Any>(private var maxSize: Int) {
     private val map = object : LinkedHashMap<K, V>(maxSize, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean = size > maxSize
     }
@@ -145,4 +145,12 @@ class MemCache<K : Any, V : Any>(private val maxSize: Int) {
 
     @Synchronized
     fun clear() = map.clear()
+
+    @Synchronized
+    fun resize(limit: Int) {
+        require(limit > 0)
+        maxSize = limit
+        val entries = map.entries.iterator()
+        while (map.size > maxSize && entries.hasNext()) { entries.next(); entries.remove() }
+    }
 }

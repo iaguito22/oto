@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Devices
+import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -39,7 +40,7 @@ internal fun optionsPosition(parent: Rectangle?, area: Rectangle, width:Int=270,
     return Point(x,y)
 }
 
-@Composable internal fun PlayerOptions(open:Boolean,dismiss:()->Unit,form:PlayerForm,choose:(PlayerForm)->Unit,volume:Float,setVolume:(Float)->Unit,devices:()->Unit,arrange:()->Unit,quit:()->Unit,parentBounds:()->Rectangle?={null}) {
+@Composable internal fun PlayerOptions(open:Boolean,dismiss:()->Unit,form:PlayerForm,choose:(PlayerForm)->Unit,volume:Float,setVolume:(Float)->Unit,devices:()->Unit,arrange:()->Unit,quit:()->Unit,parentBounds:()->Rectangle?={null},welcome:()->Unit={}) {
     if(!open)return
     @Composable fun OptionsContent() {
         Surface(Modifier.width(270.dp).border(1.dp,Color.White.copy(alpha=.09f),RoundedCornerShape(20.dp)),shape=RoundedCornerShape(20.dp),color=Color(0xFF202520),shadowElevation=18.dp) {
@@ -66,6 +67,7 @@ internal fun optionsPosition(parent: Rectangle?, area: Rectangle, width:Int=270,
                 HorizontalDivider(color=Color.White.copy(alpha=.07f))
                 OptionLine(Icons.Rounded.Devices,"Dispositivos",devices)
                 OptionLine(MobileIcons.libraryMusic,"Organizar ventanas",arrange)
+                OptionLine(Icons.Rounded.HelpOutline,"Ver bienvenida",welcome)
                 OptionLine(MobileIcons.close,"Salir de Oto",quit)
             }
         }
@@ -80,10 +82,10 @@ internal fun optionsPosition(parent: Rectangle?, area: Rectangle, width:Int=270,
             val bounds = config.bounds
             val insets = Toolkit.getDefaultToolkit().getScreenInsets(config)
             val area=Rectangle(bounds.x+insets.left,bounds.y+insets.top,bounds.width-insets.left-insets.right,bounds.height-insets.top-insets.bottom)
-            val placed=optionsPosition(parent,area)
+            val placed=optionsPosition(parent,area,height=430)
             WindowPosition(placed.x.dp,placed.y.dp)
         }
-        DialogWindow(onCloseRequest=dismiss,title="Opciones del reproductor",state=rememberDialogState(position=position,width=270.dp,height=380.dp),undecorated=true,transparent=true) {
+        DialogWindow(onCloseRequest=dismiss,title="Opciones del reproductor",state=rememberDialogState(position=position,width=270.dp,height=430.dp),undecorated=true,transparent=true) {
         Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) {
             OptionsContent()
             var previous by remember { mutableStateOf<java.awt.Point?>(null) }

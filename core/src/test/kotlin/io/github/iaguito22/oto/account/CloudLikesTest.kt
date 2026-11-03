@@ -29,6 +29,9 @@ class CloudLikesTest {
             importCloudPlaylist(prefs,LocalPlaylist(YOUTUBE_LIKES_LIST_ID,"Me gusta de YouTube Music",listOf(youtube)))
             assertEquals(listOf("local"),prefs.liked.first().map { it.id })
             assertEquals(listOf("youtube"),prefs.playlists.first().single().songs.map { it.id })
+            // El origen LM prevalece incluso sobre metadatos antiguos que lo llamen "liked".
+            importCloudPlaylist(prefs,LocalPlaylist(LIKED_ID,"Me gusta",listOf(youtube),"youtube:LM"))
+            assertEquals(listOf("local"),prefs.liked.first().map { it.id })
             val metadata=ListMeta(LIKED_ID,null,null)
             assertEquals(LIKED_ID,ListMeta.find(metadata.encode())?.id)
             importCloudPlaylist(prefs,LocalPlaylist(LIKED_ID,"Me gusta de Oto",listOf(backup)))

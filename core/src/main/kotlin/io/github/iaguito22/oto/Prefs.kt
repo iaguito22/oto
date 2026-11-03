@@ -3,6 +3,7 @@ package io.github.iaguito22.oto
 import androidx.datastore.core.DataMigration
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -29,6 +30,7 @@ private val HISTORY = stringPreferencesKey("history")
 private val PLAYLISTS = stringPreferencesKey("playlists")
 private val REMAINING = booleanPreferencesKey("show_remaining")
 private val LIKED = stringPreferencesKey("liked")
+private val LIKE_CHANGES = stringPreferencesKey("oto_like_changes")
 private val LIKES_SENT = stringSetPreferencesKey("likes_sent")
 private val SHUFFLE = booleanPreferencesKey("shuffle")
 private val SORT_FLIPPED = stringSetPreferencesKey("sort_flipped")
@@ -39,6 +41,7 @@ private val CLOUD = stringPreferencesKey("cloud")
 private val CLOUD_SELECTION = stringPreferencesKey("cloud_selection")
 private val QUALITY = stringPreferencesKey("audio_quality")
 private val DATA_SAVER = booleanPreferencesKey("data_saver")
+private val RAM_SAVER = booleanPreferencesKey("ram_saver")
 private val LOOP = booleanPreferencesKey("loop")
 private val PLAYLIST_MODES = stringPreferencesKey("playlist_modes")
 private val CROSSFADE = intPreferencesKey("crossfade")
@@ -61,6 +64,9 @@ val CROSSFADE_CHOICES = listOf(0, 3, 6, 10)
 
 /** Una canción oída o guardada. Lo justo para enseñarla y volver a ponerla. */
 data class Heard(val id: String, val title: String, val artist: String, val artwork: String?, val artistId: String? = null)
+
+/** Una decisión de Oto, también cuando se quita una canción. El token desempata dos dispositivos. */
+data class LikeChange(val time: Long, val token: String, val on: Boolean)
 
 fun Heard.toSong() = SongItem(id = id, title = title, artists = listOf(Artist(artist, artistId)), thumbnail = artwork.orEmpty())
 
@@ -124,13 +130,15 @@ class Prefs(
 
     /** Con datos móviles, la calidad baja aunque la conexión dé para más. */
     val dataSaver: Flow<Boolean> = store.data.map { it[DATA_SAVER] ?: false }.distinctUntilChanged()
+    val ramSaver: Flow<Boolean> = store.data.map { it[RAM_SAVER] ?: false }.distinctUntilChanged()
+    suspend fun setRamSaver(on: Boolean) { store.edit { it[RAM_SAVER] = on } }
 
     suspend fun setDataSaver(on: Boolean) {
         store.edit { it[DATA_SAVER] = on }
     }
 
     /** Aleatorio por defecto para las listas nuevas (las ya usadas recuerdan su último estado en [playlistModes]). */
-    val shuffle: Flow<Boolean> = store.data.map { it[SHUFFLE] ?: false }.distinctUntilChanged()
+    val shuffle: Flow<Boolean> = store.data.map { it[SHUFFLE] ?: true }.distinctUntilChanged()
 
     suspend fun setShuffle(on: Boolean) {
         store.edit { it[SHUFFLE] = on }
@@ -262,6 +270,7 @@ class Prefs(
         store.edit { p ->
             val rest = decode(p[LIKED]).filter { it.id != h.id }
             p[LIKED] = encode(if (on) listOf(h) + rest else rest)
+            recordLikes(p, listOf(h.id), on)
         }
     }
 
@@ -271,15 +280,24 @@ class Prefs(
             val ids = songs.mapTo(HashSet()) { it.id }
             val rest = decode(p[LIKED]).filter { it.id !in ids }
             p[LIKED] = encode(if (on) songs.distinctBy { it.id } + rest else rest)
+            recordLikes(p, ids, on)
         }
     }
 
     /** Las que aún no estaban, detrás de las que ya te gustaban (lo importado es más antiguo). */
-    suspend fun addLikedAll(songs: List<Heard>) {
+    suspend fun addLikedAll(songs: List<Heard>) = mergeLiked(songs, respectRemovals = false)
+
+    /** Recuperar una copia no revoca desmarcados explícitos, locales o recibidos del otro dispositivo. */
+    suspend fun restoreLiked(songs: List<Heard>) = mergeLiked(songs, respectRemovals = true)
+
+    private suspend fun mergeLiked(songs: List<Heard>, respectRemovals: Boolean) {
         store.edit { p ->
             val list = decode(p[LIKED])
             val have = list.mapTo(HashSet()) { it.id }
-            p[LIKED] = encode(list + songs.filter { have.add(it.id) })
+            val changes = decodeLikeChanges(p[LIKE_CHANGES])
+            val added = songs.filter { (!respectRemovals || changes[it.id]?.on != false) && have.add(it.id) }
+            p[LIKED] = encode(list + added)
+            recordLikes(p, added.map { it.id }, true, recovered = respectRemovals)
         }
     }
 
@@ -290,9 +308,35 @@ class Prefs(
             val list = decode(p[LIKED])
             now = list.none { it.id == h.id }
             p[LIKED] = encode(if (now) listOf(h) + list else list.filter { it.id != h.id })
+            recordLikes(p, listOf(h.id), now)
         }
         return now
     }
+
+    private fun recordLikes(p: MutablePreferences, ids: Collection<String>, on: Boolean, recovered: Boolean = false) {
+        if (ids.isEmpty()) return
+        val changes = decodeLikeChanges(p[LIKE_CHANGES]).toMutableMap()
+        // Una copia antigua no es un nuevo toque del corazón: cualquier decisión
+        // explícita del otro dispositivo debe prevalecer cuando se reciban sus cambios.
+        val time = if (recovered) 0L else maxOf(System.currentTimeMillis(), (changes.values.maxOfOrNull { it.time } ?: 0L) + 1)
+        val token = UUID.randomUUID().toString()
+        ids.forEach { changes[it] = LikeChange(time, token, on) }
+        p[LIKE_CHANGES] = encodeLikeChanges(changes)
+    }
+
+    private fun decodeLikeChanges(raw: String?): Map<String, LikeChange> {
+        val json = JSONObject(raw ?: "{}")
+        return json.keys().asSequence().associateWith { id ->
+            val change = json.getJSONObject(id)
+            LikeChange(change.getLong("t"), change.getString("d"), change.getBoolean("on"))
+        }
+    }
+
+    private fun encodeLikeChanges(changes: Map<String, LikeChange>): String = JSONObject().apply {
+        changes.forEach { (id, change) ->
+            put(id, JSONObject().put("t", change.time).put("d", change.token).put("on", change.on))
+        }
+    }.toString()
 
     /** Los me gusta que ya sabe YouTube Music (con cuenta, ver Account). */
     suspend fun likesSent(): Set<String> = store.data.first()[LIKES_SENT].orEmpty()
@@ -457,16 +501,16 @@ class Prefs(
 
     suspend fun linkedLibraryVersion(): List<Any?> {
         val p = store.data.first()
-        return listOf(lists.data.first()[PLAYLISTS], p[LIKED], p[FOLDERS], p[PINNED], p[SORT_FLIPPED])
+        return listOf(lists.data.first()[PLAYLISTS], p[LIKED], p[LIKE_CHANGES], p[FOLDERS], p[PINNED], p[SORT_FLIPPED])
     }
 
     suspend fun linkedLibrarySnapshot(): io.github.iaguito22.oto.remote.LinkedLibraryState {
         val p = store.data.first()
-        return io.github.iaguito22.oto.remote.LinkedLibraryState(decodeLists(lists.data.first()[PLAYLISTS]), decode(p[LIKED]), p[FOLDERS].orEmpty(), p[PINNED].orEmpty(), p[SORT_FLIPPED].orEmpty())
+        return io.github.iaguito22.oto.remote.LinkedLibraryState(decodeLists(lists.data.first()[PLAYLISTS]), decode(p[LIKED]), p[FOLDERS].orEmpty(), p[PINNED].orEmpty(), p[SORT_FLIPPED].orEmpty(), decodeLikeChanges(p[LIKE_CHANGES]))
     }
 
     /** Comparar dentro de cada transacción conserva cambios locales hechos durante la recepción. */
-    suspend fun applyLinkedLibrary(expected: io.github.iaguito22.oto.remote.LinkedLibraryState, newLists: List<LocalPlaylist>, likes: List<Heard>, folders: Set<String>, pinned: Set<String>, flipped: Set<String>): Boolean {
+    suspend fun applyLinkedLibrary(expected: io.github.iaguito22.oto.remote.LinkedLibraryState, newLists: List<LocalPlaylist>, likes: List<Heard>, folders: Set<String>, pinned: Set<String>, flipped: Set<String>, likeChanges: Map<String, LikeChange> = expected.likeChanges): Boolean {
         var applied = false
         lists.edit { p ->
             if (decodeLists(p[PLAYLISTS]) == expected.lists) { p[PLAYLISTS] = encodeLists(newLists); applied = true }
@@ -474,8 +518,9 @@ class Prefs(
         if (!applied) return false
         applied = false
         store.edit { p ->
-            if (decode(p[LIKED]) == expected.likes && p[FOLDERS].orEmpty() == expected.folders && p[PINNED].orEmpty() == expected.pinned && p[SORT_FLIPPED].orEmpty() == expected.flipped) {
+            if (decode(p[LIKED]) == expected.likes && decodeLikeChanges(p[LIKE_CHANGES]) == expected.likeChanges && p[FOLDERS].orEmpty() == expected.folders && p[PINNED].orEmpty() == expected.pinned && p[SORT_FLIPPED].orEmpty() == expected.flipped) {
                 p[LIKED] = songsJson(likes).toString(); p[FOLDERS] = folders; p[PINNED] = pinned; p[SORT_FLIPPED] = flipped; applied = true
+                p[LIKE_CHANGES] = encodeLikeChanges(likeChanges)
             }
         }
         return applied

@@ -14,11 +14,14 @@ import java.net.InetAddress
 
 internal class DeviceConnection(val player: DesktopPlayerConnection, private val prefs: Prefs, private val account: Account, parentScope: CoroutineScope) : AutoCloseable {
     private var accountRequest: Job? = null
-    private var acceptingAccount = false
+    @Volatile private var acceptingAccount = false
+    private val accountStatusMutable = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val accountStatus = accountStatusMutable.asStateFlow()
     fun requestAccount() {
         accountRequest?.cancel()
         acceptingAccount = true
-        accountRequest = scope.launch { delay(120_000); acceptingAccount = false }
+        accountStatusMutable.value = "Esperando la cuenta del móvil…"
+        accountRequest = scope.launch { delay(120_000); acceptingAccount = false; accountStatusMutable.value = "Se agotó el tiempo para recibir la cuenta." }
     }
     private val scope = CoroutineScope(parentScope.coroutineContext + SupervisorJob(parentScope.coroutineContext[Job]))
     private val kv = OtoDirs.keyValue("local_link")
@@ -42,6 +45,10 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
         override fun skip(index: Int) = player.skipTo(index)
         override fun move(from: Int, to: Int) = player.move(from, to)
         override fun remove(index: Int) = player.remove(index)
+        override fun addToQueue(song: JSONObject, next: Boolean) {
+            val track = Heard(song.getString("id"), song.getString("title"), song.optString("artist"), song.optString("artwork").takeUnless { it.isBlank() || it == "null" }).toSong()
+            if (next) player.playNext(track) else player.enqueue(track)
+        }
         override fun volume(value: Float) { player.adjustVolume(value - player.volume.value) }
         override fun setPlaying(on: Boolean) { if (player.state.value.playing != on) player.toggle() }
         override fun replace(state: JSONObject) {
@@ -62,10 +69,16 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
                 check(acceptingAccount) { "Abre el acceso desde el móvil en Oto Desktop primero" }
                 acceptingAccount = false
                 accountRequest?.cancel()
-                val data = command.getJSONObject("session")
-                val cookie = data.getString("cookie")
-                require("SAPISID" in cookie) { "La sesión del móvil no es válida" }
-                account.signIn(Session(cookie, data.optString("visitorData"), data.optString("dataSyncId"), data.optString("authUser", "0")))
+                try {
+                    val data = command.getJSONObject("session")
+                    val cookie = data.getString("cookie")
+                    require("SAPISID" in cookie) { "La sesión del móvil no es válida" }
+                    account.signIn(Session(cookie, data.optString("visitorData"), data.optString("dataSyncId"), data.optString("authUser", "0")))
+                    accountStatusMutable.value = "Cuenta del móvil recibida y conectada."
+                } catch (e: Exception) {
+                    accountStatusMutable.value = "No se pudo conectar la cuenta del móvil."
+                    throw e
+                }
                 JSONObject().put("ok", true)
             }
             else -> bridge.execute(command)

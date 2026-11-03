@@ -12,6 +12,7 @@ import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyGridState
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -21,10 +22,12 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -56,6 +59,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.FilterQuality
+import kotlin.math.roundToInt
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,6 +75,7 @@ import io.github.iaguito22.oto.*
 import io.github.iaguito22.oto.account.*
 import io.github.iaguito22.oto.desktop.BrowserLogin
 import io.github.iaguito22.oto.desktop.LocalWindowTooltipEpoch
+import io.github.iaguito22.oto.desktop.WindowWorkTrace
 import io.github.iaguito22.oto.OtoDirs
 import io.github.iaguito22.oto.desktop.playback.*
 import io.github.iaguito22.oto.importer.Importer
@@ -109,7 +115,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     val scope=rememberCoroutineScope()
     val snackbar=remember {SnackbarHostState()}
     val searchFocus=remember {FocusRequester()}
-    LaunchedEffect(Unit){kotlinx.coroutines.delay(120);searchFocus.requestFocus()}
+    LaunchedEffect(Unit){kotlinx.coroutines.delay(120);WindowWorkTrace.measure("biblioteca/foco") { searchFocus.requestFocus() }}
     var section by remember {mutableStateOf("Tu música")}
     var local by remember {mutableStateOf<String?>(null)}
     var folder by remember {mutableStateOf<String?>(null)}
@@ -160,7 +166,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     if(wide) {
                         Column(Modifier.fillMaxWidth().padding(horizontal=6.dp,vertical=8.dp),verticalArrangement=Arrangement.spacedBy(5.dp)) {
                             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick=onSource),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(9.dp)) {
-                                LibraryArt(np.artwork,Modifier.size(40.dp).graphicsLayer { val s=1f+.022f*pulse;scaleX=s;scaleY=s })
+                                LibraryArt(np.artwork,Modifier.size(40.dp).graphicsLayer { val s=1f+.022f*pulse.value;scaleX=s;scaleY=s })
                                 Column(Modifier.weight(1f)) {
                                     Text(np.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis)
                                     Text(np.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)
@@ -175,7 +181,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         }
                     } else {
                         Column(Modifier.fillMaxWidth(),horizontalAlignment=Alignment.CenterHorizontally) {
-                            LibraryArt(np.artwork,Modifier.size(36.dp).graphicsLayer { val s=1f+.022f*pulse;scaleX=s;scaleY=s }.clickable(onClick=onSource))
+                            LibraryArt(np.artwork,Modifier.size(36.dp).graphicsLayer { val s=1f+.022f*pulse.value;scaleX=s;scaleY=s }.clickable(onClick=onSource))
                             MinimalPlayback(np.playing,player::toggle,controlSize=36.dp)
                         }
                     }
@@ -271,6 +277,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                             val regular=visible.filter{it.id !in pinned}
                             val allFolders=(folders+lists.mapNotNull{it.folder}).sorted()
                             val featuredWidth=when(cardSize){0->112.dp;2->184.dp;else->144.dp}
+                            val maxCardWidth=when(cardSize){0->150.dp;2->240.dp;else->190.dp}
                             val cards=((if(folder==null) allFolders.map { it to null } else emptyList()) + (if(folder==null)regular else visible).map { it.name to it }).sortedBy { (name,list) -> ranks[list?.id ?: "folder:$name"] ?: if(list==null) -1 else Int.MAX_VALUE }
                             val ids=cards.map { (name,list)->list?.id ?: "folder:$name" }
                             val grid=rememberLazyGridState()
@@ -290,7 +297,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                             items(featured,key={it.id}) { list ->
                                                 ReorderableItem(pinnedReorder,list.id) { dragging ->
                                                     PlaylistContextMenu(listMenu(list)) {
-                                                        PlaylistCard(list.name,"${list.songs.size} canciones",list.songs.firstOrNull()?.artwork,Modifier.width(featuredWidth).longPressDraggableHandle(onDragStopped={persistOrder()}),onPlay=if(list.songs.isNotEmpty()){{player.playLocal(list,0,false)}}else null,lifted=dragging){local=list.id}
+                                                        PlaylistCard(list.name,"${list.songs.size} canciones",list.songs.firstOrNull()?.artwork,Modifier.width(featuredWidth).longPressDraggableHandle(onDragStopped={persistOrder()}),onPlay=if(list.songs.isNotEmpty()){{player.playLocal(list,0,false)}}else null,lifted=dragging,playlist=list){local=list.id}
                                                     }
                                                 }
                                             }
@@ -300,14 +307,16 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                 if(cards.isNotEmpty())item(key="lists-title",span={GridItemSpan(maxLineSpan)}) {Text(if(folder==null) "Más de tus listas" else "Listas de la carpeta",style=OtoType.section)}
                                 items(cards,key={ (name,list)->list?.id ?: "folder:$name" }) { (name,list) ->
                                     val id=list?.id ?: "folder:$name"
+                                    Box(Modifier.fillMaxWidth()) {
                                     ReorderableItem(reorder,id) { dragging ->
-                                        val drag=Modifier.fillMaxWidth().longPressDraggableHandle(onDragStopped={persistOrder()})
+                                        val drag=Modifier.widthIn(max=maxCardWidth).fillMaxWidth().longPressDraggableHandle(onDragStopped={persistOrder()})
                                         if(list==null) PlaylistContextMenu(listOf(ContextMenuItem("Renombrar"){editor=LibraryEdit("renameFolder",name,name)},ContextMenuItem("Desagrupar"){scope.launch{prefs.ungroup(name)}})) {
                                             val count=lists.count{it.folder==name}
                                             PlaylistCard(name,if(count==1) "Carpeta · 1 lista" else "Carpeta · $count listas",null,drag,special="folder",accent=palette.primary,lifted=dragging){folder=name}
                                         } else PlaylistContextMenu(listMenu(list)) {
-                                            PlaylistCard(list.name,"${list.songs.size} canciones",list.songs.firstOrNull()?.artwork,drag,onPlay=if(list.songs.isNotEmpty()){{player.playLocal(list,0,false)}}else null,lifted=dragging){local=list.id}
+                                            PlaylistCard(list.name,"${list.songs.size} canciones",list.songs.firstOrNull()?.artwork,drag,onPlay=if(list.songs.isNotEmpty()){{player.playLocal(list,0,false)}}else null,lifted=dragging,playlist=list){local=list.id}
                                         }
+                                    }
                                     }
                                 }
                                 if(folder!=null && visible.isEmpty())item(span={GridItemSpan(maxLineSpan)}){EmptyLibrary("Esta carpeta está vacía.")}
@@ -446,10 +455,36 @@ private fun LibraryNavigation(name:String,icon:androidx.compose.ui.graphics.vect
     }) { content() } }
 }
 
-@Composable internal fun LibraryArt(url:String?,modifier:Modifier=Modifier) {
-    var bitmap by remember(url){mutableStateOf<ImageBitmap?>(null)}
-    LaunchedEffect(url){bitmap=ArtworkLoader.load(url).first}
-    Box(modifier.clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha=.045f)),contentAlignment=Alignment.Center){Crossfade(bitmap,animationSpec=tween(220),label="libraryArtwork") { image -> if(image!=null)Image(image,null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)else Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) { Icon(MobileIcons.libraryMusic,null,Modifier.size(24.dp),tint=Color.White.copy(alpha=.15f)) } }}
+@Composable internal fun LibraryArt(url:String?,modifier:Modifier=Modifier,rounded:Boolean=true) {
+    var pixels by remember { mutableIntStateOf(0) }
+    val previous=remember(url) { object { var value:ImageBitmap?=null } }
+    Box(modifier.onSizeChanged { if(it.width>0 && it.height>0)pixels=artworkSize(maxOf(it.width,it.height)) }.then(if(rounded) Modifier.clip(RoundedCornerShape(12.dp)) else Modifier).background(Color.White.copy(alpha=.045f)),contentAlignment=Alignment.Center) {
+        if(pixels==0) LibraryArtPlaceholder()
+        else key(url,pixels) {
+            // La primera composición de una imagen en caché ya contiene la imagen:
+            // reabrir no crea decenas de transiciones desde un marcador vacío.
+            var bitmap by remember { mutableStateOf(ArtworkLoader.cached(url,pixels) ?: previous.value) }
+            val opacity=remember { Animatable(if(bitmap!=null) 1f else 0f) }
+            LaunchedEffect(url,pixels) { ArtworkLoader.load(url,pixels).first?.let { bitmap=it;previous.value=it } }
+            LaunchedEffect(bitmap) { if(bitmap!=null && opacity.value<1f)opacity.animateTo(1f,tween(220)) }
+            Box(Modifier.fillMaxSize().graphicsLayer { alpha=1f-opacity.value },contentAlignment=Alignment.Center) { LibraryArtPlaceholder() }
+            // El nodo ya ocupa su sitio aunque la imagen aún esté llegando. Cambiar
+            // sus píxeles solo invalida el dibujo, sin volver a medir toda la cuadrícula.
+            Canvas(Modifier.fillMaxSize().graphicsLayer { alpha=opacity.value }) {
+                val image=bitmap ?: return@Canvas
+                if(size.minDimension<=0f)return@Canvas
+                val scale=maxOf(size.width/image.width,size.height/image.height)
+                val width=(size.width/scale).roundToInt().coerceIn(1,image.width)
+                val height=(size.height/scale).roundToInt().coerceIn(1,image.height)
+                drawImage(image,srcOffset=IntOffset((image.width-width)/2,(image.height-height)/2),srcSize=IntSize(width,height),
+                    dstSize=IntSize(size.width.roundToInt(),size.height.roundToInt()),filterQuality=FilterQuality.Low)
+            }
+        }
+    }
+}
+
+@Composable private fun LibraryArtPlaceholder() {
+    Icon(MobileIcons.libraryMusic,null,Modifier.size(24.dp),tint=Color.White.copy(alpha=.15f))
 }
 @Composable private fun LibraryCard(title:String,sub:String,url:String?,modifier:Modifier=Modifier,click:()->Unit) {
     Column(modifier.clickable(onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
@@ -458,7 +493,7 @@ private fun LibraryNavigation(name:String,icon:androidx.compose.ui.graphics.vect
         Text(sub,Modifier.fillMaxWidth().padding(start=2.dp),style=OtoType.rowSub,color=Color.White.copy(alpha=.38f),maxLines=1,overflow=TextOverflow.Ellipsis)
     }
 }
-@Composable private fun PlaylistCard(title:String,sub:String,url:String?,modifier:Modifier=Modifier,special:String?=null,accent:Color=Color.White,onPlay:(()->Unit)?=null,lifted:Boolean=false,click:()->Unit) {
+@Composable private fun PlaylistCard(title:String,sub:String,url:String?,modifier:Modifier=Modifier,special:String?=null,accent:Color=Color.White,onPlay:(()->Unit)?=null,lifted:Boolean=false,playlist:LocalPlaylist?=null,click:()->Unit) {
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val grow by animateFloatAsState(if(hovered)1f else 0f,tween(180),label="playlistHover")
@@ -473,7 +508,7 @@ private fun LibraryNavigation(name:String,icon:androidx.compose.ui.graphics.vect
                     "dj" -> Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(lerp(accent,Color(0xFF121212),.25f),lerp(accent,Color(0xFF121212),.8f)))),contentAlignment=Alignment.Center) {
                         Box(Modifier.fillMaxSize(.72f).background(Color(0xFF121212),CircleShape),contentAlignment=Alignment.Center) {Box(Modifier.fillMaxSize(.36f).background(accent,CircleShape))}
                     }
-                    else -> LibraryArt(url,Modifier.fillMaxSize())
+                    else -> if(playlist != null) PlaylistMosaic(playlist,accent,Modifier.fillMaxSize()) else LibraryArt(url,Modifier.fillMaxSize())
                 }
             }
             if(onPlay!=null) Box(Modifier.align(Alignment.BottomEnd).padding(10.dp).graphicsLayer { alpha=playVisibility;scaleX=.8f+.2f*playVisibility;scaleY=.8f+.2f*playVisibility }.size(38.dp).background(Color.White.copy(alpha=.94f),CircleShape).clickable(interactionSource=remember { MutableInteractionSource() },indication=null,enabled=hovered,onClick=onPlay),contentAlignment=Alignment.Center) {Canvas(Modifier.size(18.dp).semantics { contentDescription="Reproducir $title" }) {

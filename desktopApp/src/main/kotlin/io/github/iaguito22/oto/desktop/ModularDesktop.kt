@@ -6,12 +6,13 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.spring
-import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.foundation.window.WindowDraggableArea
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.*
@@ -28,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.ImageBitmap
@@ -52,16 +54,21 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     importer: Importer, account: Account, cloud: Cloud, login: BrowserLogin, downloads: DesktopDownloads,
     lyricsStore: LyricsStore, quit: () -> Unit) {
     val kv = remember { OtoDirs.keyValue("modular_windows") }
+    val welcomePrefs = remember { OtoDirs.keyValue("desktop_welcome") }
+    var welcomeOpen by remember { mutableStateOf(welcomePrefs.getString("seen_version") != "1") }
+    fun closeWelcome() { welcomePrefs.putString("seen_version", "1"); welcomeOpen = false }
+    if (welcomeOpen) WelcomeWindow(::closeWelcome)
     DisposableEffect(login) { onDispose { login.cancel() } }
     var shortcut by remember { mutableStateOf(kv.getString("shortcut") ?: "CTRL + ALT + O") }
     var shortcutIssue by remember { mutableStateOf<String?>(null) }
     var form by remember { mutableStateOf(PlayerForm.entries.firstOrNull { it.name == kv.getString("player_form") } ?: PlayerForm.Full) }
     val docking = remember {
         val layout = decodeDockLayout(kv.getString("docking_v1")) ?: initialDockLayout()
-        layout.minimums[DockId.Player] = when(form) { PlayerForm.Vertical -> 96 to 240; PlayerForm.Horizontal -> 280 to 108; PlayerForm.Full -> 260 to 370 }
+        layout.minimums[DockId.Player] = form.minimumSize
         layout.defaults[DockId.Player] = form.width
         DockSession(layout).apply {
             if(layout.bounds.isEmpty()) open(DockId.Player)
+            layout.preparePlayerOpening(form)
         }
     }
     var playerOpen by remember { DockVisibility(docking,DockId.Player) }
@@ -71,6 +78,19 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     }
     DisposableEffect(docking) { onDispose { kv.putString("docking_v1",docking.layout.encode()) } }
     var menuOpen by remember { DockVisibility(docking,DockId.Library) }
+    LaunchedEffect(Unit) {
+        if(System.getenv("OTO_MOTION_PROBE")=="1" && java.io.File(OtoDirs.filesDir,"motion-probe.marker").isFile) {
+            kotlinx.coroutines.delay(4000)
+            repeat(5) {
+                menuOpen=false
+                kotlinx.coroutines.delay(1200)
+                menuOpen=true
+                kotlinx.coroutines.delay(2200)
+            }
+            kotlinx.coroutines.delay(1000)
+            quit()
+        }
+    }
     var queueOpen by remember { DockVisibility(docking,DockId.Queue) }
     var devicesOpen by remember { mutableStateOf(false) }
     val connectionScope = rememberCoroutineScope()
@@ -121,6 +141,12 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     }
     val nowPlaying by player.state.collectAsState()
     val queue by player.queue.collectAsState()
+    val ramSaver by prefs.ramSaver.collectAsState(initial = false)
+    LaunchedEffect(ramSaver) { ArtworkLoader.setRamSaver(ramSaver) }
+    val nextArtwork = if(ramSaver) emptyList() else queue.filter { it.index > nowPlaying.index }.take(2).mapNotNull { it.artwork }
+    LaunchedEffect(nextArtwork) {
+        nextArtwork.forEach { ArtworkLoader.load(it) }
+    }
     val shuffle by player.shuffle.collectAsState()
     val loop by player.loop.collectAsState()
     val lyrics by player.lyrics.collectAsState()
@@ -141,8 +167,33 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     val queueWindow = rememberDockState(docking,DockId.Queue)
     val lyricsWindow = rememberDockState(docking,DockId.Lyrics)
     var playerFrame by remember { mutableStateOf<java.awt.Window?>(null) }
+    LaunchedEffect(playerOpen, windowsHidden, form) {
+        if (playerOpen && !windowsHidden) {
+            val minimum = form.minimumSize
+            playerFrame?.minimumSize = java.awt.Dimension(minimum.first, minimum.second)
+            docking.layout.preparePlayerOpening(form)
+            val rect = docking.layout.bounds.getValue(DockId.Player)
+            docking.layout.constrain(DockId.Player, desktopArea(java.awt.Point(rect.x, rect.y)))
+        }
+    }
+    val soloPlayerBounds = if(playerOpen && playerSolo) docking.layout.bounds[DockId.Player] else null
+    LaunchedEffect(form, soloPlayerBounds?.width, soloPlayerBounds?.height) {
+        val bounds = soloPlayerBounds ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(500)
+        kv.putLong("form_${form.name}_w", bounds.width.toLong())
+        kv.putLong("form_${form.name}_h", bounds.height.toLong())
+    }
     fun changeForm(selected:PlayerForm) {
-        if (selected == form) return
+        if (selected == form) {
+            docking.layout.preparePlayerOpening(form)
+            return
+        }
+        if (playerOpen && docking.layout.group(DockId.Player).members.size == 1) {
+            docking.layout.bounds[DockId.Player]?.let { bounds ->
+                kv.putLong("form_${form.name}_w", bounds.width.toLong())
+                kv.putLong("form_${form.name}_h", bounds.height.toLong())
+            }
+        }
         // Ignore delayed native geometry notifications while separating and resizing.
         docking.geometrySettlesAt = System.nanoTime() + 400_000_000L
         if (playerOpen && docking.layout.group(DockId.Player).members.size > 1) {
@@ -151,10 +202,16 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             docking.layout.create(DockId.Player, old.copy(x=old.x+32,y=old.y+32))
         }
         form=selected;kv.putString("player_form",selected.name)
-        val minimum = when(selected) { PlayerForm.Vertical -> 96 to 240; PlayerForm.Horizontal -> 280 to 108; PlayerForm.Full -> 260 to 370 }
+        val minimum = selected.minimumSize
+        // Actualizar el límite nativo antes de reducir la geometría: de lo contrario
+        // AWT conserva la altura mínima del formato anterior al pasar a horizontal.
+        playerFrame?.minimumSize = java.awt.Dimension(minimum.first, minimum.second)
         docking.layout.setMinimum(DockId.Player,minimum.first,minimum.second,selected.width)
         if(playerOpen) {
-            docking.layout.resize(DockId.Player,selected.width,selected.height)
+            val size = selected.openingSize(
+                kv.getLong("form_${selected.name}_w", selected.width.toLong()).toInt(),
+                kv.getLong("form_${selected.name}_h", selected.height.toLong()).toInt())
+            docking.layout.resize(DockId.Player,size.first,size.second)
             val r = docking.layout.bounds.getValue(DockId.Player)
             docking.layout.constrain(DockId.Player, desktopArea(java.awt.Point(r.x,r.y)))
         }
@@ -180,7 +237,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             SmallAction(Icons.Rounded.MoreHoriz,"Opciones") { setOpen(!open); docking.trace("options=${!open}") }
             PlayerOptions(open,{setOpen(false)},form,::changeForm,volume,{player.adjustVolume(it-volume)},
                 {setOpen(false);devicesOpen=true},
-                {setOpen(false);docking.layout.organize(desktopArea())},quit, { playerFrame?.bounds })
+                {setOpen(false);docking.layout.organize(desktopArea())},quit, { playerFrame?.bounds }, welcome = {setOpen(false);welcomeOpen=true})
         }
     }
     DisposableEffect(shortcut) {
@@ -190,7 +247,8 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     }
     OtoTray(toggle={showOrHide()}, player={windowsHidden=false; playerOpen=true}, library={windowsHidden=false; menuOpen=true},
         lyrics={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; lyricsOpen=true},
-        queue={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; queueOpen=true}, quit=quit)
+        queue={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; queueOpen=true}, quit=quit,
+        playing=nowPlaying.playing, hasSong=nowPlaying.id != null, previous=player::previous, playPause=player::toggle, next=player::next)
     ModuleWindow("Reproductor", playerWindow, playerOpen && !windowsHidden, { closePrimary(DockId.Player) }, pinned && playerSolo, accent = palette.primary, dock=docking, dockId=DockId.Player,
         keys = ::shortcuts, onWindow = { playerFrame = it }, immersive = true, chrome = chrome,
         minimum = if(form == PlayerForm.Vertical) DpSize(96.dp,240.dp) else if(form == PlayerForm.Horizontal) DpSize(280.dp,108.dp) else DpSize(260.dp,370.dp),
@@ -199,10 +257,9 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             if(playerSolo && form != PlayerForm.Vertical) SmallAction(Icons.Rounded.PushPin, if(pinned) "Desfijar" else "Fijar sobre otras ventanas", active=pinned) { pinned = !pinned;kv.putString("pinned",pinned.toString()) }
         }) {
         @Composable fun PlayerContents() {
-        val positionMs by player.positionMs.collectAsState()
         val quality by player.currentQuality.collectAsState()
         val qualityLabel = quality?.let { q -> listOfNotNull(q.codec.uppercase(),q.bitrate?.let { "${(it+500)/1000} kbps" },q.sampleRate?.let { if(it%1000==0) "${it/1000} kHz" else "${it/1000f} kHz" }).joinToString(" · ") }
-        PlayerSurface(nowPlaying,positionMs,artwork,form,chrome,player::beat,coverBeat,isLiked,showRemaining,
+        PlayerSurface(nowPlaying,player.positionMs,artwork,form,chrome,player::beat,coverBeat,isLiked,showRemaining,
             player::toggle,player::previous,player::next,player::seekTo,menuOpen,lyricsOpen,queueOpen,
             {menuOpen=!menuOpen},{lyricsOpen=!lyricsOpen},{queueOpen=!queueOpen},::like,
             {nowPlaying.id?.let{openSave(Heard(it,nowPlaying.title,nowPlaying.artist,nowPlaying.artwork), "reproductor")}}, source, {
@@ -318,7 +375,6 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
     var mounted by remember { mutableStateOf(visible) }
     LaunchedEffect(visible) {
         if (visible) mounted = true
-        else { kotlinx.coroutines.delay(280); mounted = false }
     }
     val retainedState = remember { object { var value=state } }
     if(visible) retainedState.value=state
@@ -331,7 +387,9 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
     val revealSide = remember { mutableIntStateOf(0) }
     if (group != null && group.members.size > 1) {
         val leaderIndex = group.members.indexOf(group.leader)
-        revealSide.intValue = if(groupIndex < leaderIndex) -1 else if(groupIndex > leaderIndex) 1 else 0
+        revealSide.intValue = if(groupIndex < leaderIndex) -1 else if(groupIndex > leaderIndex) 1
+            else if(groupIndex == 0) -1 else if(groupIndex == group.members.lastIndex) 1
+            else if(groupIndex <= group.members.lastIndex / 2) -1 else 1
     } else if (visible) revealSide.intValue = 0
     val leftEdge = groupIndex == 0
     val rightEdge = group == null || groupIndex == group.members.lastIndex
@@ -347,14 +405,60 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
     Window(onCloseRequest = close, state = windowState, visible = true, title = "Oto · $title", undecorated = true, transparent = true, alwaysOnTop = pinned,
         icon = painterResource("oto-icon.png"), onKeyEvent = { if (keys(it)) true else if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { close(); true } else false }) {
         val reveal = remember { Animatable(0f) }
+        var warming by remember { mutableStateOf(visible) }
+        val warmAlpha=remember { mutableFloatStateOf(.01f) }
+        val firstDraw = remember { java.util.concurrent.atomic.AtomicLong(0L) }
         LaunchedEffect(visible) {
+            val requestedAt=System.nanoTime()
+            if (visible && reveal.value == 0f) {
+                warming=true
+                // El reloj puede avanzar mientras otra ventana se dibuja. Esperar
+                // a que esta haya grabado su contenido, incluidos los textos.
+                var warmFrame=0
+                while(firstDraw.get()==0L && System.nanoTime()-requestedAt<1_200_000_000L) {
+                    withFrameNanos { }
+                    warmAlpha.floatValue=if(++warmFrame%2==0) .01f else .015f
+                }
+                // Completar la primera composición y el primer dibujo antes de empezar:
+                // su coste no debe consumir la duración de la animación de entrada.
+                val started = withFrameNanos { it }
+                var previous = started
+                var stableFrames = 0
+                do {
+                    val now = withFrameNanos { it }
+                    warmAlpha.floatValue=if(++warmFrame%2==0) .01f else .015f
+                    stableFrames = if(now - previous < 20_000_000L) stableFrames + 1 else 0
+                    previous = now
+                } while (previous - started < 1_200_000_000L &&
+                    (previous - started < 150_000_000L || stableFrames < 3))
+            }
+            warming=false
+            val timings = if (System.getenv("OTO_MOTION_TRACE") == "1") mutableListOf<Double>() else null
+            var previousFrame = System.nanoTime()
+            val animationStarted=System.currentTimeMillis()
             reveal.animateTo(if (visible) 1f else 0f,
-                if (visible) spring(dampingRatio=.68f,stiffness=240f) else tween(240,easing=CubicBezierEasing(.4f,0f,1f,1f)))
+                if (visible) spring(dampingRatio=.76f,stiffness=190f) else tween(330,easing=CubicBezierEasing(.4f,0f,1f,1f))) {
+                if (timings != null) {
+                    val now = System.nanoTime()
+                    timings.add((now - previousFrame) / 1e6)
+                    previousFrame = now
+                }
+            }
+            if (timings != null) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val file = java.io.File(OtoDirs.filesDir, "motion-frames.jsonl")
+                val record = org.json.JSONObject().put("window",title).put("opening",visible)
+                    .put("animationStartedMs",animationStarted)
+                    .put("firstDrawDelayMs",firstDraw.get().takeIf { visible && it>=requestedAt }?.let { (it-requestedAt)/1e6 })
+                    .put("callbackIntervalsMs",org.json.JSONArray(timings))
+                file.appendText(record.toString()+"\n")
+            }
+            if (!visible) mounted = false
         }
         if(registered) BindDock(dock, dockId, windowState)
+        LaunchedEffect(window) { WindowWorkTrace.measure("$title/icons") { useSharpTaskbarIcons(window) } }
         val taskbarLeader = group == null || group.leader == dockId
         LaunchedEffect(window, taskbarLeader, visible) {
-            if (visible && dock != null) { kotlinx.coroutines.delay(250); updateTaskbarEntry(window, taskbarLeader) }
+            if (visible && dock != null) { kotlinx.coroutines.delay(250); WindowWorkTrace.measure("$title/taskbar") { updateTaskbarEntry(window, taskbarLeader) } }
         }
         val density = LocalDensity.current
         var tooltipEpoch by remember { mutableIntStateOf(0) }
@@ -368,7 +472,11 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
                 kotlinx.coroutines.delay(100)
             }
         }
-        SideEffect { window.minimumSize = java.awt.Dimension(if(title == "Tu música") 640 else minimum.width.value.toInt(), if(title == "Tu música") 480 else minimum.height.value.toInt()); onWindow(window) }
+        SideEffect {
+            val minSize = java.awt.Dimension(if(title == "Tu música") 640 else minimum.width.value.toInt(), if(title == "Tu música") 480 else minimum.height.value.toInt())
+            if (window.minimumSize != minSize) window.minimumSize = minSize
+            onWindow(window)
+        }
         LaunchedEffect(pinned) {
             if (title == "Reproductor" && System.getenv("HYPRLAND_INSTANCE_SIGNATURE") != null) {
                 kotlinx.coroutines.delay(200)
@@ -377,13 +485,22 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
         }
         MaterialTheme(colorScheme = darkColorScheme(primary = accent, onPrimary = Color(0xFF101010), primaryContainer = Color(0xFF303630), secondary = accent, secondaryContainer = Color(0xFF303630), tertiary = accent, background = Color(0xFF171A18), surface = Color(0xFF171A18), surfaceVariant = Color(0xFF343A34), surfaceTint = Color.Transparent, surfaceContainerLowest = Color(0xFF101310), surfaceContainerLow = Color(0xFF1C201C), surfaceContainer = Color(0xFF222722), surfaceContainerHigh = Color(0xFF292F29), surfaceContainerHighest = Color(0xFF343A34)), typography = OtoTypography) {
             Surface(Modifier.fillMaxSize().graphicsLayer {
-                alpha=reveal.value.coerceIn(0f,1f)
                 val side=revealSide.intValue
+                // La traslación lateral no necesita un búfer adicional del tamaño de toda
+                // la ventana; dejar que Compose lo elija evita copiarlo en cada fotograma.
+                compositingStrategy=CompositingStrategy.Auto
+                // Un alfa no nulo y un cambio mínimo de matriz ejercitan el renderizado
+                // y los cálculos de posición antes de la transición visible.
+                val preparingStep=if(warming && warmAlpha.floatValue>.01f) 1f else 0f
+                alpha=if(warming) warmAlpha.floatValue else if(side == 0) reveal.value.coerceIn(0f,1f) else 1f
                 transformOrigin=TransformOrigin(if(side < 0) 1f else if(side > 0) 0f else .5f,.5f)
-                scaleX=(if(side == 0) .92f else .82f) + (if(side == 0) .08f else .18f)*reveal.value
-                scaleY=.96f + .04f*reveal.value
-                translationX= -side*size.width*.16f*(1f-reveal.value)
-                translationY=if(side == 0) 20.dp.toPx()*(1f-reveal.value) else 0f
+                scaleX=if(warming) 1f-preparingStep*.0001f else if(side == 0) .92f + .08f*reveal.value else 1f
+                scaleY=if(warming) 1f-preparingStep*.0001f else if(side == 0) .96f + .04f*reveal.value else 1f
+                translationX=if(warming) preparingStep*.25f else -side*size.width*(1f-reveal.value)
+                translationY=if(warming) 0f else if(side == 0) 20.dp.toPx()*(1f-reveal.value) else 0f
+            }.drawWithContent {
+                WindowWorkTrace.measure("$title/draw") { drawContent() }
+                firstDraw.compareAndSet(0L,System.nanoTime())
             }.then(
                 if(group == null || group.members.size == 1 || highlighted) Modifier.border(if(highlighted) 3.dp else 1.dp, if(highlighted) accent else Color.White.copy(alpha=.12f), shape)
                 else Modifier.drawWithContent {
@@ -456,6 +573,27 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
                     Box(Modifier.align(Alignment.BottomEnd).size(16.dp).graphicsLayer{alpha=if(immersive)chromeAlpha else .5f}.pointerInput(minimum) {
                         detectDragGestures {change,delta -> change.consume();if(registered && dock != null && dockId != null) { val r=dock.layout.bounds.getValue(dockId); with(density) { dock.layout.resize(dockId, r.width+delta.x.toDp().value.toInt(), r.height+delta.y.toDp().value.toInt()) } } else if(dock == null) with(density){windowState.size=DpSize((windowState.size.width+delta.x.toDp()).coerceIn(if(title=="Tu música")640.dp else minimum.width,2400.dp),(windowState.size.height+delta.y.toDp()).coerceIn(if(title=="Tu música")480.dp else minimum.height,1600.dp))}}
                     }) {Text("⌟",color=Color.White.copy(alpha=.25f))}
+                    if (registered && group != null && dock != null && dockId != null && group.members.size > 1) {
+                        @Composable fun DividerHandle(left: DockId, align: Alignment) {
+                            val interaction=remember(left,align) { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                            val hovered by interaction.collectIsHoveredAsState()
+                            Box(Modifier.align(align).fillMaxHeight().padding(vertical=40.dp).width(14.dp)
+                                .hoverable(interaction).pointerInput(left,dock) {
+                                    var remainder=0f
+                                    fun finish() { dock.geometrySettlesAt=System.nanoTime()+250_000_000L; dock.draggingGroup=false }
+                                    detectDragGestures(onDragStart={ remainder=0f; dock.draggingGroup=true },onDragEnd={ finish() },onDragCancel={ finish() }) { change,delta ->
+                                        change.consume()
+                                        remainder += delta.x / density.density
+                                        val step=remainder.toInt()
+                                        if(step != 0 && left in dock.layout.bounds) { dock.layout.resizeDivider(left,step); remainder-=step }
+                                    }
+                                },contentAlignment=Alignment.Center) {
+                                if(hovered) Box(Modifier.width(3.dp).height(38.dp).clip(RoundedCornerShape(50)).background(Color.White.copy(alpha=.5f)))
+                            }
+                        }
+                        if(groupIndex > 0) DividerHandle(group.members[groupIndex-1],Alignment.CenterStart)
+                        if(groupIndex < group.members.lastIndex) DividerHandle(dockId,Alignment.CenterEnd)
+                    }
                     if(dockId == feedbackOwner && dock != null) OtoSnackbarHost(feedback,Modifier.align(Alignment.BottomCenter).padding(18.dp))
                 }
                 }

@@ -67,12 +67,22 @@ class DesktopDownloads(
     )
 
     private val dir = File(OtoDirs.filesDir, "downloads")
+    /** Abre la carpeta que contiene los archivos de audio descargados. */
+    fun openFolder() {
+        check(dir.isDirectory || dir.mkdirs()) { "No se pudo crear la carpeta de descargas" }
+        java.awt.Desktop.getDesktop().open(dir)
+    }
     private val indexFile = File(dir, "index.json")
     private val indexLock = Mutex()
 
     private val _entries = MutableStateFlow<Map<String, Entry>>(emptyMap())
     /** Lo descargado y lo que se está bajando, por id de canción. */
     val entries: StateFlow<Map<String, Entry>> = _entries.asStateFlow()
+
+    internal val mp3Export = Mp3ExportTask(scope) { entry, directory ->
+        val source = localFile(entry.id) ?: error("Descarga no disponible")
+        Mp3Export.export(source, directory, entry.artist, entry.title)
+    }
 
     private val _wanted = MutableStateFlow<Map<String, Heard>>(emptyMap())
     private val queue = Channel<String>(Channel.UNLIMITED)
@@ -138,6 +148,7 @@ class DesktopDownloads(
     }
 
     fun stop() {
+        mp3Export.cancel()
         syncJob?.cancel()
         syncJob = null
         retryJob?.cancel()

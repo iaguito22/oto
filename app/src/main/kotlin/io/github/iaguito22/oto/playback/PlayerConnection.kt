@@ -60,7 +60,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     private val _source = MutableStateFlow<Source?>(null)
     override val source: StateFlow<Source?> = _source.asStateFlow()
 
-    private val _shuffle = MutableStateFlow(false)
+    private val _shuffle = MutableStateFlow(true)
     override val shuffle: StateFlow<Boolean> = _shuffle.asStateFlow()
 
     private val _loopMode = MutableStateFlow(LoopMode.Off)
@@ -334,6 +334,11 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     /** Detrás de la que suena. */
     override fun playNext(song: SongItem) = withController {
         if (it.mediaItemCount == 0) play(song) else it.addMediaItem(it.currentMediaItemIndex + 1, song.toMediaItem())
+    }
+
+    /** Añade una canción recibida del otro dispositivo al final de la cola. */
+    fun enqueue(song: SongItem) = withController {
+        if (it.mediaItemCount == 0) play(song) else it.addMediaItem(song.toMediaItem())
     }
 
     /** Mueve una de la cola a otro sitio ([from] y [to]: posiciones en la lista del reproductor, como [QueueEntry.index]). */

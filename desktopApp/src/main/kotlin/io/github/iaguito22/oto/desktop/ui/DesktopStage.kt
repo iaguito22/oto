@@ -1004,7 +1004,7 @@ private fun SpotifyPlayerColumn(
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                imageVector = MobileIcons.favorite,
+                                imageVector = if (liked) MobileIcons.favorite else MobileIcons.favoriteOutline,
                                 contentDescription = if (liked) "Quitar de Me gusta" else "Añadir a Me gusta",
                                 tint = if (liked) palette.primary else Color.White.copy(alpha = 0.85f),
                                 modifier = Modifier.size(17.dp),

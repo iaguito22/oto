@@ -37,6 +37,10 @@ class MobileConnection(private val app: OtoApp) {
         override fun skip(index: Int) = player.skipTo(index)
         override fun move(from: Int, to: Int) = player.move(from,to)
         override fun remove(index: Int) = player.remove(index)
+        override fun addToQueue(song: JSONObject, next: Boolean) {
+            val track=Heard(song.getString("id"),song.getString("title"),song.optString("artist"),song.optString("artwork").takeUnless { it.isBlank() || it=="null" }).toSong()
+            if(next) player.playNext(track) else player.enqueue(track)
+        }
         override fun setPlaying(on: Boolean) { if(player.state.value.playing != on) player.toggle() }
         override fun volume(value: Float) {
             val audio = app.getSystemService(AudioManager::class.java)
@@ -93,6 +97,12 @@ class MobileConnection(private val app: OtoApp) {
         app.stopService(android.content.Intent(app, ConnectionService::class.java))
     }
     suspend fun send(action: String) = link.command(JSONObject().put("action",action))
+    suspend fun addToRemoteQueue(song: Heard) {
+        check(link.remote.value != null) { "El ordenador no está conectado" }
+        link.command(JSONObject().put("action", "addToQueue").put("next", false)
+            .put("song", JSONObject().put("id", song.id).put("title", song.title)
+                .put("artist", song.artist).put("artwork", song.artwork)))
+    }
     suspend fun sendAccount() {
         val session = app.account.session.value ?: error("Inicia sesión en Oto móvil primero")
         val data = JSONObject().put("cookie", session.cookie).put("visitorData", session.visitorData)

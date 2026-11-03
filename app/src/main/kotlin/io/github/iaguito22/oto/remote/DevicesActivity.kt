@@ -58,6 +58,7 @@ class DevicesActivity : ComponentActivity() {
                         Text("Dispositivos",style=MaterialTheme.typography.titleMedium)
                     }
                     DeviceIdentity(remote?.optString("name") ?: "Conectar con Oto",remote!=null)
+                    Text("Tus listas y Me gusta de Oto se sincronizan entre los dispositivos vinculados cuando están conectados. Los Me gusta de YouTube Music se mantienen en una lista aparte.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.6f))
                     if(remote==null) {
                         Text("Tu música puede seguir en el ordenador. Conecta ambos a la misma red y escanea el QR de Oto Desktop.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.6f))
                         Button(onClick={ GmsBarcodeScanning.getClient(this@DevicesActivity).startScan().addOnSuccessListener { scan -> runCatching { devices.pair(scan.rawValue ?: error("Código vacío")) }.onFailure { error=it.message } }.addOnFailureListener { error=it.message } },shape=RoundedCornerShape(18.dp),modifier=Modifier.fillMaxWidth().height(54.dp)) {

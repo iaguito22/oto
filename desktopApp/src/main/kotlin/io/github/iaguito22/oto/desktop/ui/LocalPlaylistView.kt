@@ -102,10 +102,10 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
 }
 
 @Composable internal fun PlaylistMosaic(list:LocalPlaylist,accent:Color,modifier:Modifier=Modifier) {
-    val arts=remember(list){list.songs.mapNotNull{it.artwork}.distinct().take(4)}
+    val arts=remember(list){list.songs.take(4).map{it.artwork}}
     Box(modifier.clip(RoundedCornerShape(14.dp)).background(Color.White.copy(alpha=.04f)),contentAlignment=Alignment.Center) {
         if(list.id==LIKED_ID) Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(accent,lerp(accent,Color(0xFF121212),.55f)))),contentAlignment=Alignment.Center){Icon(MobileIcons.favorite,null,Modifier.fillMaxSize(.42f),tint=Color(0xFF121212))}
-        else if(arts.size>=4) Column(Modifier.fillMaxSize()) { for(row in 0..1) Row(Modifier.weight(1f)) { for(col in 0..1) LibraryArt(arts[row*2+col],Modifier.weight(1f).fillMaxHeight()) } }
+        else if(arts.size>1) Column(Modifier.fillMaxSize()) { for(row in 0..1) Row(Modifier.weight(1f)) { for(col in 0..1) LibraryArt(arts.getOrNull(row*2+col),Modifier.weight(1f).fillMaxHeight(),rounded=false) } }
         else if(arts.isNotEmpty()) LibraryArt(arts.first(),Modifier.fillMaxSize())
         else Icon(MobileIcons.libraryMusic,null,Modifier.size(38.dp),tint=Color.White.copy(alpha=.22f))
     }

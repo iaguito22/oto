@@ -85,7 +85,7 @@ class DesktopPlayerConnection(
     private val _previousEntry = MutableStateFlow<QueueEntry?>(null)
     override val previousEntry: StateFlow<QueueEntry?> = _previousEntry.asStateFlow()
 
-    private val _shuffle = MutableStateFlow(false)
+    private val _shuffle = MutableStateFlow(true)
     override val shuffle: StateFlow<Boolean> = _shuffle.asStateFlow()
 
     private val _loop = MutableStateFlow(false)
@@ -166,7 +166,7 @@ class DesktopPlayerConnection(
             prefs.loop.collect { _loop.value = it }
         }
         if(isWindowsDesktop) {
-            scope.launch { prefs.crossfade.collect { fadeSeconds=it.coerceAtLeast(0); if(fadeSeconds==0) cancelCrossfade() } }
+            scope.launch { kotlinx.coroutines.flow.combine(prefs.crossfade, prefs.ramSaver) { seconds, saving -> if(saving) 0 else seconds }.collect { fadeSeconds=it.coerceAtLeast(0); if(fadeSeconds==0) cancelCrossfade() } }
             scope.launch { watchCrossfade() }
         }
     }
@@ -318,6 +318,13 @@ class DesktopPlayerConnection(
         if (added.isEmpty()) return
         originalQueue = (originalQueue ?: songQueue.toList()) + added
         songQueue.addAll(if (_shuffle.value) added.shuffled() else added)
+        syncQueueFlow()
+    }
+
+    fun enqueue(song: SongItem) {
+        cancelCrossfade()
+        if (songQueue.isEmpty()) { play(song); return }
+        songQueue.add(song)
         syncQueueFlow()
     }
 

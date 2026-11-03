@@ -15,6 +15,8 @@ interface LinkPlayer {
     fun skip(index: Int)
     fun move(from: Int, to: Int)
     fun remove(index: Int)
+    /** La canción se envía como {id,title,artist,artwork}; next elige siguiente o final de cola. */
+    fun addToQueue(song: JSONObject, next: Boolean)
     fun volume(value: Float)
     suspend fun like()
     fun replace(state: JSONObject)
@@ -35,6 +37,11 @@ class LinkedPlayback(private val player: LinkPlayer) {
             "skip" -> player.skip(message.getInt("index"))
             "move" -> player.move(message.getInt("from"), message.getInt("to"))
             "remove" -> player.remove(message.getInt("index"))
+            "addToQueue" -> {
+                val song = message.getJSONObject("song")
+                require(song.getString("id").isNotBlank() && song.getString("title").isNotBlank())
+                player.addToQueue(song, message.optBoolean("next", false))
+            }
             "volume" -> player.volume(message.getDouble("value").toFloat().coerceIn(0f, 1f))
             "pause" -> player.setPlaying(false)
             "transfer" -> {

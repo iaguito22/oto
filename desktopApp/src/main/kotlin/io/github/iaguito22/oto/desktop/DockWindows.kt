@@ -141,10 +141,24 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
     val revision = session.revision
     val scope = rememberCoroutineScope()
     val bridge = remember { object { var applying = false; var job: Job? = null } }
+    fun seamOverlap(): Int = if (System.getProperty("os.name").startsWith("Windows") && id in session.layout.bounds &&
+        session.layout.group(id).members.lastOrNull() != id) 1 else 0
     DisposableEffect(session, id, window) {
         session.trace("attach $id frame=${System.identityHashCode(window)} title=${window.name} actual=${window.bounds} model=${session.layout.bounds[id]}")
         session.windows[id] = window
         val listener = object : WindowAdapter() {
+            override fun windowStateChanged(e: WindowEvent) {
+                if (id !in session.layout.bounds || session.layout.group(id).leader != id) return
+                val wasMinimized = e.oldState and Frame.ICONIFIED != 0
+                val minimized = e.newState and Frame.ICONIFIED != 0
+                if (wasMinimized == minimized) return
+                session.layout.group(id).members.filter { it != id }.forEach { member ->
+                    (session.windows[member] as? Frame)?.let { frame ->
+                        frame.extendedState = if (minimized) frame.extendedState or Frame.ICONIFIED
+                        else frame.extendedState and Frame.ICONIFIED.inv()
+                    }
+                }
+            }
             override fun windowGainedFocus(e: WindowEvent) {
                 if (id in session.layout.bounds) {
                     session.lastFocused = id
@@ -162,11 +176,12 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
                     if(!window.isShowing || state.placement != WindowPlacement.Floating) return@launch
                     val actual = window.bounds
                     session.trace("reconcile $id frame=${System.identityHashCode(window)} actual=$actual expected=$expected state=${state.size} revision=${session.revision}")
-                    val resized = actual.width != expected.width || actual.height != expected.height
+                    val overlap = seamOverlap()
+                    val resized = actual.width != expected.width + overlap || actual.height != expected.height
                     if(resized) {
                         session.trace("native resize $id: ${actual.width}x${actual.height}")
                         if(session.layout.group(id).maximized) session.maximize(id)
-                        session.layout.resize(id,actual.width,actual.height,actual.y)
+                        session.layout.resize(id,actual.width - overlap,actual.height,actual.y)
                     }
                     val current = session.layout.bounds.getValue(id)
                     if(!resized && (actual.x != current.x || actual.y != current.y)) {
@@ -180,20 +195,22 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
             override fun componentMoved(e: ComponentEvent) = reconcile()
         }
         window.addWindowFocusListener(listener)
+        window.addWindowStateListener(listener)
         window.addComponentListener(geometry)
         onDispose {
-            bridge.job?.cancel(); window.removeWindowFocusListener(listener)
+            bridge.job?.cancel(); window.removeWindowFocusListener(listener); window.removeWindowStateListener(listener)
             window.removeComponentListener(geometry); session.windows.remove(id)
         }
     }
     val targetBounds = session.layout.bounds[id]
-    LaunchedEffect(targetBounds) {
+    val overlap = seamOverlap()
+    LaunchedEffect(targetBounds, overlap) {
         bridge.applying=true
         try {
             targetBounds?.let { r ->
                 session.trace("apply $id frame=${System.identityHashCode(window)} rect=$r")
                 state.position = WindowPosition(r.x.dp, r.y.dp)
-                state.size = androidx.compose.ui.unit.DpSize(r.width.dp, r.height.dp)
+                state.size = androidx.compose.ui.unit.DpSize((r.width + overlap).dp, r.height.dp)
             }
             delay(32)
         } finally { bridge.applying=false }

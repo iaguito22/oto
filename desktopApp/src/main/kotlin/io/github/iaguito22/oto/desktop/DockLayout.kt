@@ -11,7 +11,8 @@ internal enum class DockId(val rank: Int, val defaultWidth: Int, val minWidth: I
 internal data class DockGroup(
     val members: MutableList<DockId>, var leader: DockId,
     var maximized: Boolean = false, var area: DockRect? = null,
-    val restored: MutableMap<DockId, DockRect> = mutableMapOf()
+    val restored: MutableMap<DockId, DockRect> = mutableMapOf(),
+    val beforeAttach: MutableMap<DockId, Map<DockId, Int>> = mutableMapOf()
 )
 internal data class DockHome(val rect: DockRect, val siblings: List<DockId>, val index: Int)
 internal data class DockCandidate(val moving: DockId, val target: DockId, val before: Boolean)
@@ -66,6 +67,22 @@ internal class DockLayout {
         val newHeight = max(height, g.members.maxOf { minHeight(it) })
         val y = if(top == null) first.y else top + height - newHeight
         flow(g, first.x, y, newHeight)
+        changed()
+    }
+    /** Mueve una unión sin desplazar el conjunto ni cambiar su anchura total. */
+    fun resizeDivider(leftId: DockId, delta: Int) {
+        val g = group(leftId)
+        val index = g.members.indexOf(leftId)
+        val rightId = g.members.getOrNull(index + 1) ?: return
+        val left = bounds.getValue(leftId)
+        val right = bounds.getValue(rightId)
+        val movement = delta.coerceIn(minWidth(leftId) - left.width, right.width - minWidth(rightId))
+        if (movement == 0) return
+        g.beforeAttach.clear()
+        val first = bounds.getValue(g.members.first())
+        bounds[leftId] = left.copy(width = left.width + movement)
+        bounds[rightId] = right.copy(width = right.width - movement)
+        flow(g, first.x, first.y, first.height)
         changed()
     }
     /** Los dependientes son las piezas exteriores hasta el siguiente módulo de igual o mayor rango. */
@@ -141,7 +158,10 @@ internal class DockLayout {
             bounds.clear(); bounds.putAll(oldBounds)
             return false
         }
-        if (b.maximized) a.members.forEach { b.restored[it] = a.restored[it] ?: oldBounds.getValue(it) }
+        if (b.maximized) a.members.forEach {
+            b.restored[it] = a.restored[it] ?: oldBounds.getValue(it)
+            b.beforeAttach[it] = oldMembers.associateWith { member -> oldBounds.getValue(member).width }
+        }
         groups.remove(a)
         changed(); return true
     }
@@ -162,7 +182,7 @@ internal class DockLayout {
             g.members.forEach { g.restored[it]?.let { r -> bounds[it] = r } }
             val first = bounds.getValue(g.members.first())
             flow(g, first.x, first.y, bounds.getValue(g.leader).height.coerceAtLeast(g.members.maxOf { minHeight(it) }))
-            g.maximized = false; g.area = null; g.restored.clear()
+            g.maximized = false; g.area = null; g.restored.clear(); g.beforeAttach.clear()
             if (g.members.sumOf { bounds.getValue(it).width } > area.width) {
                 // Los módulos abiertos durante la maximización no estaban en el ancho
                 // normal original. Ajustarlo evita restaurar el reproductor fuera del monitor.
@@ -183,11 +203,17 @@ internal class DockLayout {
     }
     fun close(id: DockId) {
         val g = group(id)
+        val previousWidths = g.beforeAttach.remove(id)
         homes[id] = DockHome(g.restored[id] ?: bounds.getValue(id), g.members.toList(), g.members.indexOf(id))
         g.members.remove(id); bounds.remove(id); g.restored.remove(id)
         if (g.members.isEmpty()) groups.remove(g) else {
             elect(g)
-            if (g.maximized) fit(g) else {
+            if (g.maximized) {
+                if(previousWidths != null && previousWidths.keys == g.members.toSet()) previousWidths.forEach { (member,width) ->
+                    bounds[member] = bounds.getValue(member).copy(width=width)
+                }
+                fit(g)
+            } else {
                 val chief=bounds.getValue(g.leader)
                 val start=chief.x-g.members.take(g.members.indexOf(g.leader)).sumOf { bounds.getValue(it).width }
                 flow(g,start,chief.y,chief.height)
@@ -224,12 +250,11 @@ internal class DockLayout {
         val g = group(id)
         if (id == g.leader || id == target || target !in g.members) return
         val from = g.members.indexOf(id); val to = g.members.indexOf(target)
-        val chiefX = bounds.getValue(g.leader).x
+        val left = bounds.getValue(g.members.first()).x
         g.members[from] = target; g.members[to] = id
         if (g.maximized) fit(g) else {
-            val start = chiefX - g.members.take(g.members.indexOf(g.leader)).sumOf { bounds.getValue(it).width }
             val chief = bounds.getValue(g.leader)
-            flow(g, start, chief.y, chief.height)
+            flow(g, left, chief.y, chief.height)
         }
         changed()
     }

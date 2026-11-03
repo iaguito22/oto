@@ -27,6 +27,16 @@ class DesktopQueueTest {
     }
     private fun song(id: String) = Heard(id, id, "Prueba", null).toSong()
 
+    @Test fun addingToEndAndNextKeepsCurrentTrack() = withPlayer { player ->
+        player.prepareTransfer(listOf(song("a"), song("b")), 0, 0, false)
+        player.enqueue(song("c"))
+        player.playNext(song("d"))
+        assertEquals(listOf("a", "d", "b", "c"), player.queue.value.map { it.id })
+        assertEquals(0, player.state.value.index)
+        player.setShuffle(true); player.setShuffle(false)
+        assertEquals(setOf("a", "b", "c", "d"), player.queue.value.map { it.id }.toSet())
+    }
+
     @Test fun removingCurrentAdvancesAndRemovingLastClearsPlayback() = withPlayer { player ->
         player.prepareTransfer(listOf(song("a"), song("b"), song("c")), 1, 0, false)
         player.remove(1)

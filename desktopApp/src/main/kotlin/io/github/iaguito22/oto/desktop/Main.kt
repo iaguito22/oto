@@ -26,6 +26,11 @@ import java.util.Locale
 
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
+    if (System.getenv("OTO_WELCOME_PREVIEW") == "1") {
+        Timber.plant(Timber.DebugTree())
+        application { WelcomeWindow(::exitApplication) }
+        return
+    }
     if (System.getenv("OTO_DOCK_HARNESS") == "1") {
         prepareDesktopWindows()
         application { DockHarness() }

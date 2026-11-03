@@ -8,7 +8,9 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
-import io.github.iaguito22.oto.MemCache
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.URI
@@ -64,30 +66,43 @@ data class ArtworkPalette(
  * y el acento dinámico (sin depender de `androidx.palette` de Android).
  */
 object ArtworkLoader {
-    private val bitmapCache = MemCache<String, ImageBitmap>(96)
-    private val paletteCache = MemCache<String, ArtworkPalette>(96)
-
-    suspend fun load(url: String?): Pair<ImageBitmap?, ArtworkPalette> {
-        if (url.isNullOrBlank()) return null to ArtworkPalette()
-        val hiUrl = upscaleThumb(url)
-        bitmapCache.get(hiUrl)?.let { bmp ->
-            return bmp to (paletteCache.get(hiUrl) ?: ArtworkPalette())
-        }
-        return withContext(Dispatchers.IO) {
-            runCatching {
-                val bytes = URI.create(hiUrl).toURL().openStream().use { it.readBytes() }
-                val skiaImg = Image.makeFromEncoded(bytes)
-                val bmp = skiaImg.toComposeImageBitmap()
-                val pal = extractPalette(bmp)
-                bitmapCache.put(hiUrl, bmp)
-                paletteCache.put(hiUrl, pal)
-                bmp to pal
-            }.getOrDefault(null to ArtworkPalette())
-        }
+    private val cache = ArtworkCache<Pair<ImageBitmap, ArtworkPalette>>(48L shl 20) {
+        it.first.width.toLong()*it.first.height*4L
+    }
+    // Un mismo mosaico puede pedir una portada varias veces a la vez. Compartir su
+    // carga evita descargas y decodificaciones duplicadas, con un número fijo de cerrojos.
+    private val loads = Array(8) { Mutex() }
+    fun setRamSaver(enabled: Boolean) {
+        cache.resize((if (enabled) 8L else 48L) shl 20)
     }
 
-    private fun upscaleThumb(url: String): String =
-        url.replace(Regex("=w\\d+-h\\d+"), "=w544-h544")
+    internal fun cached(url:String?,size:Int):ImageBitmap? {
+        if(url.isNullOrBlank())return null
+        val target=artworkSize(size)
+        return cache.get("$target:${artworkUrl(url,target)}")?.first
+    }
+
+    suspend fun load(url: String?, size: Int = 544): Pair<ImageBitmap?, ArtworkPalette> {
+        if (url.isNullOrBlank()) return null to ArtworkPalette()
+        val targetSize=artworkSize(size)
+        val hiUrl = artworkUrl(url,targetSize)
+        val key="$targetSize:$hiUrl"
+        cache.get(key)?.let { return it }
+        return loads[(key.hashCode() and Int.MAX_VALUE)%loads.size].withLock {
+            cache.get(key)?.let { return@withLock it }
+            withContext(Dispatchers.IO) {
+                try {
+                    val connection=URI.create(hiUrl).toURL().openConnection().apply { connectTimeout=8000;readTimeout=10000 }
+                    val bytes = connection.getInputStream().use { it.readBytes() }
+                    val skiaImg = Image.makeFromEncoded(bytes)
+                    val bmp = skiaImg.toComposeImageBitmap()
+                    val pal = if(targetSize==544) extractPalette(bmp) else ArtworkPalette()
+                    (bmp to pal).also { cache.put(key,it) }
+                } catch(e:CancellationException) { throw e }
+                catch(_:Exception) { null to ArtworkPalette() }
+            }
+        }
+    }
 
     private fun extractPalette(bmp: ImageBitmap): ArtworkPalette {
         val w = bmp.width

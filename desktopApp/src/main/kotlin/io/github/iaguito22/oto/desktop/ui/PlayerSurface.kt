@@ -27,10 +27,12 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.text.style.TextOverflow
 import io.github.iaguito22.oto.playback.NowPlaying
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
 import kotlin.math.*
 
 internal enum class PlayerForm(val label:String, val width:Int, val height:Int) {
-    Full("Carátula",390,661), Horizontal("Horizontal",351,108), Vertical("Vertical",96,241)
+    Full("Carátula",360,640), Horizontal("Horizontal",351,108), Vertical("Vertical",96,240)
 }
 
 /** Barra de 2 px, área táctil amplia y sin pomo permanente, como la del móvil. */
@@ -78,36 +80,45 @@ internal fun MinimalPlayback(playing:Boolean, toggle:()->Unit, modifier:Modifier
 }
 
 @Composable
-internal fun rememberCoverPulse(playing: Boolean, enabled: Boolean, beat: () -> Float): Float {
-    var pulse by remember { mutableFloatStateOf(0f) }
+internal fun rememberCoverPulse(playing: Boolean, enabled: Boolean, beat: () -> Float): State<Float> {
+    val pulse = remember { mutableFloatStateOf(0f) }
     val currentBeat by rememberUpdatedState(beat)
     LaunchedEffect(playing, enabled) {
         var last=0L
-        while (playing && enabled || pulse > .001f) withFrameNanos { now ->
-            val dt=if(last==0L) 1f/60 else ((now-last)/1e9f).coerceIn(0f,.1f); last=now
-            val target=if(playing && enabled) currentBeat() else 0f
-            pulse=if(target>pulse) pulse+(target-pulse)*min(1f,dt/.025f) else pulse*exp(-dt/.16f)
+        while (playing && enabled || pulse.floatValue > .001f) {
+            withFrameNanos { now ->
+                val dt=if(last==0L) 1f/60 else ((now-last)/1e9f).coerceIn(0f,.1f); last=now
+                val target=if(playing && enabled) currentBeat() else 0f
+                val current = pulse.floatValue
+                pulse.floatValue=if(target>current) current+(target-current)*min(1f,dt/.025f) else current*exp(-dt/.16f)
+            }
+            // El latido no necesita despertar toda una ventana en cada refresco de
+            // una pantalla de 120/144 Hz. El tiempo real mantiene la curva del pulso.
+            delay(10)
         }
-        if (!playing || !enabled) pulse=0f
+        if (!playing || !enabled) pulse.floatValue=0f
     }
     return pulse
 }
 
 @OptIn(ExperimentalFoundationApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
-internal fun PlayerSurface(np:NowPlaying, position:Long, artwork:ImageBitmap?, form:PlayerForm, chrome:Boolean,
+internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:ImageBitmap?, form:PlayerForm, chrome:Boolean,
     beat:()->Float, beatEnabled:Boolean, liked:Boolean, showRemaining:Boolean, onPlay:()->Unit,onPrev:()->Unit,onNext:()->Unit,onSeek:(Long)->Unit,
     libraryOpen:Boolean,lyricsOpen:Boolean,queueOpen:Boolean,onLibrary:()->Unit,onLyrics:()->Unit,onQueue:()->Unit,
     onLike:()->Unit,onSave:()->Unit, source:Source?, onSource:()->Unit, onArtist:(String,String)->Unit,
     qualityLabel:String? = null, verticalPin:(@Composable () -> Unit)? = null) {
     val pulse = rememberCoverPulse(np.playing,beatEnabled,beat)
     val controls by animateFloatAsState(if(chrome)1f else 0f,tween(180),label="playerChrome")
-    var seek by remember(np.id) {mutableStateOf<Float?>(null)}
-    val fraction=seek?:(position.toFloat()/np.durationMs.coerceAtLeast(1)).coerceIn(0f,1f)
     @Composable fun Cover(modifier:Modifier) {
-        AnimatedContent(artwork, transitionSpec={ (fadeIn(tween(380,easing=Motion.Standard))+scaleIn(tween(380,easing=Motion.Standard),initialScale=.94f)) togetherWith (fadeOut(tween(240))+scaleOut(tween(240),targetScale=1.04f)) },label="artwork",modifier=modifier) { image ->
-            Box(Modifier.fillMaxSize().graphicsLayer { val s=1f+.022f*pulse;scaleX=s;scaleY=s }.clip(RoundedCornerShape(14.dp)).combinedClickable(onDoubleClick=onLike,onClick=onPlay),contentAlignment=Alignment.Center) {
+        AnimatedContent(artwork, transitionSpec={
+            slideInHorizontally(spring(dampingRatio=.8f, stiffness=240f)) { it } togetherWith
+                slideOutHorizontally(tween(350,easing=Motion.Standard)) { -it }
+        },label="artwork",modifier=modifier.clipToBounds()) { image ->
+            Box(Modifier.fillMaxSize(), contentAlignment=Alignment.Center) {
+            Box(Modifier.fillMaxSize(.975f).graphicsLayer { val s=1f+.022f*pulse.value;scaleX=s;scaleY=s }.clip(RoundedCornerShape(14.dp)).combinedClickable(onDoubleClick=onLike,onClick=onPlay),contentAlignment=Alignment.Center) {
                 if(image!=null)Image(image,null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop) else Text("音",style=OtoType.display,color=Color.White.copy(alpha=.2f))
+            }
             }
         }
     }
@@ -123,7 +134,7 @@ internal fun PlayerSurface(np:NowPlaying, position:Long, artwork:ImageBitmap?, f
         val hovered by interaction.collectIsHoveredAsState()
         val scale by animateFloatAsState(if(hovered)1.22f else 1f,tween(160),label="savedHover")
         Box(modifier.size(30.dp).hoverable(interaction).combinedClickable(interactionSource=interaction,indication=null,onClick=onLike,onLongClick=onSave).semantics {contentDescription="Me gusta; mantener para guardar en una lista"},contentAlignment=Alignment.Center) {
-            Icon(MobileIcons.favorite,if(liked)"En Me gusta" else "Me gusta",Modifier.size(16.dp * scale),tint=Color.White.copy(alpha=if(liked).95f else .35f))
+            Icon(if(liked) MobileIcons.favorite else MobileIcons.favoriteOutline,if(liked)"En Me gusta" else "Me gusta",Modifier.size(16.dp * scale),tint=Color.White.copy(alpha=if(liked).95f else .55f))
         }
     }
     @Composable fun Modules() {
@@ -164,8 +175,7 @@ internal fun PlayerSurface(np:NowPlaying, position:Long, artwork:ImageBitmap?, f
                 Saved()
             }
             if(np.buffering || np.error != null) Text(if(np.buffering) "Preparando canción…" else "No se pudo reproducir · pulsa para reintentar",Modifier.clickable(interactionSource=remember { MutableInteractionSource() },indication=null,onClick=onPlay),style=OtoType.rowSub,color=Color.White.copy(alpha=.6f),maxLines=1)
-            FineSlider(fraction,{seek=it},label="Tiempo de la canción",onFinish={seek?.let{onSeek((it*np.durationMs).toLong())};seek=null})
-            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(formatTimeMs(position),style=OtoType.rowSub,color=Color.White.copy(alpha=.3f));Text(if(showRemaining) "−"+formatTimeMs((np.durationMs-position).coerceAtLeast(0)) else formatTimeMs(np.durationMs),style=OtoType.rowSub,color=Color.White.copy(alpha=.3f))}
+            PlayerProgress(np.id,position,np.durationMs,showRemaining,onSeek)
             if(qualityLabel != null) Text(qualityLabel,Modifier.align(Alignment.CenterHorizontally),style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1)
             Box(Modifier.fillMaxWidth(),contentAlignment=Alignment.Center){Transport()}
             Box(Modifier.fillMaxWidth().height(34.dp),contentAlignment=Alignment.Center){Modules()}
@@ -183,15 +193,7 @@ internal fun PlayerSurface(np:NowPlaying, position:Long, artwork:ImageBitmap?, f
                 }
                 Transport(reveal=true)
             }
-            var overProgress by remember { mutableStateOf(false) }
-            val progressAlpha by animateFloatAsState(if(overProgress || seek != null) 1f else 0f,tween(160),label="progressDetails")
-            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(30.dp).onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Enter) { overProgress=true }.onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Exit) { overProgress=false }) {
-                Row(Modifier.fillMaxWidth().align(Alignment.TopCenter).graphicsLayer { alpha=progressAlpha },horizontalArrangement=Arrangement.SpaceBetween) {
-                    Text(formatTimeMs(if(seek != null) (fraction*np.durationMs).toLong() else position),style=OtoType.rowSub,color=Color.White.copy(alpha=.75f))
-                    Text(formatTimeMs(np.durationMs),style=OtoType.rowSub,color=Color.White.copy(alpha=.75f))
-                }
-                FineSlider(fraction,{seek=it},Modifier.align(Alignment.BottomCenter),onFinish={seek?.let{onSeek((it*np.durationMs).toLong())};seek=null},expanded=overProgress || seek != null)
-            }
+            PlayerProgress(np.id,position,np.durationMs,showRemaining,onSeek,Modifier.align(Alignment.BottomCenter),compact=true)
         }
         PlayerForm.Vertical -> Column(Modifier.fillMaxSize().padding(start=8.dp,end=8.dp,top=34.dp,bottom=8.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(6.dp)) {
             Box(Modifier.fillMaxWidth(),contentAlignment=Alignment.Center) {
@@ -205,6 +207,38 @@ internal fun PlayerSurface(np:NowPlaying, position:Long, artwork:ImageBitmap?, f
     }
     }
     if(form==PlayerForm.Vertical && verticalPin!=null) Box(Modifier.align(Alignment.BottomStart).padding(start=3.dp,bottom=3.dp).graphicsLayer { alpha=controls }) { verticalPin() }
+    }
+}
+
+/** Solo el progreso observa el reloj de audio; portada y controles conservan su composición. */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+private fun PlayerProgress(id:String?,position:StateFlow<Long>,duration:Long,showRemaining:Boolean,onSeek:(Long)->Unit,
+    modifier:Modifier=Modifier,compact:Boolean=false) {
+    val elapsed by position.collectAsState()
+    var seek by remember(id) { mutableStateOf<Float?>(null) }
+    val fraction=seek ?: (elapsed.toFloat()/duration.coerceAtLeast(1)).coerceIn(0f,1f)
+    val finish:()->Unit = { seek?.let { onSeek((it*duration).toLong()) }; seek=null }
+    if(compact) {
+        var hovered by remember { mutableStateOf(false) }
+        val alpha by animateFloatAsState(if(hovered || seek!=null) 1f else 0f,tween(160),label="progressDetails")
+        Box(modifier.fillMaxWidth().height(30.dp).onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Enter) { hovered=true }
+            .onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Exit) { hovered=false }) {
+            ProgressTimes((if(seek!=null) (fraction*duration).toLong() else elapsed)/1000*1000,duration,false,
+                Modifier.align(Alignment.TopCenter).graphicsLayer { this.alpha=alpha },.75f)
+            FineSlider(fraction,{seek=it},Modifier.align(Alignment.BottomCenter),onFinish=finish,expanded=hovered || seek!=null)
+        }
+    } else Column(modifier,verticalArrangement=Arrangement.spacedBy(8.dp)) {
+        FineSlider(fraction,{seek=it},label="Tiempo de la canción",onFinish=finish)
+        ProgressTimes(elapsed/1000*1000,duration,showRemaining)
+    }
+}
+
+@Composable
+private fun ProgressTimes(position:Long,duration:Long,remaining:Boolean,modifier:Modifier=Modifier,alpha:Float=.3f) {
+    Row(modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
+        Text(formatTimeMs(position),style=OtoType.rowSub,color=Color.White.copy(alpha=alpha))
+        Text(if(remaining) "−"+formatTimeMs((duration-position).coerceAtLeast(0)) else formatTimeMs(duration),style=OtoType.rowSub,color=Color.White.copy(alpha=alpha))
     }
 }
 

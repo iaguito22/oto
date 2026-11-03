@@ -25,6 +25,7 @@ internal fun DevicesPane(devices: DeviceConnection, revoke: () -> Unit) {
     val status by devices.link.status.collectAsState()
     val syncNotice by devices.syncNotice.collectAsState()
     val syncIssue by devices.syncIssue.collectAsState()
+    val accountStatus by devices.accountStatus.collectAsState()
     val remote by devices.link.remote.collectAsState()
     val local by devices.player.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -32,8 +33,6 @@ internal fun DevicesPane(devices: DeviceConnection, revoke: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var details by remember { mutableStateOf(false) }
     var confirmRevoke by remember { mutableStateOf(false) }
-    var accountUntil by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(accountUntil) { if(accountUntil>0) { kotlinx.coroutines.delay(120_000); accountUntil=0L } }
     var result by remember { mutableStateOf<String?>(null) }
     fun action(message: String, block: suspend () -> Unit) {
         if (busy) return
@@ -46,6 +45,7 @@ internal fun DevicesPane(devices: DeviceConnection, revoke: () -> Unit) {
     }
     Column(Modifier.fillMaxSize().padding(horizontal=22.dp).verticalScroll(rememberScrollState()).padding(top=8.dp,bottom=24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         DeviceIdentity(remote?.optString("name") ?: "Conectar un dispositivo", remote != null)
+        Text("Tus listas y Me gusta de Oto se sincronizan entre los dispositivos vinculados cuando están conectados. Los Me gusta de YouTube Music se mantienen en una lista aparte.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.6f))
         if (remote == null) {
             Text("Abre Dispositivos en Oto móvil y escanea este código. Ambos deben estar en la misma red.", style=MaterialTheme.typography.bodyMedium, color=MaterialTheme.colorScheme.onSurface.copy(alpha=.6f))
             val qr = remember(devices.pairing) {
@@ -61,6 +61,7 @@ internal fun DevicesPane(devices: DeviceConnection, revoke: () -> Unit) {
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         result?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.primary) }
         failure?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error) }
+        accountStatus?.let { Text(it,style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.primary) }
         syncIssue?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error) }
         HorizontalDivider(color=MaterialTheme.colorScheme.onSurface.copy(alpha=.07f))
         RemoteDisclosure("Conexión y ajustes", if(remote!=null) "Vinculado" else "Red local", details, { details=!details })
@@ -68,8 +69,8 @@ internal fun DevicesPane(devices: DeviceConnection, revoke: () -> Unit) {
             Column(verticalArrangement=Arrangement.spacedBy(14.dp)) {
                 syncNotice?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.55f)) }
                 Text("Usa la cuenta del móvil sin escribir la contraseña.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.55f))
-                OutlinedButton(onClick={devices.requestAccount();accountUntil=System.currentTimeMillis()},enabled=remote!=null,shape=RoundedCornerShape(16.dp)) { Text(if(accountUntil>0) "Esperando al móvil…" else "Recibir cuenta del móvil") }
-                if(accountUntil>0) Text("Pulsa Compartir cuenta en el móvil. Disponible durante 2 minutos.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.primary)
+                OutlinedButton(onClick=devices::requestAccount,enabled=remote!=null,shape=RoundedCornerShape(16.dp)) { Text(if(accountStatus?.startsWith("Esperando") == true) "Esperando al móvil…" else "Recibir cuenta del móvil") }
+                if(accountStatus?.startsWith("Esperando") == true) Text("Pulsa Compartir cuenta en el móvil. Disponible durante 2 minutos.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.primary)
                 Text("${devices.host}:${devices.port}",style=MaterialTheme.typography.bodySmall)
                 TextButton(onClick={confirmRevoke=true}) { Text("Desvincular dispositivos",color=MaterialTheme.colorScheme.error) }
             }

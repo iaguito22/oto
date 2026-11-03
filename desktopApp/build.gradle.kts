@@ -72,8 +72,8 @@ compose.desktop {
                 TargetFormat.Exe,
             )
             packageName = "Oto"
-            packageVersion = "1.2.2"
-            description = "Oto — Tu música de YouTube Music con estética Caelestia"
+            packageVersion = "1.2.3"
+            description = "Oto — Tu música, a tu manera"
             vendor = "iaguito22"
             modules("java.instrument", "java.management", "java.naming", "java.prefs", "java.sql", "jdk.unsupported", "jdk.httpserver", "java.desktop", "java.net.http")
             linux {

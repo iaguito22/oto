@@ -37,6 +37,7 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
     val scope=rememberCoroutineScope()
     val quality by prefs.quality.collectAsState(initial=QualityMode.Auto)
     val saver by prefs.dataSaver.collectAsState(initial=false)
+    val ramSaver by prefs.ramSaver.collectAsState(initial=false)
     val shuffle by player.shuffle.collectAsState()
     val loop by player.loop.collectAsState()
     val beat by prefs.coverBeat.collectAsState(initial=true)
@@ -53,7 +54,7 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
         item {SettingsLink(MobileIcons.playlistAdd,"Importar de Spotify",when(importState){is ImportState.Running->"Importando ${importState.done} de ${importState.total}";is ImportState.Done->"Importación terminada";else->"Tus listas y tus Me gusta"},onImport)}
         item {SettingsLink(Icons.Rounded.Devices,"Dispositivos","Conecta con Oto móvil",onDevices)}
         if(supportsDesktopShortcut) item { ShortcutSetting(shortcut,shortcutIssue,onShortcut) }
-        item {SettingsToggle(MobileIcons.libraryMusic,"Fondo con la carátula","Usa la portada desenfocada como fondo.",artworkBackground){onArtworkBackground(!artworkBackground)}}
+        item {SettingsToggle(MobileIcons.libraryMusic,"Fondo con la carátula","GPU: dibuja y anima el fondo. CPU y RAM: prepara la imagen al cambiar de canción.",artworkBackground){onArtworkBackground(!artworkBackground)}}
         if(artworkBackground) item {SettingFrame(MobileIcons.libraryMusic) { Text("Intensidad del fondo · ${(backdropOpacity*100).toInt()} %",style=OtoType.rowTitle); Slider(backdropOpacity,onBackdropOpacity) }}
         item {
             SettingFrame(MobileIcons.highQuality) {
@@ -72,12 +73,14 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
             }
         }
         item {SettingsToggle(MobileIcons.dataSaver,"Ahorro de datos","Pide menor calidad de audio.",saver){scope.launch{prefs.setDataSaver(!saver)}}}
+        item {SettingsToggle(MobileIcons.hardDrive,"Ahorro de RAM","Limita las carátulas en caché a 12 y desactiva la precarga de portadas y el fundido. Puede tardar más al cambiar de canción.",ramSaver){scope.launch{prefs.setRamSaver(!ramSaver)}}}
+        item {SettingFrame(MobileIcons.graphicEq){Text("Consumo de recursos",style=OtoType.rowTitle);Text("La letra animada usa CPU y GPU mientras se reproduce. Más ventanas visibles aumentan el trabajo gráfico. Estas indicaciones son orientativas; el consumo depende del equipo y del contenido.",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))}}
         item {SettingsToggle(MobileIcons.shuffle,"Aleatorio","Mezcla las canciones de la cola.",shuffle){player.setShuffle(!shuffle)}}
         item {SettingsToggle(MobileIcons.repeat,"Repetir la lista","Al terminar vuelve al principio.",loop){player.setLoop(!loop)}}
-        item {SettingsToggle(MobileIcons.graphicEq,"Carátula al ritmo","La carátula late con los graves de la canción.",beat){scope.launch{prefs.setCoverBeat(!beat)}}}
+        item {SettingsToggle(MobileIcons.graphicEq,"Carátula al ritmo","CPU y GPU: anima la portada continuamente durante la reproducción.",beat){scope.launch{prefs.setCoverBeat(!beat)}}}
         item {SettingsToggle(MobileIcons.timer,"Tiempo que falta","Muestra el tiempo restante en el reproductor.",remaining){scope.launch{prefs.setShowRemaining(!remaining)}}}
         item {SettingsToggle(MobileIcons.translate,"Romanización","Añade la pronunciación en letras japonesas, coreanas o chinas.",romanize){scope.launch{prefs.setRomanize(!romanize)}}}
-        item {SettingFrame(MobileIcons.transitionFade){Text("Fundido entre canciones",style=OtoType.rowTitle);Text(if(isWindowsDesktop) "Solapa el final y el comienzo cuando la siguiente canción está preparada." else "Disponible en Windows.",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f)); if(isWindowsDesktop) Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) { CROSSFADE_CHOICES.forEach { seconds -> FilterChip(selected=crossfade==seconds,onClick={scope.launch {prefs.setCrossfade(seconds)}},label={Text(if(seconds==0)"No" else "${seconds}s")},shape=CircleShape) } }}}
+        item {SettingFrame(MobileIcons.transitionFade){Text("Fundido entre canciones",style=OtoType.rowTitle);Text(if(ramSaver) "Desactivado mientras esté activo el ahorro de RAM. RAM y CPU: el fundido prepara y reproduce dos canciones a la vez." else if(isWindowsDesktop) "RAM y CPU: prepara y reproduce dos canciones a la vez durante el fundido." else "Disponible en Windows.",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f)); if(isWindowsDesktop && !ramSaver) Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) { CROSSFADE_CHOICES.forEach { seconds -> FilterChip(selected=crossfade==seconds,onClick={scope.launch {prefs.setCrossfade(seconds)}},label={Text(if(seconds==0)"No" else "${seconds}s")},shape=CircleShape) } }}}
         item {
             SettingFrame(MobileIcons.hardDrive) {
                 Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {

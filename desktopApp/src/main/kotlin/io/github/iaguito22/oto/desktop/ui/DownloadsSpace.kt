@@ -45,6 +45,7 @@ internal fun DownloadsSpace(player:DesktopPlayerConnection,prefs:Prefs,downloads
         LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=28.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
             item(key="head") {
                 Column(verticalArrangement=Arrangement.spacedBy(12.dp),modifier=Modifier.fillMaxWidth().padding(bottom=12.dp)) {
+                    Mp3ExportControls(downloads)
                     if(lists.isNotEmpty()||songs.isNotEmpty())Text(buildString {append("Suenan sin conexión. ${all.size} canciones");if(totalBytes>0)append(" · ${formatBytes(totalBytes)}");if(pending>0)append(" · bajando $pending")},style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
                     if(all.isNotEmpty())Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         Button(onClick={player.setShuffle(shuffle);player.playLocal(LocalPlaylist(DOWNLOADS_ID,"Tus descargas",all),null,false)},colors=ButtonDefaults.buttonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))){Text("Reproducir todo",fontWeight=FontWeight.SemiBold)}

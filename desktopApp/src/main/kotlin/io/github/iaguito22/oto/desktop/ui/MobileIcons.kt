@@ -34,6 +34,7 @@ object MobileIcons {
     val downloadOffline: ImageVector get() = icon("ic_download_for_offline")
     val edit: ImageVector get() = icon("ic_edit")
     val favorite: ImageVector get() = icon("ic_favorite")
+    val favoriteOutline: ImageVector get() = icon("ic_favorite_outline")
     val folder: ImageVector get() = icon("ic_folder")
     val graphicEq: ImageVector get() = icon("ic_graphic_eq")
     val hardDrive: ImageVector get() = icon("ic_hard_drive")

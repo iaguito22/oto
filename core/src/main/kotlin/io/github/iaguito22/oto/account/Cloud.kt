@@ -55,7 +55,7 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
     /** Una lista de Oto encontrada en la cuenta. */
     private data class Found(val yt: String, val name: String, val meta: ListMeta, val described: Boolean)
 
-    private data class Saved(val manifest: String?, val lists: Map<String, Synced>, val written: String?)
+    private data class Saved(val manifest: String?, val lists: Map<String, Synced>, val written: String?, val pending: Set<String> = emptySet())
 
     private val operation = Mutex()
     val selection = prefs.cloudSelection
@@ -76,6 +76,7 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
             try {
                 var saved = load()
                 val catalog = if(choice.imports.any { it!="LM" } || choice.exports.isNotEmpty()) available() else emptyList()
+                check(choice.exports.isEmpty() || catalog.isNotEmpty()) { "No se pudo comprobar el catálogo de YouTube Music. No se crearán listas hasta poder verificarlo." }
                 val local = prefs.playlists.first()
                 val requested = local.filter { it.id in choice.exports } + if(LIKED_ID in choice.exports) listOf(prefs.likedList.first().copy(name="Me gusta de Oto")) else emptyList()
                 // Recuperar los ids de copias anteriores evita duplicarlas tras volver a entrar.
@@ -143,12 +144,23 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
             val meta = ListMeta(l.id, l.folder, l.from).encode()
             val s = saved.lists[l.id]
             if (s == null) {
+                val catalog = available()
+                check(catalog.isNotEmpty()) { "No se pudo comprobar el catálogo de YouTube Music. No se crearán listas hasta poder verificarlo." }
+                ensureSafePlaylistCreation(l.id, l.name, saved.pending, catalog.map { it.title })
                 _state.value = CloudState.Working("Guardando «${l.name}» (${i + 1} de ${lists.size})")
-                val yt = YouTube.createPlaylist(l.name, ids.take(FIRST)).getOrThrow()
-                YouTube.editPlaylist(yt, description = LIST_NOTE + meta).getOrThrow()
-                ids.drop(FIRST).chunked(CHUNK).forEach { YouTube.editPlaylist(yt, add = it).getOrThrow() }
-                saved = saved.copy(lists = saved.lists + (l.id to Synced(yt, l.name, ids, meta)))
+                saved = saved.copy(pending = saved.pending + l.id)
                 save(saved)
+                val yt = YouTube.createPlaylist(l.name, ids.take(FIRST)).getOrThrow()
+                saved = saved.copy(lists = saved.lists + (l.id to Synced(yt, l.name, ids.take(FIRST), null)), pending = saved.pending - l.id)
+                save(saved)
+                YouTube.editPlaylist(yt, description = LIST_NOTE + meta).getOrThrow()
+                saved = saved.copy(lists = saved.lists + (l.id to Synced(yt, l.name, ids.take(FIRST), meta)))
+                save(saved)
+                ids.drop(FIRST).chunked(CHUNK).forEach { chunk ->
+                    YouTube.editPlaylist(yt, add = chunk).getOrThrow()
+                    saved = saved.copy(lists = saved.lists + (l.id to saved.lists.getValue(l.id).copy(ids = saved.lists.getValue(l.id).ids + chunk)))
+                    save(saved)
+                }
             } else {
                 val had = s.ids.toHashSet()
                 val now = ids.toHashSet()
@@ -181,6 +193,7 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
     /** Todas las canciones de una lista de YouTube, página a página. */
     private suspend fun songs(yt: String): List<Heard>? {
         val first = YouTube.playlist(yt).getOrElse { Timber.w(it, "copia: leer %s", yt); return null }
+        if (first.playlist.title.isBlank()) { Timber.w("copia: respuesta incompleta al leer %s", yt); return null }
         val all = first.songs.toMutableList<SongItem>()
         var next = first.songsContinuation ?: first.continuation
         while (next != null) {
@@ -242,13 +255,14 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
                 Synced(e.getString("yt"), e.optString("n"), (0 until ids.length()).map(ids::getString), e.optString("m").ifEmpty { null })
             },
             o.optString("written").ifEmpty { null },
+            o.optJSONArray("pending")?.let { a -> (0 until a.length()).map(a::getString).toSet() }.orEmpty(),
         )
     }.getOrDefault(Saved(null, emptyMap(), null))
 
     private suspend fun save(s: Saved) {
         val l = JSONObject()
         s.lists.forEach { (k, v) -> l.put(k, JSONObject().put("yt", v.yt).put("n", v.name).put("ids", JSONArray(v.ids)).put("m", v.meta)) }
-        prefs.setCloud(JSONObject().put("manifest", s.manifest).put("written", s.written).put("lists", l).toString())
+        prefs.setCloud(JSONObject().put("manifest", s.manifest).put("written", s.written).put("lists", l).put("pending", JSONArray(s.pending.toList())).toString())
     }
 
     private companion object {
@@ -262,8 +276,18 @@ class Cloud(private val prefs: Prefs, private val account: Account, private val 
     }
 }
 
+internal fun ensureSafePlaylistCreation(id: String, name: String, pending: Set<String>, existingNames: List<String>) {
+    check(id !in pending) { "No se sabe si se creó «$name». Revisa YouTube Music antes de volver a exportarla." }
+    check(existingNames.none { it.trim().equals(name.trim(), ignoreCase = true) }) {
+        "Ya existe una lista llamada «$name» en YouTube Music. Revisa la lista antes de exportar para evitar duplicados."
+    }
+}
+
 internal suspend fun importCloudPlaylist(prefs: Prefs, list: LocalPlaylist) {
-    if (list.id == LIKED_ID) prefs.addLikedAll(list.songs)
+    if (list.id == YOUTUBE_LIKES_LIST_ID || list.from == "youtube:LM") {
+        prefs.restore(listOf(list.copy(id=YOUTUBE_LIKES_LIST_ID,name="Me gusta de YouTube Music",from="youtube:LM")),emptySet(),emptySet(),emptySet())
+    }
+    else if (list.id == LIKED_ID) prefs.restoreLiked(list.songs)
     else prefs.restore(listOf(list),list.folder?.let { setOf(it) }.orEmpty(),emptySet(),emptySet())
 }
 

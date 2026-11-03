@@ -18,7 +18,7 @@ import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.security.MessageDigest
 import java.util.UUID
 
-data class LinkedLibraryState(val lists: List<LocalPlaylist>, val likes: List<Heard>, val folders: Set<String>, val pinned: Set<String>, val flipped: Set<String>)
+data class LinkedLibraryState(val lists: List<LocalPlaylist>, val likes: List<Heard>, val folders: Set<String>, val pinned: Set<String>, val flipped: Set<String>, val likeChanges: Map<String, LikeChange> = emptyMap())
 
 /** Registros por campo y por canción: dos adiciones simultáneas no se sobrescriben. */
 class LibraryReplica(private val prefs: Prefs, private val file: File) {
@@ -66,7 +66,20 @@ class LibraryReplica(private val prefs: Prefs, private val file: File) {
         val now=read()
         val before=previous ?: materialize()
         val first=entries.length()==0
+        // Las decisiones se fechan al tocar el corazón, no al reconectar. Incluye
+        // desmarcados de canciones ausentes y cambios hechos antes de la primera conexión.
+        observed.likeChanges.forEach { (id, change) ->
+            val k=key("liked",id)
+            val old=entries.optJSONObject(k)
+            if(old==null || change.time>old.getLong("t") || (change.time==old.getLong("t") && change.token>old.getString("d"))) {
+                entries.put(k,JSONObject().put("t",change.time).put("d",change.token).put("v",now.opt(k) ?: JSONObject.NULL))
+                cachedDigest=null;needsPersist=true
+            }
+            clock=maxOf(clock,change.time)
+        }
         (now.keys().asSequence().toSet()+before.keys().asSequence().toSet()).forEach { k ->
+            val fields=JSONArray(k)
+            if(fields.getString(0)=="liked" && fields.getString(1) in observed.likeChanges) return@forEach
             if(!same(now.opt(k),before.opt(k))) {
                 cachedDigest = null; needsPersist = true
                 clock=maxOf(clock+1,System.currentTimeMillis())
@@ -141,9 +154,16 @@ class LibraryReplica(private val prefs: Prefs, private val file: File) {
             val positions=(0 until (order?.length()?:0)).associate { order!!.getString(it) to it }
             LocalPlaylist(id,get("name",id)?.toString()?:"Lista",songs.sortedWith(compareBy({positions[it.id]?:Int.MAX_VALUE},{it.id})),get("from",id)?.toString(),get("folder",id)?.toString())
         }
-        val likes=all.filter { (_,k)->k.getString(0)=="liked" }.map { (k,_)->heard(result.getJSONObject(k)) }
+        val likeKeys=entries.keys().asSequence().filter { JSONArray(it).getString(0)=="liked" }.toList()
+        val likeChanges=likeKeys.associate { k ->
+            val e=entries.getJSONObject(k)
+            JSONArray(k).getString(1) to LikeChange(e.getLong("t"),e.getString("d"),!e.isNull("v"))
+        }
+        val likes=likeKeys.filter { !entries.getJSONObject(it).isNull("v") }
+            .sortedWith(compareByDescending<String> { entries.getJSONObject(it).getLong("t") }.thenBy { it })
+            .map { heard(entries.getJSONObject(it).getJSONObject("v")) }
         fun set(kind:String)=all.values.filter { it.getString(0)==kind }.map { it.getString(1) }.toSet()
-        if (prefs.applyLinkedLibrary(expected,lists,likes,set("folders"),set("pinned"),set("flipped"))) {
+        if (prefs.applyLinkedLibrary(expected,lists,likes,set("folders"),set("pinned"),set("flipped"),likeChanges)) {
             previous=read();persist();return@withLock
         }
       }

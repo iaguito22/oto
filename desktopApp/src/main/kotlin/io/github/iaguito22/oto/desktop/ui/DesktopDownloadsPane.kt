@@ -110,6 +110,7 @@ internal fun DownloadsPane(
                     Spacer(Modifier.width(10.dp))
                     Text("Descargas", style = OtoType.title, color = Color(0xFFFFFFFF))
                 }
+                Mp3ExportControls(downloads)
                 val parts = buildList {
                     if (done > 0 || size > 0L) add("$done ${if (done == 1) "canción" else "canciones"} · ${formatBytes(size)}")
                     if (pending > 0) add("bajando $pending")

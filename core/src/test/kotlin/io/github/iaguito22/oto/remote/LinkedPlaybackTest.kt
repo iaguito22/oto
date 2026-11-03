@@ -9,6 +9,7 @@ import org.junit.Test
 class LinkedPlaybackTest {
     private class Player : LinkPlayer {
         var ready=false;var playingState=false;var position=0L;var repeat=false
+        var added: JSONObject? = null; var nextAdded = false
         override fun snapshot()=JSONObject().put("id","song").put("duration",100000).put("buffering",!ready)
         override fun replace(state:JSONObject) { ready=true;playingState=false }
         override fun setPlaying(on:Boolean){playingState=on}
@@ -22,6 +23,7 @@ class LinkedPlaybackTest {
         override fun skip(index:Int){}
         override fun move(from:Int,to:Int){}
         override fun remove(index:Int){}
+        override fun addToQueue(song:JSONObject,next:Boolean){added=song;nextAdded=next}
         override fun volume(value:Float){}
     }
     @Test fun transferPreservesPausedStateAndPosition(): Unit=runBlocking {
@@ -29,6 +31,13 @@ class LinkedPlaybackTest {
         val state=JSONObject().put("id","song").put("position",37000).put("playing",false).put("loop",true).put("queue",JSONArray().put(JSONObject().put("id","song")))
         LinkedPlayback(player).execute(JSONObject().put("action","transfer").put("state",state))
         assertFalse(player.playingState);assertEquals(37000,player.position);assertTrue(player.repeat)
+    }
+    @Test fun addingSongKeepsInsertionChoice(): Unit=runBlocking {
+        val player=Player()
+        val song=JSONObject().put("id","track").put("title","Song").put("artist","Artist")
+        LinkedPlayback(player).execute(JSONObject().put("action","addToQueue").put("song",song).put("next",true))
+        assertEquals("track",player.added?.getString("id"));assertTrue(player.nextAdded)
+        assertTrue(runCatching { LinkedPlayback(player).execute(JSONObject().put("action","addToQueue").put("song",JSONObject().put("id","").put("title","Song"))) }.isFailure)
     }
     @Test fun unsupportedCommandIsRejected(): Unit=runBlocking {
         assertTrue(runCatching{LinkedPlayback(Player()).execute(JSONObject().put("action","unknown"))}.isFailure)

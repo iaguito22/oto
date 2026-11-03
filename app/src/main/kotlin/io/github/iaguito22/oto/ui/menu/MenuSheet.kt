@@ -196,6 +196,7 @@ fun MenuSheet(
     val s by vm.state.collectAsStateWithLifecycle()
     val app = LocalContext.current.applicationContext as OtoApp
     val prefs = app.prefs
+    val remoteDevice by app.devices.link.remote.collectAsStateWithLifecycle()
     val memory = remember { MenuMemory.of() }
     val history by prefs.history.collectAsStateWithLifecycle(initialValue = null)
     val savedLists by prefs.playlists.collectAsStateWithLifecycle(initialValue = null)
@@ -402,6 +403,10 @@ fun MenuSheet(
                     settings = false; importing = false; accounting = false; focus.clearFocus()
                     if (downloadsOpen) vm.closeDetail() else vm.openDownloads()
                 }
+                RoundIcon(R.drawable.ic_link_devices, description = "Dispositivos") {
+                    focus.clearFocus()
+                    app.startActivity(android.content.Intent(app, io.github.iaguito22.oto.remote.DevicesActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
                 RoundIcon(R.drawable.ic_settings, selected = settings) { settings = !settings; importing = false; accounting = false; focus.clearFocus() }
             }
 
@@ -564,6 +569,18 @@ fun MenuSheet(
                     held = null
                 },
                 onSave = { held = null; saving = Saving(h.song.toHeard()) },
+                onRemoteQueue = if (remoteDevice != null) ({
+                    held = null
+                    scope.launch {
+                        try {
+                            app.devices.addToRemoteQueue(h.song.toHeard())
+                            say("«${h.song.title}» añadida a la cola del ordenador")
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            say(e.message ?: "No se pudo añadir al ordenador")
+                        }
+                    }
+                }) else null,
                 // Suelta: se puede quitar; dentro de una lista descargada ya está (se quita con la lista).
                 download = when {
                     downloadSongs.any { it.id == h.song.id } -> false
@@ -734,7 +751,7 @@ private fun Tabs(pager: PagerState, dim: Boolean, onSelect: (Int) -> Unit) {
 }
 
 @Composable
-fun RoundIcon(icon: Int, selected: Boolean = false, onClick: () -> Unit) {
+fun RoundIcon(icon: Int, selected: Boolean = false, description: String? = null, onClick: () -> Unit) {
     val c = Oto.colors
     Box(
         Modifier
@@ -744,7 +761,7 @@ fun RoundIcon(icon: Int, selected: Boolean = false, onClick: () -> Unit) {
             .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(painterResource(icon), null, Modifier.size(22.dp), tint = if (selected) c.accent else c.textMuted)
+        Icon(painterResource(icon), description, Modifier.size(22.dp), tint = if (selected) c.accent else c.textMuted)
     }
 }
 
@@ -2341,6 +2358,7 @@ private fun ColumnScope.SongActions(
     h: Held,
     onNext: () -> Unit,
     onSave: () -> Unit,
+    onRemoteQueue: (() -> Unit)?,
     download: Boolean?,
     onDownload: () -> Unit,
     onArtist: (String, String) -> Unit,
@@ -2353,6 +2371,7 @@ private fun ColumnScope.SongActions(
     FloatHeader({ Art(song.thumbnail, 48.dp, Radius.sm) }, song.title, song.artists.joinToString { it.name })
     Spacer(Modifier.height(Space.xs))
     ActionRow(R.drawable.ic_queue_music, "Reproducir a continuación", onClick = onNext)
+    if (onRemoteQueue != null) ActionRow(R.drawable.ic_link_devices, "Añadir a la cola del ordenador", onClick = onRemoteQueue)
     ActionRow(R.drawable.ic_add, "Guardar en…", onClick = onSave)
     if (download != null) ActionRow(if (download) R.drawable.ic_download else R.drawable.ic_close, if (download) "Descargar" else "Quitar la descarga", onClick = onDownload)
     song.artists.firstOrNull { it.id != null && it.id != here }?.let { a -> ActionRow(R.drawable.ic_person, "Ir a ${a.name}") { onArtist(a.id!!, a.name) } }

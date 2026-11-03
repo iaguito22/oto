@@ -18,8 +18,8 @@ android {
         // 33: RuntimeShader (AGSL) para la gota y RenderEffect para el desenfoque, sin caminos alternativos.
         minSdk = 33
         targetSdk = 36
-        versionCode = 12
-        versionName = "1.2.2"
+        versionCode = 13
+        versionName = "1.2.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // La clave del PoToken va en local.properties (o en la variable de entorno), nunca en el repo.
@@ -29,7 +29,16 @@ android {
 
     // Sin la clave (otro ordenador, CI), la release sale sin firmar.
     val releaseKey = local.getProperty("OTO_KEYSTORE")?.let(::file)?.takeIf { it.exists() }
+    // Clave del móvil habitual, opcional y siempre fuera del repositorio.
+    val phoneKey = providers.environmentVariable("OTO_PHONE_KEYSTORE").orNull?.let(::file)
     signingConfigs {
+        if (phoneKey != null) create("phoneExternal") {
+            require(phoneKey.isFile) { "No existe el keystore indicado por OTO_PHONE_KEYSTORE" }
+            storeFile = phoneKey
+            storePassword = System.getenv("OTO_PHONE_STORE_PASSWORD") ?: "android"
+            keyAlias = System.getenv("OTO_PHONE_KEY_ALIAS") ?: "androiddebugkey"
+            keyPassword = System.getenv("OTO_PHONE_KEY_PASSWORD") ?: storePassword
+        }
         if (releaseKey != null) create("release") {
             storeFile = releaseKey
             storePassword = local.getProperty("OTO_KEYSTORE_PASSWORD")
@@ -40,7 +49,8 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".debug"
+            // -PotoLinkTest instala las pruebas de conexión sin tocar la app habitual.
+            applicationIdSuffix = if (providers.gradleProperty("otoLinkTest").isPresent) ".linktest" else ".debug"
         }
         release {
             isMinifyEnabled = true
@@ -54,7 +64,7 @@ android {
         create("phone") {
             initWith(getByName("release"))
             applicationIdSuffix = ".debug"
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("phoneExternal") ?: signingConfigs.getByName("debug")
             matchingFallbacks += "release"
             isProfileable = true
         }
