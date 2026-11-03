@@ -1,6 +1,15 @@
 # Oto 音
 
-Reproductor de música para Android sobre YouTube Music, sin pestañas ni botones: una gota que se maneja con gestos.
+Reproductor de música para Android y escritorio sobre YouTube Music. En Android se maneja con gestos; en escritorio, con ventanas que se pueden acoplar.
+
+## Organización del proyecto
+
+- `app/`: aplicación Android y conexión con el escritorio.
+- `desktopApp/`: aplicación de escritorio y sus ventanas modulares.
+- `core/`: preferencias, biblioteca, reproducción y protocolo compartidos.
+- `innertube/`: integración con YouTube Music utilizada por ambas aplicaciones.
+
+Las dos aplicaciones pueden vincularse en la red local desde «Dispositivos». La disponibilidad de la conexión depende también de la configuración del cortafuegos.
 
 <p align="center">
   <img src="docs/letra.gif" width="260" alt="La letra, palabra a palabra, con la gota debajo">
@@ -39,7 +48,7 @@ Reproductor de música para Android sobre YouTube Music, sin pestañas ni botone
 
 ## Instalar
 
-Descarga el APK de la [última versión](https://github.com/iaguito22/oto/releases/latest) y ábrelo en el móvil. Android 13 o más. No está en Play Store.
+Para Android, descarga el APK de la [última versión](https://github.com/iaguito22/oto/releases/latest) y ábrelo en el móvil. Android 13 o más. No está en Play Store.
 
 ## Hecho con
 

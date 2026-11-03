@@ -40,6 +40,7 @@ private val CLOUD_SELECTION = stringPreferencesKey("cloud_selection")
 private val QUALITY = stringPreferencesKey("audio_quality")
 private val DATA_SAVER = booleanPreferencesKey("data_saver")
 private val LOOP = booleanPreferencesKey("loop")
+private val PLAYLIST_MODES = stringPreferencesKey("playlist_modes")
 private val CROSSFADE = intPreferencesKey("crossfade")
 private val ROMANIZE = booleanPreferencesKey("romanize")
 private val DROP_STYLE = stringPreferencesKey("drop_style")
@@ -76,6 +77,12 @@ enum class QualityMode { Auto, Max }
 
 /** Cómo se ve la gota: un aro fino del color de acento, como la huella de los Nothing, o la gota líquida. */
 enum class DropStyle { Ring, Liquid }
+
+/** Bucle: apagado, la lista entera o solo la canción que suena. */
+enum class LoopMode { Off, All, One }
+
+/** Cómo quedó el aleatorio y el bucle la última vez que se usó una lista. */
+data class PlaylistMode(val shuffle: Boolean, val loop: LoopMode)
 
 /** Lo que la app recuerda entre sesiones. */
 class Prefs(
@@ -122,7 +129,7 @@ class Prefs(
         store.edit { it[DATA_SAVER] = on }
     }
 
-    /** Aleatorio, como el botón de Spotify: vale para todo lo que se ponga hasta quitarlo. */
+    /** Aleatorio por defecto para las listas nuevas (las ya usadas recuerdan su último estado en [playlistModes]). */
     val shuffle: Flow<Boolean> = store.data.map { it[SHUFFLE] ?: false }.distinctUntilChanged()
 
     suspend fun setShuffle(on: Boolean) {
@@ -136,11 +143,26 @@ class Prefs(
         store.edit { it[CROSSFADE] = seconds }
     }
 
-    /** Una lista que acaba vuelve a empezar; si no, siguen canciones parecidas (como la reproducción automática). */
+    /** Bucle por defecto para las listas nuevas; si no, al acabar siguen canciones parecidas. */
     val loop: Flow<Boolean> = store.data.map { it[LOOP] ?: false }.distinctUntilChanged()
 
     suspend fun setLoop(on: Boolean) {
         store.edit { it[LOOP] = on }
+    }
+
+    /** El último estado de aleatorio y bucle de cada lista que ya se ha usado. */
+    val playlistModes: Flow<Map<String, PlaylistMode>> = store.data.map { decodeModes(it[PLAYLIST_MODES]) }.distinctUntilChanged()
+
+    suspend fun setPlaylistMode(id: String, mode: PlaylistMode) {
+        store.edit { p -> p[PLAYLIST_MODES] = encodeModes(decodeModes(p[PLAYLIST_MODES]) + (id to mode)) }
+    }
+
+    private suspend fun renamePlaylistMode(old: String, new: String?) {
+        store.edit { p ->
+            val modes = decodeModes(p[PLAYLIST_MODES])
+            val prev = modes[old] ?: return@edit
+            p[PLAYLIST_MODES] = encodeModes(if (new != null) (modes - old) + (new to prev) else modes - old)
+        }
     }
 
     /** La letra en otra escritura (japonés, coreano…) lleva debajo cómo se lee. */
@@ -327,6 +349,7 @@ class Prefs(
     suspend fun deletePlaylist(id: String) {
         editLists { l -> l.filter { it.id != id } }
         renamePin(id, null)
+        renamePlaylistMode(id, null)
         setDownloadList(id, false)
     }
 
@@ -365,6 +388,7 @@ class Prefs(
     suspend fun renameFolder(old: String, name: String) {
         editLists { l -> l.map { if (it.folder == old) it.copy(folder = name.trim()) else it } }
         renamePin("d:$old", "d:${name.trim()}")
+        renamePlaylistMode("folder:$old", "folder:${name.trim()}")
         forgetFolder(old, name.trim())
     }
 
@@ -372,6 +396,7 @@ class Prefs(
     suspend fun ungroup(folder: String) {
         editLists { l -> l.map { if (it.folder == folder) it.copy(folder = null) else it } }
         renamePin("d:$folder", null)
+        renamePlaylistMode("folder:$folder", null)
         forgetFolder(folder, null)
     }
 
@@ -483,6 +508,21 @@ class Prefs(
     }
 
     private fun decode(s: String?): List<Heard> = runCatching { songs(JSONArray(s ?: return emptyList())) }.getOrDefault(emptyList())
+
+    private fun encodeModes(modes: Map<String, PlaylistMode>): String = JSONObject().apply {
+        modes.forEach { (k, m) -> put(k, "${if (m.shuffle) 1 else 0}:${m.loop.name}") }
+    }.toString()
+
+    private fun decodeModes(s: String?): Map<String, PlaylistMode> = runCatching {
+        val o = JSONObject(s ?: return emptyMap())
+        buildMap(o.length()) {
+            for (k in o.keys()) {
+                val v = o.optString(k)
+                val loop = runCatching { LoopMode.valueOf(v.substringAfter(':', "Off")) }.getOrDefault(LoopMode.Off)
+                put(k, PlaylistMode(v.startsWith("1:"), loop))
+            }
+        }
+    }.getOrDefault(emptyMap())
 
     private fun songs(a: JSONArray?): List<Heard> = if (a == null) emptyList() else (0 until a.length()).map { i ->
         val o = a.getJSONObject(i)

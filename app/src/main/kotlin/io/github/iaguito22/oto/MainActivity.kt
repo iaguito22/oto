@@ -56,11 +56,15 @@ class MainActivity : ComponentActivity() {
     // La interfaz solo habla con el servicio mientras se ve; la música sigue sin ella.
     override fun onStart() {
         super.onStart()
-        (application as OtoApp).player.connect()
+        val app = application as OtoApp
+        app.player.connect()
+        if (app.devices.canResume && !app.devices.enabled) {
+            androidx.core.content.ContextCompat.startForegroundService(this, android.content.Intent(this, io.github.iaguito22.oto.remote.ConnectionService::class.java))
+        }
     }
 
     override fun onStop() {
-        (application as OtoApp).player.disconnect()
+        if (!(application as OtoApp).devices.enabled) (application as OtoApp).player.disconnect()
         super.onStop()
     }
 }

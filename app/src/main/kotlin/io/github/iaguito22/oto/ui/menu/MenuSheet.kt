@@ -130,6 +130,7 @@ import io.github.iaguito22.oto.DropStyle
 import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.LIKED_ID
 import io.github.iaguito22.oto.LocalPlaylist
+import io.github.iaguito22.oto.LoopMode
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.QualityMode
@@ -428,7 +429,7 @@ fun MenuSheet(
                 label = "menuView",
             ) { nav ->
                 when (nav.view) {
-                    View.Tabs -> HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1, userScrollEnabled = !arranging) { page ->
+                    View.Tabs -> HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 0, userScrollEnabled = !arranging) { page ->
                         if (page == 0) YourMusic(history, liked, playlists, pinned, folders, played, currentId, play, onHold = { hold(it, null) }, onOpen = vm::openLocal, onFolder = vm::openFolder, onNew = { creating = true },
                             dj = source?.kind == "DJ" && np.playing,
                             onDj = {
@@ -477,7 +478,7 @@ fun MenuSheet(
                     View.Page -> when (val p = s.pages.getOrNull(nav.depth - 1)) {
                         is Page.Remote -> if (p.item is ArtistItem) ArtistView(
                             p, currentId, onBack = vm::closeDetail,
-                            onPlay = { songs, i -> connection.playAll(songs, i, p.item); onClose() },
+                            onPlay = { songs, i -> connection.playArtist(songs, i, p.item as ArtistItem, p.shelves.flatMap { it.items }.filterIsInstance<AlbumItem>()); onClose() },
                             play = play, onOpen = vm::open, onHold = { hold(it, null) },
                         ) else DetailView(
                             p, currentId, onBack = vm::closeDetail,
@@ -841,6 +842,7 @@ private fun Explore(
     state: LazyListState,
 ) {
     val list = s.shelves
+    LaunchedEffect(Unit) { if (s.shelves == null) onRetry() }
     LazyColumn(Modifier.fillMaxSize(), state = state, contentPadding = PaddingValues(bottom = Space.lg)) {
         // Los ánimos de YouTube Music (Relax, Entrenar…): elegir uno rehace lo de debajo con ese ánimo.
         if (s.chips.isNotEmpty()) item(key = "chips") {
@@ -876,7 +878,7 @@ private fun SmartView(list: LocalPlaylist, currentId: String?, onBack: () -> Uni
         item(key = "head") {
             PageHeader(onBack, { Mosaic(list.songs, 112.dp) }, list.name, count(list.songs.size) + " · hecha con lo tuyo") {
                 Pill("Reproducir", { onPlay(null) }, icon = R.drawable.ic_play_arrow)
-                ShuffleButton()
+                ShuffleButton(list.id)
                 RoundAction(R.drawable.ic_add, "Guardar", onClick = onSave)
             }
         }
@@ -1043,20 +1045,32 @@ fun RoundAction(icon: Int, description: String, on: Boolean = false, onClick: ()
     }
 }
 
-/** Aleatorio sí o no, como el de Spotify: vale para lo que se ponga y, si suena una lista, la rebaraja ya. */
+/** Aleatorio de [listId] (o de la lista que suena): recuerda el estado por lista y rebaraja si está sonando. */
 @Composable
-fun ShuffleButton() {
+fun ShuffleButton(listId: String? = null) {
     val connection = (LocalContext.current.applicationContext as OtoApp).player
-    val on by connection.shuffle.collectAsStateWithLifecycle()
-    RoundAction(R.drawable.ic_shuffle, "Aleatorio", on) { connection.setShuffle(!on) }
+    val current by connection.shuffle.collectAsStateWithLifecycle()
+    val modes by connection.modes.collectAsStateWithLifecycle()
+    val defaultShuffle by connection.defaultShuffle.collectAsStateWithLifecycle()
+    val on = if (listId != null) modes[listId]?.shuffle ?: defaultShuffle else current
+    RoundAction(R.drawable.ic_shuffle, "Aleatorio", on) { connection.setShuffle(!on, listId) }
 }
 
-/** Bucle sí o no: una lista que acaba vuelve a empezar; sin él, siguen canciones parecidas. Vale ya, si suena una. */
+/** Bucle apagado, toda la lista o una canción. Tocarlo pasa al siguiente estado. */
 @Composable
 fun LoopButton() {
     val connection = (LocalContext.current.applicationContext as OtoApp).player
-    val on by connection.loop.collectAsStateWithLifecycle()
-    RoundAction(R.drawable.ic_repeat, "Repetir la lista", on) { connection.setLoop(!on) }
+    val loop by connection.loopMode.collectAsStateWithLifecycle()
+    val icon = when (loop) {
+        LoopMode.One -> R.drawable.ic_repeat_one
+        else -> R.drawable.ic_repeat
+    }
+    val desc = when (loop) {
+        LoopMode.Off -> "Repetir lista"
+        LoopMode.All -> "Repetir en bucle"
+        LoopMode.One -> "Repetir esta canción"
+    }
+    RoundAction(icon, desc, on = loop != LoopMode.Off) { connection.cycleLoop() }
 }
 
 /** La cabecera de una página: atrás, la carátula, el nombre, una línea de datos y los botones. */
@@ -1112,7 +1126,7 @@ private fun DetailView(
             PageHeader(onBack, { Art(d.item.thumbnail, 112.dp, Radius.md) }, d.item.title, sub, onMenu = { shareItem(context, d.item) }, menuIcon = R.drawable.ic_share) {
                 if (!songs.isNullOrEmpty()) {
                     Pill("Reproducir", { onPlay(songs, null) }, icon = R.drawable.ic_play_arrow)
-                    ShuffleButton()
+                    ShuffleButton(d.item.id)
                     // El álbum entero a Me gusta o a una lista tuya (o a una nueva con su nombre). Redondo: al lado
                     // de «Reproducir» no cabe otra píldora con texto.
                     RoundAction(R.drawable.ic_add, "Guardar") { onSave(songs) }
@@ -1163,7 +1177,7 @@ private fun ArtistView(
                         Spacer(Modifier.height(Space.md))
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
                             Pill("Reproducir", { onPlay(songs, null) }, icon = R.drawable.ic_play_arrow)
-                            ShuffleButton()
+                            ShuffleButton(d.item.id)
                         }
                     }
                 }
@@ -1180,7 +1194,7 @@ private fun ArtistView(
             }
             else -> {
                 if (songs.isNotEmpty()) {
-                    item(key = "topTitle") { SectionTitle("Lo más oído") }
+                    item(key = "topTitle") { SectionTitle("Destacadas") }
                     itemsIndexed(songs.take(TOP_SONGS), key = { i, it -> "top-${it.id}-$i" }) { i, song ->
                         SongRow(song.title, song.subtitle(), song.thumbnail, song.id == currentId, onClick = { onPlay(songs, i) }, onLongClick = { onHold(song) },
                             modifier = Modifier.padding(horizontal = Space.sm))
@@ -1235,13 +1249,12 @@ private fun LocalView(
             val art = @Composable {
                 Box {
                     if (likes) LikedArt(112.dp) else Mosaic(list.songs, 112.dp)
-                    if (downloaded && list.songs.isNotEmpty()) DownloadMark(got, list.songs.size, Modifier.align(Alignment.BottomEnd).padding(Space.xs + 2.dp), size = 28.dp)
                 }
             }
             PageHeader(onBack, art, list.name, sub, onMenu = { onMenu(list) }) {
                 if (list.songs.isNotEmpty()) {
                     Pill("Reproducir", { onPlay(shown, null, newest) }, icon = R.drawable.ic_play_arrow)
-                    ShuffleButton()
+                    ShuffleButton(list.id)
                 }
             }
         }
@@ -1257,8 +1270,7 @@ private fun LocalView(
             SortRow(newest) { scope.launch { prefs.flipSort(list.id) } }
         }
         itemsIndexed(shown.songs, key = { _, it -> it.id }) { i, h ->
-            SongRow(h.title, h.artist, h.artwork, h.id == currentId, onClick = { onPlay(shown, i, newest) }, onLongClick = { onHold(h.toSong()) }, modifier = Modifier.animateItem(),
-                downloaded = downloadStates[h.id] == Download.STATE_COMPLETED)
+            SongRow(h.title, h.artist, h.artwork, h.id == currentId, onClick = { onPlay(shown, i, newest) }, onLongClick = { onHold(h.toSong()) }, modifier = Modifier.animateItem())
         }
         if (list.songs.isNotEmpty()) item(key = "suggest") {
             Suggestions(list, currentId, play, onHoldOther) { onAdd(list, it) }
@@ -1287,18 +1299,22 @@ private fun SortRow(newest: Boolean, onFlip: () -> Unit) {
     }
 }
 
-/** Aleatorio y bucle: los mismos que los botones de las listas; valen ya para lo que suene. */
+/** Aleatorio y bucle por defecto para las listas nuevas (las ya usadas recuerdan cómo las dejaste). */
 @Composable
-private fun PlaybackSettings(app: OtoApp) {
-    val shuffle by app.player.shuffle.collectAsStateWithLifecycle()
-    val loop by app.player.loop.collectAsStateWithLifecycle()
-    ToggleRow(R.drawable.ic_shuffle, "Aleatorio", "Lo que pongas suena mezclado. También con el botón junto a «Reproducir».", shuffle) {
-        app.player.setShuffle(!shuffle)
+private fun PlaybackSettings(prefs: Prefs) {
+    val scope = rememberCoroutineScope()
+    val shuffle by prefs.shuffle.collectAsStateWithLifecycle(initialValue = null)
+    val loop by prefs.loop.collectAsStateWithLifecycle(initialValue = null)
+    val s = shuffle ?: return
+    ToggleRow(R.drawable.ic_shuffle, "Aleatorio", "Las listas nuevas empiezan mezcladas. Cada una recuerda cómo la dejaste.", s) {
+        scope.launch { prefs.setShuffle(!s) }
     }
+    val l = loop ?: return
     ToggleRow(
         R.drawable.ic_repeat, "Repetir la lista",
-        if (loop) "Al acabar, la lista vuelve a empezar." else "Al acabar la lista, siguen canciones parecidas.", loop,
-    ) { app.player.setLoop(!loop) }
+        if (l) "Al acabar una lista nueva, vuelve a empezar." else "Al acabar una lista nueva, siguen canciones parecidas.",
+        l,
+    ) { scope.launch { prefs.setLoop(!l) } }
 }
 
 /** Cómo se ve la pantalla de lo que suena: la gota, el tiempo y la letra. */
@@ -1425,9 +1441,10 @@ private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () ->
                 onAccount,
             )
             SettingRow(R.drawable.ic_playlist_add, "Importar de Spotify", importSummary(state), onImport)
+            SettingRow(R.drawable.ic_account_circle, "Dispositivos", "Conectar con Oto Desktop en la red local") { app.startActivity(android.content.Intent(app, io.github.iaguito22.oto.remote.DevicesActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
             AudioSettings(app.prefs)
             CrossfadeRow(app.prefs)
-            PlaybackSettings(app)
+            PlaybackSettings(app.prefs)
             ScreenSettings(app.prefs)
             SpaceRow(app)
             SettingRow(R.drawable.ic_swipe_up, "Ver los gestos otra vez", "El tutorial del principio", onTutorial)
@@ -2196,7 +2213,7 @@ private fun FolderView(
             PageHeader(onBack, { FolderArt(lists, 112.dp) }, name, folderCount(lists.size), onMenu = onMenu) {
                 if (lists.any { it.songs.isNotEmpty() }) {
                     Pill("Reproducir", { onPlay(lists) }, icon = R.drawable.ic_play_arrow)
-                    ShuffleButton()
+                    ShuffleButton(FOLDER_PREFIX + name)
                 } else Pill("Añadir listas", onAdd, icon = R.drawable.ic_add)
             }
         }

@@ -49,6 +49,7 @@ object InnerTubeXPlayer {
     private const val CONFIG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000L
 
     @Volatile private var currentBundle: Bundle? = null
+    @Volatile private var prewarming = false
     private val bundleMutex = Mutex()
     private val clientFailures = ConcurrentHashMap<String, FailedClients>()
 
@@ -85,7 +86,14 @@ object InnerTubeXPlayer {
     }
 
     /** Descarga la configuración del reproductor y el cifrado antes de la primera canción. */
-    suspend fun prewarm() = bundle().extractor.prewarm()
+    suspend fun prewarm() {
+        prewarming = true
+        try {
+            bundle().extractor.prewarm()
+        } finally {
+            prewarming = false
+        }
+    }
 
     /** [tier]: la calidad que se decidió para esta canción (ver [Tier]); la misma en cada vuelta a pedirla. */
     suspend fun resolve(videoId: String, tier: Tier): Result<Stream> =

@@ -97,6 +97,7 @@ class PlaybackService : MediaLibraryService() {
     private val loudness = ConcurrentHashMap<String, Double>()
     private val tracking = ConcurrentHashMap<String, String>()
     private var historyJob: Job? = null
+    private var historyCounted = false
     private val retries = HashMap<String, Int>()
     private var retryJob: Job? = null
 
@@ -104,6 +105,7 @@ class PlaybackService : MediaLibraryService() {
     private var radioJob: Job? = null
     // Lo que suena es una lista (un álbum, una tuya…) y no la radio de una canción ni el DJ.
     private var list = false
+    private var preserveTransferredQueue = false
     // Lo que sigue a una lista acabada (ver [Autoplay]): lo que añade va marcado (ver [markAuto]).
     private var auto: Autoplay? = null
     // Lo último que sonó (también en sesiones anteriores, desde el historial): la radio no lo vuelve a poner.
@@ -172,9 +174,6 @@ class PlaybackService : MediaLibraryService() {
         scope.launch { prefs.likedIds.collect { liked = it; showLike() } }
 
         connectivity.registerDefaultNetworkCallback(networkCallback)
-        scope.launch(Dispatchers.IO) {
-            runCatching { InnerTubeXPlayer.prewarm() }.onFailure { Timber.w(it, "prewarm") }
-        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = session
@@ -289,6 +288,7 @@ class PlaybackService : MediaLibraryService() {
      * móviles, solo la siguiente.
      */
     private fun prefetch() {
+        if (!player.isPlaying) return
         val at = player.currentMediaItemIndex
         val ahead = if (saver && connectivity.isActiveNetworkMetered) 1 else AHEAD
         val ids = (at + 1..min(at + ahead, player.mediaItemCount - 1)).map { player.getMediaItemAt(it).mediaId }
@@ -445,13 +445,13 @@ class PlaybackService : MediaLibraryService() {
      */
     private fun countInHistory(id: String) {
         historyJob?.cancel()
-        if (YouTube.cookie.isNullOrEmpty()) return
+        if (historyCounted || !player.isPlaying || YouTube.cookie.isNullOrEmpty()) return
         historyJob = scope.launch {
             while (player.currentMediaItem?.mediaId == id && player.currentPosition < HEARD_MS) delay(2_000)
             if (player.currentMediaItem?.mediaId != id) return@launch
             val url = tracking[id] ?: withContext(Dispatchers.IO) { InnerTubeXPlayer.resolve(id, tiers[id] ?: Tier.Low) }.getOrNull()?.tracking ?: return@launch
             withContext(Dispatchers.IO) { YouTube.registerPlayback(null, url) }
-                .onSuccess { Timber.d("historial: %s", id) }
+                .onSuccess { historyCounted = true; Timber.d("historial: %s", id) }
                 .onFailure { Timber.w(it, "historial") }
         }
     }
@@ -475,6 +475,7 @@ class PlaybackService : MediaLibraryService() {
      * reproducción automática de Spotify. Con bucle, vuelve a empezar (eso lo hace ExoPlayer).
      */
     private fun autoplay() {
+        if (preserveTransferredQueue && !player.playWhenReady) return
         if (!list || radio != null || auto != null || dj != null || player.repeatMode != Player.REPEAT_MODE_OFF || player.mediaItemCount == 0) return
         if (player.mediaItemCount - player.currentMediaItemIndex - 1 > RADIO_AHEAD) return
         val items = (0 until player.mediaItemCount).map { player.getMediaItemAt(it) }.filter { !it.isAuto }
@@ -674,9 +675,25 @@ class PlaybackService : MediaLibraryService() {
             autoplay()
             topUpDj()
             prefetch()
+            historyCounted = false
             countInHistory(id)
             showLike()
             scope.launch(Dispatchers.IO) { prefs.addHeard(mediaItem.toHeard()) }
+        }
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            if (playWhenReady && preserveTransferredQueue) {preserveTransferredQueue=false;autoplay()}
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying) {
+                player.currentMediaItem?.mediaId?.let(::countInHistory)
+                prefetch()
+            } else {
+                historyJob?.cancel()
+                prefetchJob?.cancel()
+                writer?.cancel()
+            }
         }
 
         override fun onPlayerError(error: PlaybackException) = recover(error)
@@ -785,6 +802,11 @@ class PlaybackService : MediaLibraryService() {
             startIndex: Int,
             startPositionMs: Long,
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+            if (mediaItems.firstOrNull()?.requestMetadata?.extras?.getBoolean("oto_exact_transfer") == true) {
+                stopDj(); stopRadio(); list = true; preserveTransferredQueue = true
+                return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(mediaItems.map { it.withPlaybackUri() },startIndex,startPositionMs))
+            }
+            preserveTransferredQueue = false
             val one = mediaItems.singleOrNull()
             // Desde Android Auto: el DJ, una canción de una lista (suena la lista desde ella) o lo pedido por voz.
             if (one != null && one.mediaId == Library.DJ) {
@@ -806,6 +828,7 @@ class PlaybackService : MediaLibraryService() {
                     val found = resolve(one).map { it.withPlaybackUri() }
                     stopDj()
                     list = false
+                    player.repeatMode = Player.REPEAT_MODE_OFF
                     found.firstOrNull()?.let { startRadio(it.mediaId) }
                     MediaSession.MediaItemsWithStartPosition(found, 0, 0)
                 }

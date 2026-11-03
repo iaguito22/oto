@@ -26,16 +26,26 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.File
 import java.util.Locale
 
 class OtoApp : Application(), SingletonImageLoader.Factory {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val devices by lazy { io.github.iaguito22.oto.remote.MobileConnection(this) }
     val player by lazy { PlayerConnection(this, prefs, plays, scope) }
     val prefs by lazy { OtoDirs.init(filesDir, cacheDir); Prefs() }
     val importer by lazy { Importer(prefs, scope) }
-    val account by lazy { OtoDirs.init(filesDir, cacheDir); Account(prefs, scope) }
+    val account by lazy {
+        OtoDirs.init(filesDir, cacheDir)
+        Account(prefs, scope, onClearWebCookies = {
+            withContext(Dispatchers.Main) {
+                android.webkit.CookieManager.getInstance().removeAllCookies(null)
+                android.webkit.CookieManager.getInstance().flush()
+            }
+        })
+    }
     val cloud by lazy { Cloud(prefs, account, scope) }
     /** Lo que vas escuchando, para el DJ (lo escribe el servicio). */
     val plays by lazy { Plays(File(filesDir, "plays.jsonl")) }

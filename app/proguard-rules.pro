@@ -10,3 +10,9 @@
     @android.webkit.JavascriptInterface public *;
 }
 -keep class io.github.iaguito22.oto.playback.potoken.** { *; }
+
+# Firebase descubre estos componentes por reflexión a través del manifiesto.
+# Sin el constructor público R8 puede dejar el registro de ML Kit incompleto.
+-keep class * implements com.google.firebase.components.ComponentRegistrar {
+    public <init>();
+}

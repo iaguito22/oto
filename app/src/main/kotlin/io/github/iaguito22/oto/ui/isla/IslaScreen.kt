@@ -483,7 +483,7 @@ private fun Stage(
                     Text(
                         song.title.ifEmpty { if (song.id == null) "Nada sonando" else "" },
                         style = OtoType.title, color = c.text, maxLines = 1, textAlign = TextAlign.Center,
-                        modifier = Modifier.basicMarquee(initialDelayMillis = 2500, repeatDelayMillis = 2500, velocity = 36.dp, spacing = MarqueeSpacing(48.dp)),
+                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 2500, repeatDelayMillis = 2500, velocity = 36.dp, spacing = MarqueeSpacing(48.dp)),
                     )
                 }
                 Artists(song, onArtist)

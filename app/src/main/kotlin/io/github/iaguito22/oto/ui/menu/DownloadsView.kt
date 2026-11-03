@@ -131,7 +131,7 @@ internal fun DownloadsView(
                     horizontalArrangement = Arrangement.spacedBy(Space.xs),
                 ) {
                     Pill("Reproducir todo", { onPlayAll(LocalPlaylist(DOWNLOADS_ID, "Tus descargas", all)) }, icon = R.drawable.ic_play_arrow)
-                    ShuffleButton()
+                    ShuffleButton(DOWNLOADS_ID)
                 }
             }
         }

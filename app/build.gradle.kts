@@ -18,8 +18,8 @@ android {
         // 33: RuntimeShader (AGSL) para la gota y RenderEffect para el desenfoque, sin caminos alternativos.
         minSdk = 33
         targetSdk = 36
-        versionCode = 10
-        versionName = "1.2.0"
+        versionCode = 12
+        versionName = "1.2.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // La clave del PoToken va en local.properties (o en la variable de entorno), nunca en el repo.
@@ -94,6 +94,7 @@ kotlin {
 dependencies {
     implementation(project(":innertube"))
     implementation(project(":core"))
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

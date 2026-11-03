@@ -52,6 +52,9 @@ import io.github.iaguito22.oto.ui.theme.Radius
 import io.github.iaguito22.oto.ui.theme.Space
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import org.json.JSONObject
 import org.json.JSONTokener
 import kotlin.coroutines.resume
@@ -122,7 +125,7 @@ fun AccountView(onBack: () -> Unit, onSignedIn: () -> Unit) {
 @Composable
 private fun SignedIn(s: Session, copy: CloudState, onSignOut: () -> Unit) {
     val c = Oto.colors
-    Column {
+    Column(Modifier.verticalScroll(rememberScrollState())) {
         Row(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.lg)).background(c.field).padding(Space.md),
             verticalAlignment = Alignment.CenterVertically,
@@ -134,11 +137,14 @@ private fun SignedIn(s: Session, copy: CloudState, onSignOut: () -> Unit) {
                 s.email?.let { Text(it, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
         }
-        Text(
-            "Explorar y la radio salen de tus gustos. Lo que oyes cuenta en tu historial de YouTube y tus me gusta se guardan también allí.",
-            style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.padding(Space.md),
-        )
-        Block("Tus listas, a salvo", copyText(copy)) {}
+        Spacer(Modifier.height(Space.md))
+        val app=LocalContext.current.applicationContext as OtoApp
+        val lists by app.prefs.playlists.collectAsStateWithLifecycle(initialValue=emptyList())
+        androidx.compose.material3.MaterialTheme(
+            colorScheme=androidx.compose.material3.darkColorScheme(primary=c.accent,onPrimary=c.onAccent,surface=c.base,onSurface=c.text,background=c.base,onBackground=c.text,surfaceTint=Color.Transparent),
+            typography=androidx.compose.material3.Typography(titleLarge=OtoType.title,bodyMedium=OtoType.body,bodySmall=OtoType.rowSub,labelLarge=OtoType.rowTitle,labelSmall=OtoType.rowSub),
+        ) { androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides c.text) { CloudChoices(app.cloud,lists) } }
+        if(copy is CloudState.Working || copy is CloudState.Failed) Text(copyText(copy),style=OtoType.rowSub,color=c.textMuted,modifier=Modifier.padding(Space.md))
         Spacer(Modifier.height(Space.md))
         Box(Modifier.padding(horizontal = Space.sm)) { Pill("Cerrar sesión", onSignOut, filled = false) }
     }
@@ -146,7 +152,7 @@ private fun SignedIn(s: Session, copy: CloudState, onSignOut: () -> Unit) {
 
 /** Qué pasa con la copia de tus listas, en una frase. */
 private fun copyText(s: CloudState) = when (s) {
-    CloudState.Off -> "Se guardan en tu cuenta como listas privadas de YouTube Music. Si reinstalas Oto o cambias de móvil, vuelven al entrar."
+    CloudState.Off -> "Elige qué listas importar y exportar."
     is CloudState.Working -> s.what + "…"
     is CloudState.Done -> "Guardadas en tu cuenta (" + (if (s.lists == 1) "1 lista" else "${s.lists} listas") +
         ", como listas privadas de YouTube Music). Si reinstalas Oto o cambias de móvil, vuelven al entrar."
