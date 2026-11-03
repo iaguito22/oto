@@ -28,7 +28,21 @@ stamp = int(os.environ.get('SOURCE_DATE_EPOCH', time.time()))
 repo = Path(__file__).resolve().parent.parent
 payload = a.output / 'oto-linux-payload.tar'
 
+def ensure_parents(tar, name):
+    directories = getattr(tar, '_oto_directories', set())
+    tar._oto_directories = directories
+    parts = name.split('/')
+    for count in range(1, len(parts)):
+        parent = '/'.join(parts[:count])
+        if parent not in directories:
+            info = tarfile.TarInfo(parent)
+            info.type, info.mode, info.mtime = tarfile.DIRTYPE, 0o755, stamp
+            info.uname = info.gname = 'root'
+            tar.addfile(info)
+            directories.add(parent)
+
 def add_bytes(tar, name, data, mode=0o644):
+    ensure_parents(tar, name)
     info = tarfile.TarInfo(name)
     info.size, info.mode, info.mtime = len(data), mode, stamp
     info.uid = info.gid = 0
@@ -36,6 +50,7 @@ def add_bytes(tar, name, data, mode=0o644):
     tar.addfile(info, io.BytesIO(data))
 
 def add_link(tar, name, target):
+    ensure_parents(tar, name)
     info = tarfile.TarInfo(name)
     info.type, info.linkname, info.mode, info.mtime = tarfile.SYMTYPE, target, 0o777, stamp
     tar.addfile(info)
@@ -76,6 +91,11 @@ with tarfile.open(payload, 'w', format=tarfile.PAX_FORMAT) as out:
                 continue
             target = copy.copy(item)
             target.name = 'opt/oto/runtime/' + relative
+            ensure_parents(out, target.name)
+            if target.isdir():
+                out._oto_directories.add(target.name.rstrip('/'))
+            if target.islnk() and target.linkname.startswith(prefix):
+                target.linkname = 'opt/oto/runtime/' + target.linkname[len(prefix):]
             target.uid = target.gid = 0
             target.uname = target.gname = 'root'
             target.mtime = stamp
@@ -91,6 +111,12 @@ with tarfile.open(payload, 'w', format=tarfile.PAX_FORMAT) as out:
 with tarfile.open(payload) as content:
     size = sum(item.size for item in content)
     assert not any(item.name.lower().endswith(('.exe','.dll','.keystore','.jks')) for item in content)
+    directories = set()
+    for item in content:
+        parts = item.name.rstrip('/').split('/')
+        assert all('/'.join(parts[:count]) in directories for count in range(1,len(parts))), item.name
+        if item.isdir():
+            directories.add(item.name.rstrip('/'))
 
 control = f'''Package: oto
 Version: {a.version}

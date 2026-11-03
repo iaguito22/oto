@@ -24,6 +24,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import java.awt.event.WindowEvent
 import kotlin.math.roundToInt
+import kotlin.math.abs
+
+internal enum class NativeDockChange { None, Resize, Move }
+
+/** El redondeo DPI de AWT puede diferir un píxel lógico: no es un arrastre del usuario. */
+internal fun nativeDockChange(actual: DockRect, expected: DockRect, overlap: Int): NativeDockChange = when {
+    abs(actual.width - expected.width - overlap) > 1 || abs(actual.height - expected.height) > 1 -> NativeDockChange.Resize
+    abs(actual.x - expected.x) > 1 || abs(actual.y - expected.y) > 1 -> NativeDockChange.Move
+    else -> NativeDockChange.None
+}
 
 internal fun hyprDesktopArea(raw: String, point: Point): DockRect? {
     val monitors=JSONArray(raw)
@@ -177,14 +187,14 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
                     val actual = window.bounds
                     session.trace("reconcile $id frame=${System.identityHashCode(window)} actual=$actual expected=$expected state=${state.size} revision=${session.revision}")
                     val overlap = seamOverlap()
-                    val resized = actual.width != expected.width + overlap || actual.height != expected.height
+                    val change = nativeDockChange(DockRect(actual.x,actual.y,actual.width,actual.height),expected,overlap)
+                    val resized = change == NativeDockChange.Resize
                     if(resized) {
                         session.trace("native resize $id: ${actual.width}x${actual.height}")
                         if(session.layout.group(id).maximized) session.maximize(id)
                         session.layout.resize(id,actual.width - overlap,actual.height,actual.y)
                     }
-                    val current = session.layout.bounds.getValue(id)
-                    if(!resized && (actual.x != current.x || actual.y != current.y)) {
+                    if(change == NativeDockChange.Move) {
                         if(session.layout.group(id).leader != id) session.layout.detach(id)
                         val r = session.layout.bounds.getValue(id)
                         session.layout.move(id,actual.x-r.x,actual.y-r.y)
