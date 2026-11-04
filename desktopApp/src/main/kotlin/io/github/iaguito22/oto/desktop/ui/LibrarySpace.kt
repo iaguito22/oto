@@ -175,34 +175,47 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     LibraryNavigation(name,icon,wide,section==name) { home(name) }
                 }
                 Spacer(Modifier.weight(1f))
+                // Dirección del último salto: anterior desliza hacia la derecha, siguiente hacia la izquierda.
+                var miniDirection by remember { mutableIntStateOf(1) }
+                var miniStamp by remember { mutableIntStateOf(0) }
+                LaunchedEffect(miniStamp) { kotlinx.coroutines.delay(1500); miniDirection=1 }
+                fun skipMini(d:Int) { miniDirection=d; miniStamp++; if(d<0) player.previous() else player.next() }
                 // Con la ventana del reproductor abierta, el mini reproductor sobraría.
                 androidx.compose.animation.AnimatedVisibility(np.id!=null && !playerVisible,
                     enter=fadeIn(tween(220))+androidx.compose.animation.expandVertically(spring(dampingRatio=.8f,stiffness=380f),expandFrom=Alignment.Bottom),
                     exit=fadeOut(tween(160))+androidx.compose.animation.shrinkVertically(tween(220),shrinkTowards=Alignment.Bottom)) {
                     if(wide) {
                         Column(Modifier.fillMaxWidth().padding(horizontal=6.dp,vertical=8.dp),verticalArrangement=Arrangement.spacedBy(5.dp)) {
-                            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick=onSource),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(9.dp)) {
-                                LibraryArt(np.artwork,Modifier.size(40.dp).graphicsLayer { val s=1f+.022f*pulse.value;scaleX=s;scaleY=s })
-                                Column(Modifier.weight(1f)) {
-                                    Text(np.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis)
-                                    Text(np.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)
+                            MiniSongSwap(MiniSong(np.id,np.artwork,np.title,np.artist),miniDirection) { song ->
+                                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick=onSource),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(9.dp)) {
+                                    LibraryArt(song.artwork,Modifier.size(40.dp).graphicsLayer { val s=1f+.022f*pulse.value;scaleX=s;scaleY=s })
+                                    Column(Modifier.weight(1f)) {
+                                        Text(song.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis)
+                                        // El artista llega un instante después que el título.
+                                        Text(song.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis,
+                                            modifier=Modifier.animateEnterExit(enter=fadeIn(tween(260,delayMillis=70))+androidx.compose.animation.slideInHorizontally(Motion.slide()){ miniDirection*it/6 },exit=fadeOut(tween(120))))
+                                    }
                                 }
                             }
                             val qualityText=qualityPlaying?.let { q -> listOfNotNull(q.codec.uppercase(),q.bitrate?.let { "${(it+500)/1000} kbps" },q.sampleRate?.let { if(it%1000==0) "${it/1000} kHz" else "${it/1000f} kHz" }).joinToString(" · ") } ?: if(np.buffering) "Preparando audio…" else "Calidad no disponible"
                             // Siempre en una línea: si no cabe, la letra se reduce un poco hasta caber.
-                            var qualitySize by remember(qualityText) { mutableStateOf(11.5f) }
-                            Text(qualityText,style=OtoType.rowSub.copy(fontSize=androidx.compose.ui.unit.TextUnit(qualitySize,androidx.compose.ui.unit.TextUnitType.Sp),lineHeight=androidx.compose.ui.unit.TextUnit(qualitySize+4f,androidx.compose.ui.unit.TextUnitType.Sp)),
-                                color=Color.White.copy(alpha=.38f),maxLines=1,softWrap=false,
-                                onTextLayout={ if(it.hasVisualOverflow && qualitySize>8.5f) qualitySize-=.5f })
+                            AnimatedContent(qualityText,transitionSpec={ fadeIn(tween(260,delayMillis=60)) togetherWith fadeOut(tween(140)) },label="calidad") { text ->
+                                var qualitySize by remember(text) { mutableStateOf(11.5f) }
+                                Text(text,style=OtoType.rowSub.copy(fontSize=androidx.compose.ui.unit.TextUnit(qualitySize,androidx.compose.ui.unit.TextUnitType.Sp),lineHeight=androidx.compose.ui.unit.TextUnit(qualitySize+4f,androidx.compose.ui.unit.TextUnitType.Sp)),
+                                    color=Color.White.copy(alpha=.38f),maxLines=1,softWrap=false,
+                                    onTextLayout={ if(it.hasVisualOverflow && qualitySize>8.5f) qualitySize-=.5f })
+                            }
                             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.Center) {
-                                HoverAction(MobileIcons.skipPrevious,"Anterior",onClick=player::previous,size=32.dp)
+                                KickAction(MobileIcons.skipPrevious,"Anterior",-1) { skipMini(-1) }
                                 MinimalPlayback(np.playing,player::toggle,controlSize=36.dp)
-                                HoverAction(MobileIcons.skipNext,"Siguiente",onClick=player::next,size=32.dp)
+                                KickAction(MobileIcons.skipNext,"Siguiente",1) { skipMini(1) }
                             }
                         }
                     } else {
                         Column(Modifier.fillMaxWidth(),horizontalAlignment=Alignment.CenterHorizontally) {
-                            LibraryArt(np.artwork,Modifier.size(36.dp).graphicsLayer { val s=1f+.022f*pulse.value;scaleX=s;scaleY=s }.clickable(onClick=onSource))
+                            MiniSongSwap(MiniSong(np.id,np.artwork,np.title,np.artist),miniDirection) { song ->
+                                LibraryArt(song.artwork,Modifier.size(36.dp).graphicsLayer { val s=1f+.022f*pulse.value;scaleX=s;scaleY=s }.clickable(onClick=onSource))
+                            }
                             MinimalPlayback(np.playing,player::toggle,controlSize=36.dp)
                         }
                     }
@@ -539,6 +552,29 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
             }
         }
     }
+}
+
+private data class MiniSong(val id:String?,val artwork:String?,val title:String,val artist:String)
+
+/** Cambio de canción del mini reproductor: entra desde el lado del salto con un pequeño rebote. */
+@Composable
+private fun MiniSongSwap(song:MiniSong,direction:Int,content:@Composable androidx.compose.animation.AnimatedVisibilityScope.(MiniSong)->Unit) {
+    AnimatedContent(song,contentKey={it.id},transitionSpec={
+        val d=direction
+        (androidx.compose.animation.slideInHorizontally(Motion.slide()){ d*it/4 }+fadeIn(tween(220))+androidx.compose.animation.scaleIn(Motion.slide(),initialScale=.92f)) togetherWith
+            (androidx.compose.animation.slideOutHorizontally(tween(180)){ -d*it/4 }+fadeOut(tween(140))+androidx.compose.animation.scaleOut(tween(180),targetScale=.94f)) using
+            androidx.compose.animation.SizeTransform(clip=false)
+    },label="miniCancion") { s -> content(s) }
+}
+
+/** Anterior/siguiente: el icono da un empujón hacia su lado y vuelve con rebote. */
+@Composable
+private fun KickAction(icon:androidx.compose.ui.graphics.vector.ImageVector,label:String,direction:Int,onClick:()->Unit) {
+    val kick=remember { Animatable(0f) }
+    val scope=rememberCoroutineScope()
+    val px=with(androidx.compose.ui.platform.LocalDensity.current) { 5.dp.toPx() }
+    HoverAction(icon,label,onClick={ onClick(); scope.launch { kick.animateTo(direction*px,tween(70)); kick.animateTo(0f,Motion.pop()) } },
+        size=32.dp,modifier=Modifier.graphicsLayer { translationX=kick.value })
 }
 
 @OptIn(ExperimentalFoundationApi::class)
