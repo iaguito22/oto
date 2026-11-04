@@ -34,7 +34,9 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
                 .put("playing", s.playing).put("buffering", s.buffering).put("duration", s.durationMs).put("position", player.position())
                 .put("volume",player.volume.value).put("index", s.index).put("shuffle", player.shuffle.value).put("loop", player.loop.value)
                 .put("queue", JSONArray(player.queue.value.map { JSONObject().put("id", it.id).put("title", it.title).put("artist", it.artist).put("artwork", it.artwork) }))
+                .put("sourceKind", player.source.value?.kind).put("sourceTitle", player.source.value?.title)
         }
+        override fun dj() = player.playDj {}
         override suspend fun like() { val s = player.state.value; s.id?.let { prefs.toggleLike(Heard(it,s.title,s.artist,s.artwork)) } }
         override fun toggle() = player.toggle()
         override fun next() = player.next()

@@ -73,8 +73,11 @@ object ArtworkLoader {
     // carga evita descargas y decodificaciones duplicadas, con un número fijo de cerrojos.
     private val loads = Array(8) { Mutex() }
     fun setRamSaver(enabled: Boolean) {
-        cache.resize((if (enabled) 8L else 48L) shl 20)
+        if (enabled) cache.resize(3L shl 20, 32) else cache.resize(48L shl 20, 96)
     }
+
+    /** Suelta todas las carátulas guardadas; las vistas abiertas conservan sus propias referencias. */
+    fun clear() = cache.clear()
 
     internal fun cached(url:String?,size:Int):ImageBitmap? {
         if(url.isNullOrBlank())return null

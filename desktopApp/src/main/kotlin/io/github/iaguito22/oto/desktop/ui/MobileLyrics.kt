@@ -72,7 +72,14 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
             val dragged by list.interactionSource.collectIsDraggedAsState()
             var following by remember(rows) { mutableStateOf(true) }
             var syncRequest by remember(rows) { mutableIntStateOf(0) }
-            LaunchedEffect(dragged) { if (dragged) following = false }
+            var userAt by remember(rows) { mutableLongStateOf(0L) }
+            LaunchedEffect(dragged) { if (dragged) { following = false; userAt = System.currentTimeMillis() } }
+            // Como en el móvil: tras moverla a mano, a los 2,5 s sin tocarla vuelve sola a lo que suena.
+            LaunchedEffect(following, dragged, userAt) {
+                if (following || dragged) return@LaunchedEffect
+                delay(USER_HOLD_MS)
+                following = true; syncRequest++
+            }
             fun toAnchor(i:Int):Float? = list.layoutInfo.visibleItemsInfo.firstOrNull { it.index == i }?.offset?.toFloat()
             val firstActive = remember(rows) { active }
             val openedAt = remember(rows) { System.nanoTime() }
@@ -94,7 +101,7 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
                         moved += list.dispatchRawDelta(step)
                     }
                 }
-                LazyColumn(state = list, modifier = Modifier.fillMaxSize().onPointerEvent(PointerEventType.Scroll, pass = PointerEventPass.Initial) { following = false }, contentPadding = PaddingValues(top = maxHeight * .3f, bottom = maxHeight * .7f)) {
+                LazyColumn(state = list, modifier = Modifier.fillMaxSize().onPointerEvent(PointerEventType.Scroll, pass = PointerEventPass.Initial) { following = false; userAt = System.currentTimeMillis() }, contentPadding = PaddingValues(top = maxHeight * .3f, bottom = maxHeight * .7f)) {
                     itemsIndexed(rows) { i, row -> when(row) {
                         is Row.Sung -> {
                             val cascade = remember { System.nanoTime() - openedAt < 400_000_000L }
@@ -102,6 +109,7 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
                         }
                         is Row.Gap -> GapDots(row, i == active, clock)
                     } }
+                    item(key = "source") { LyricsSource(lyrics.source, synced = lyrics.wordByWord) }
                 }
                 if (!following) {
                     Row(Modifier.align(Alignment.BottomCenter).padding(bottom=46.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(50)).background(Color(0xEE343936)).clickable { following=true; syncRequest++ }.padding(horizontal=16.dp,vertical=10.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -111,10 +119,21 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
                 }
             }
         }
-        lyrics is Lyrics.Plain -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) { items(lyrics.lines) { Text(it, style = LYRIC.copy(fontSize=LYRIC.fontSize*fontScale,lineHeight=LYRIC.lineHeight*fontScale), color = Color.White.copy(alpha = .62f)) } }
+        lyrics is Lyrics.Plain -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) { items(lyrics.lines) { Text(it, style = LYRIC.copy(fontSize=LYRIC.fontSize*fontScale,lineHeight=LYRIC.lineHeight*fontScale), color = Color.White.copy(alpha = .62f)) }; item { LyricsSource(lyrics.source, synced = false) } }
         else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Instrumental o sin letra disponible", style = OtoType.rowSub, color = Color.White.copy(alpha = .36f)) }
     }
 }
+
+/** De dónde viene la letra, al final, como en el móvil. */
+@Composable private fun LyricsSource(source: String, synced: Boolean) {
+    Text(
+        "Letra de $source" + if (synced) "" else " · por líneas",
+        style = OtoType.label.copy(fontSize = 11.sp), color = Color.White.copy(alpha = .36f),
+        modifier = Modifier.padding(start = EDGE, end = EDGE, top = 36.dp),
+    )
+}
+
+private const val USER_HOLD_MS = 2500L
 
 @Composable private fun LyricsSkeleton() {
     val pulse = rememberInfiniteTransition(label = "lyricsLoading")

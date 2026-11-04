@@ -142,6 +142,7 @@ import io.github.iaguito22.oto.ui.theme.OtoTheme
 import io.github.iaguito22.oto.ui.theme.OtoType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import io.github.iaguito22.oto.remote.RemoteNow
 import kotlinx.coroutines.launch
 
 /**
@@ -183,6 +184,11 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
     val menu: MenuViewModel = viewModel()
     val next by connection.queue.collectAsStateWithLifecycle()
     val previous by connection.previousEntry.collectAsStateWithLifecycle()
+    // Con el ordenador sonando, todo lo de esta pantalla es suyo (ver PlayerConnection.Mirror); arriba se avisa.
+    val pc by app.devices.following.collectAsStateWithLifecycle()
+    val openDevices: () -> Unit = {
+        app.startActivity(android.content.Intent(app, io.github.iaguito22.oto.remote.DevicesActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
     val openSource: (Offset) -> Unit = { origin ->
         val src = connection.source.value
         haptics.performHapticFeedback(HapticFeedbackType.Confirm)
@@ -262,11 +268,13 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
         }
     }
 
+    // La tarjeta del ordenador desplaza un poco la pantalla en vez de taparle el origen.
+    val bannerSpace by animateFloatAsState(if (pc != null) 1f else 0f, spring(dampingRatio = 0.8f, stiffness = 380f), label = "remoteBanner")
     Box(Modifier.fillMaxSize().background(c.base)) {
-        Backdrop(np.artwork)
+        Backdrop(np.artwork ?: pc?.artwork)
         CompositionLocalProvider(LocalCovered provides { sheet.isOpen && sheet.morph.value >= 0.98f }) { Stage(
             np, connection, drop, lyrics, openSource, openArtist, saved, like, save, burst, { flash = it },
-            Modifier.graphicsLayer {
+            Modifier.padding(top = REMOTE_BANNER_SPACE * bannerSpace.coerceAtLeast(0f)) /* el rebote pasa de 0 */.graphicsLayer {
                 // Lo de detrás se aleja y se desenfoca mientras la hoja crece: hace de cristal sin capturar la pantalla.
                 val m = sheet.morph.value.coerceIn(0f, 1.2f)
                 alpha = 1f - 0.92f * teaching
@@ -275,6 +283,12 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
                 renderEffect = if (m > 0.01f) BlurEffect(28.dp.toPx() * m, 28.dp.toPx() * m, TileMode.Decal) else null
             },
         ) }
+        RemoteBanner(
+            pc?.copy(playing = np.playing, buffering = np.buffering), onOpen = openDevices,
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp).graphicsLayer {
+                alpha = 1f - (sheet.morph.value / 0.3f).coerceIn(0f, 1f)
+            },
+        )
         Drop(
             state = drop,
             playing = np.playing,
@@ -324,6 +338,49 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
             }
         }
         Tutorial(tutorial, { dropCenter }, drop, onDone = { scope.launch { app.prefs.setTutorialDone(true) } })
+    }
+}
+
+private val REMOTE_BANNER_SPACE = 64.dp
+
+/** Lo que suena en el ordenador: entra desde arriba con rebote; tocarla abre todos sus controles. */
+@Composable
+private fun RemoteBanner(now: RemoteNow?, onOpen: () -> Unit, modifier: Modifier) {
+    val c = Oto.colors
+    // Al irse sigue mostrando la última canción mientras sale.
+    var last by remember { mutableStateOf(now) }
+    if (now != null && now != last) last = now
+    AnimatedVisibility(
+        now != null, modifier,
+        enter = fadeIn(tween(220)) + slideInVertically(spring(dampingRatio = 0.72f, stiffness = 360f)) { -it } + scaleIn(spring(dampingRatio = 0.72f, stiffness = 360f), 0.92f),
+        exit = fadeOut(tween(160)) + slideOutVertically(tween(220, easing = Motion.Standard)) { -it },
+    ) {
+        val s = last ?: return@AnimatedVisibility
+        Row(
+            Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(c.glass)
+                .clickable(onClick = onOpen).padding(start = 8.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            AnimatedContent(s, contentKey = { it.id }, transitionSpec = {
+                (fadeIn(tween(220)) + scaleIn(spring(dampingRatio = 0.7f, stiffness = 380f), 0.8f)) togetherWith fadeOut(tween(140))
+            }, label = "remoteArt") { song ->
+                AsyncImage(song.artwork, null, Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(c.field), contentScale = ContentScale.Crop)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(if (s.buffering) "Preparando en el ordenador" else if (s.playing) "Sonando en el ordenador" else "En pausa en el ordenador", style = OtoType.label, color = c.accent, maxLines = 1)
+                AnimatedContent(s, contentKey = { it.id }, transitionSpec = {
+                    (fadeIn(tween(240, delayMillis = 60)) + slideInHorizontally(spring(dampingRatio = 0.8f, stiffness = 300f)) { it / 6 }) togetherWith fadeOut(tween(120))
+                }, label = "remoteTitle") { song ->
+                    Column {
+                        Text(song.title, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (song.artist.isNotBlank()) Text(song.artist, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+            // Sin botones: la gota ya controla el ordenador. Un icono recuerda dónde suena.
+            Icon(painterResource(R.drawable.ic_link_devices), null, Modifier.padding(end = 12.dp).size(22.dp), tint = c.textMuted)
+        }
     }
 }
 
@@ -879,7 +936,8 @@ private fun Progress(np: NowPlaying, connection: PlayerConnection, modifier: Mod
         // La calidad con la que llega, debajo: lo que dio YouTube (o lo que se guardó con la caché).
         val quality by StreamInfo.quality.collectAsStateWithLifecycle()
         Box(Modifier.fillMaxWidth().padding(top = 10.dp).height(16.dp), contentAlignment = Alignment.Center) {
-            Crossfade(quality[np.id]?.toString(), animationSpec = tween(Motion.EFFECTS), label = "quality") { q ->
+            // Sonando en el ordenador, la de aquí no es la que se oye.
+            Crossfade(quality[np.id]?.takeUnless { connection.mirrored }?.toString(), animationSpec = tween(Motion.EFFECTS), label = "quality") { q ->
                 if (q != null) Text(q, style = style.copy(fontSize = 11.sp, letterSpacing = 0.04.em), color = c.textFaint, maxLines = 1)
             }
         }

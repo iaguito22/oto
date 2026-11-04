@@ -165,16 +165,17 @@ internal class DockLayout {
         groups.remove(a)
         changed(); return true
     }
-    fun candidate(moving: DockId, proximity: Int = 12): DockCandidate? {
+    /** Margen generoso para acoplar sin tener que afinar al píxel; gana el borde más cercano en total. */
+    fun candidate(moving: DockId, proximity: Int = 24): DockCandidate? {
         val a = group(moving)
         val left = bounds.getValue(a.members.first()); val right = bounds.getValue(a.members.last())
+        fun gap(c: DockCandidate): Int { val r = bounds.getValue(c.target); return abs(if (c.before) right.x + right.width - r.x else left.x - r.x - r.width) }
         return groups.filter { it !== a }.flatMap { g ->
             val first = g.members.first(); val last = g.members.last()
             listOf(DockCandidate(moving, first, true), DockCandidate(moving, last, false))
         }.filter { c ->
-            val r = bounds.getValue(c.target)
-            abs(left.y - r.y) <= 40 && abs(if (c.before) right.x + right.width - r.x else left.x - r.x - r.width) <= proximity
-        }.minByOrNull { c -> abs(left.y - bounds.getValue(c.target).y) }
+            abs(left.y - bounds.getValue(c.target).y) <= 48 && gap(c) <= proximity
+        }.minByOrNull { c -> abs(left.y - bounds.getValue(c.target).y) + gap(c) }
     }
     fun maximize(id: DockId, area: DockRect): Boolean {
         val g = group(id)

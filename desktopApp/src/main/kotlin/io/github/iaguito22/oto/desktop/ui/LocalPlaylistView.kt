@@ -30,15 +30,14 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
     val entries by downloads.entries.collectAsState()
     val downloadedSongs by prefs.downloadSongs.collectAsState(initial=emptyList())
     val wantedSongs=downloadedSongs.mapTo(HashSet()){it.id}
-    val globalShuffle by player.shuffle.collectAsState()
-    val kv=remember { OtoDirs.keyValue("desktop_list_modes") }
-    var shuffle by remember(list.id) { mutableStateOf(kv.getString(list.id)?.toBooleanStrictOrNull() ?: globalShuffle) }
+    val shuffle=rememberListShuffle(player,list.id)
     var menuOpen by remember(list.id){mutableStateOf(false)}
     val shown=remember(list,flipped){ if(list.id in flipped) list.copy(songs=list.songs.reversed()) else list }
     val newest=(list.id==LIKED_ID) != (list.id in flipped)
     val downloaded=list.id in wanted
     val got=list.songs.count { entries[it.id]?.state==DesktopDownloads.State.Done }
-    fun play(index:Int?) {player.setShuffle(shuffle);player.playLocal(shown,index,false)}
+    fun play(index:Int?) {player.playLocal(shown,index,newest)}
+    val songActions=rememberSongActions(player,prefs,onSave,onArtist)
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=28.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
         item(key="header") {
             Column(Modifier.fillMaxWidth().padding(bottom=24.dp)) {
@@ -59,7 +58,7 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
                         Text("${list.songs.size} canciones" + if(downloaded) { if(got==list.songs.size) " · descargada" else " · descargando ($got de ${list.songs.size})" } else "",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
                         if(list.songs.isNotEmpty()) Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                             Button(onClick={play(null)},colors=ButtonDefaults.buttonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))) {Text("Reproducir",fontWeight=FontWeight.SemiBold)}
-                            HoverAction(MobileIcons.shuffle,if(shuffle) "Desactivar aleatorio" else "Activar aleatorio",onClick={shuffle=!shuffle;kv.putString(list.id,shuffle.toString());if(player.source.value?.local==list.id)player.setShuffle(shuffle)},tint=if(shuffle)palette.primary else Color.White.copy(alpha=.6f))
+                            HoverAction(MobileIcons.shuffle,if(shuffle) "Desactivar aleatorio" else "Activar aleatorio",onClick={player.setShuffle(!shuffle,list.id)},tint=if(shuffle)palette.primary else Color.White.copy(alpha=.6f))
                         }
                     }
                 }
@@ -78,27 +77,25 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
             }
         }
         itemsIndexed(shown.songs,key={i,h->"${h.id}:$i"}) { i,h ->
-            var songMenu by remember(h.id){mutableStateOf(false)}
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable{play(i)}.padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
-                LibraryArt(h.artwork,Modifier.size(48.dp))
-                Column(Modifier.weight(1f)){Text(h.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(h.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)}
-                if(h.id==currentId)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=palette.primary)
-                Box {
-                    HoverAction(MobileIcons.moreHoriz,"Opciones de ${h.title}",onClick={songMenu=true})
-                    LibraryDropdownMenu(songMenu,{songMenu=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(240.dp)) {
-                        @Composable fun Action(label:String,click:()->Unit){DropdownMenuItem(text={Text(label,style=OtoType.rowSub)},onClick={songMenu=false;click()})}
-                        Action("Reproducir a continuación"){player.playNext(h.toSong())}
-                        Action("Guardar en…"){onSave(h)}
-                        Action(if(h.id in wantedSongs)"Quitar la descarga" else "Descargar"){scope.launch{prefs.setDownloadSong(h,h.id !in wantedSongs)}}
-                        h.artistId?.let{id->Action("Ir a ${h.artist}"){onArtist(id,h.artist)}}
-                        Action("Copiar enlace"){runCatching{Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection("https://music.youtube.com/watch?v=${h.id}"),null)}}
-                        Action(if(list.id==LIKED_ID)"Quitar de Me gusta" else "Quitar de esta lista"){scope.launch{if(list.id==LIKED_ID)prefs.setLiked(h,false)else prefs.removeFromPlaylist(list.id,h.id)}}
-                    }
+            val actions=songActions(h,list.id)
+            PlaylistContextMenu(actions) {
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable{play(i)}.padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
+                    LibraryArt(h.artwork,Modifier.size(48.dp))
+                    Column(Modifier.weight(1f)){Text(h.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(h.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)}
+                    if(h.id==currentId)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=palette.primary)
+                    SongMenuButton(h.title,actions)
                 }
             }
         }
-        if(list.songs.isNotEmpty()) item(key="suggestions") { PlaylistSuggestions(list,currentId,player,prefs,palette,onSave) }
+        if(list.songs.isNotEmpty()) item(key="suggestions") { PlaylistSuggestions(list,currentId,player,prefs,palette,songActions) }
     }
+}
+
+/** El aleatorio que recuerda [listId], o el de Ajustes si aún no se ha usado (como el móvil). */
+@Composable internal fun rememberListShuffle(player:DesktopPlayerConnection,listId:String):Boolean {
+    val modes by player.modes.collectAsState()
+    val default by player.defaultShuffle.collectAsState()
+    return modes[listId]?.shuffle ?: default
 }
 
 @Composable internal fun PlaylistMosaic(list:LocalPlaylist,accent:Color,modifier:Modifier=Modifier) {
@@ -111,7 +108,7 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
     }
 }
 
-@Composable private fun PlaylistSuggestions(list:LocalPlaylist,currentId:String?,player:DesktopPlayerConnection,prefs:Prefs,palette:ArtworkPalette,onSave:(Heard)->Unit) {
+@Composable private fun PlaylistSuggestions(list:LocalPlaylist,currentId:String?,player:DesktopPlayerConnection,prefs:Prefs,palette:ArtworkPalette,songActions:(Heard,String?)->List<ContextMenuItem>) {
     var round by remember(list.id){mutableIntStateOf(0)}
     val scope=rememberCoroutineScope()
     val suggestions by produceState<List<SongItem>?>(null,list.id,round) {
@@ -133,7 +130,7 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
         else if(suggestions!!.isEmpty())Text("No han llegado: prueba con «Otras».",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
         else suggestions!!.filter{it.id !in inList}.forEach { song ->
             val h=Heard(song.id,song.title,song.artists.joinToString{it.name},song.thumbnail,song.artists.firstOrNull()?.id)
-            PlaylistContextMenu(listOf(ContextMenuItem("Reproducir a continuación"){player.playNext(song)},ContextMenuItem("Guardar en…"){onSave(h)},ContextMenuItem("Descargar"){scope.launch{prefs.setDownloadSong(h,true)}})) {
+            PlaylistContextMenu(songActions(h,null)) {
                 Row(Modifier.fillMaxWidth().clickable{player.play(song)}.padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
                     LibraryArt(h.artwork,Modifier.size(48.dp));Column(Modifier.weight(1f)){Text(h.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(h.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1)}
                     if(h.id==currentId)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=palette.primary)

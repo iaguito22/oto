@@ -84,4 +84,12 @@ object Motion {
     fun <T> spatial() = spring<T>(dampingRatio = 0.78f, stiffness = 380f)
     fun <T> spatialFast() = spring<T>(dampingRatio = 0.72f, stiffness = Spring.StiffnessMedium)
     fun <T> effects() = spring<T>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+
+    /** Familia común de muelles con rebote: hover, pulsaciones, selectores y entradas. */
+    fun <T> hover() = spring<T>(dampingRatio = 0.6f, stiffness = 520f)
+    fun <T> press() = spring<T>(dampingRatio = 0.9f, stiffness = 1400f)
+    fun <T> release() = spring<T>(dampingRatio = 0.42f, stiffness = 600f)
+    fun <T> pop() = spring<T>(dampingRatio = 0.38f, stiffness = 520f)
+    fun <T> slide() = spring<T>(dampingRatio = 0.74f, stiffness = 260f)
+    fun <T> toggle() = spring<T>(dampingRatio = 0.6f, stiffness = 600f)
 }

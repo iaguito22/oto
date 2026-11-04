@@ -30,6 +30,68 @@ internal fun useSharpTaskbarIcons(window: Window) {
     if (System.getProperty("os.name").startsWith("Windows")) window.iconImages = taskbarIcons
 }
 
+private val isWindows = System.getProperty("os.name").startsWith("Windows")
+private fun hwnd(window: Window) = com.sun.jna.platform.win32.WinDef.HWND(Native.getWindowPointer(window))
+
+/**
+ * Coloca [window] justo debajo de [above] sin activarla. Window.toFront de AWT puede
+ * quitarle el primer plano a la ventana principal, y entonces Windows ya no la
+ * minimiza al volver a clicar su botón de la barra de tareas.
+ */
+internal fun placeBelowWithoutActivation(window: Window, above: Window): Boolean {
+    if (!isWindows || !window.isShowing || !above.isShowing) return false
+    return runCatching {
+        val user = com.sun.jna.platform.win32.User32.INSTANCE
+        // SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER
+        user.SetWindowPos(hwnd(window), hwnd(above), 0, 0, 0, 0, 0x0001 or 0x0002 or 0x0010 or 0x0200)
+    }.getOrDefault(false)
+}
+
+/** Restaura [window] de minimizada sin activarla y la deja debajo de [above]. */
+internal fun restoreBelowWithoutActivation(window: Window, above: Window): Boolean {
+    if (!isWindows || !window.isShowing) return false
+    return runCatching {
+        val target = hwnd(window)
+        if (((window as? java.awt.Frame)?.extendedState ?: 0) and java.awt.Frame.ICONIFIED != 0)
+            com.sun.jna.platform.win32.User32.INSTANCE.ShowWindow(target, 4) // SW_SHOWNOACTIVATE
+        placeBelowWithoutActivation(window, above)
+    }.getOrDefault(false)
+}
+
+private interface DeferUser32 : com.sun.jna.Library {
+    fun BeginDeferWindowPos(count: Int): Pointer?
+    fun DeferWindowPos(info: Pointer, window: com.sun.jna.platform.win32.WinDef.HWND, after: Pointer?, x: Int, y: Int, cx: Int, cy: Int, flags: Int): Pointer?
+    fun EndDeferWindowPos(info: Pointer): Boolean
+}
+private val deferUser by lazy { Native.load("user32", DeferUser32::class.java, com.sun.jna.win32.W32APIOptions.DEFAULT_OPTIONS) }
+
+/** Desplazamiento en píxeles físicos de una ventana, medido desde su posición de partida. */
+internal class NativeShift(val window: Window, val startX: Int, val startY: Int, val dx: Int, val dy: Int)
+
+internal fun nativeShift(window: Window, dxLogical: Int, dyLogical: Int): NativeShift? {
+    if (!isWindows || !window.isShowing) return null
+    return runCatching {
+        val rect = com.sun.jna.platform.win32.WinDef.RECT()
+        if (!com.sun.jna.platform.win32.User32.INSTANCE.GetWindowRect(hwnd(window), rect)) return null
+        val t = window.graphicsConfiguration.defaultTransform
+        NativeShift(window, rect.left, rect.top, Math.round(dxLogical * t.scaleX).toInt(), Math.round(dyLogical * t.scaleY).toInt())
+    }.getOrNull()
+}
+
+/**
+ * Mueve todas las ventanas en una sola operación de Windows (DeferWindowPos): el escritorio
+ * las recoloca juntas, sin repintar ni pasar por AWT/Compose en cada paso.
+ */
+internal fun applyNativeShift(shifts: List<NativeShift>, progress: Float): Boolean = runCatching {
+    var info = deferUser.BeginDeferWindowPos(shifts.size) ?: return false
+    for (s in shifts) {
+        // SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER
+        info = deferUser.DeferWindowPos(info, hwnd(s.window), null, s.startX + Math.round(s.dx * progress), s.startY + Math.round(s.dy * progress),
+            0, 0, 0x0001 or 0x0004 or 0x0010 or 0x0200) ?: return false
+    }
+    deferUser.EndDeferWindowPos(info)
+}.getOrDefault(false)
+
 /** The shell owns taskbar buttons; changing them must not hide or recreate AWT windows. */
 internal fun updateTaskbarEntry(window: Window, show: Boolean) {
     if (!System.getProperty("os.name").startsWith("Windows") || !window.isShowing) return

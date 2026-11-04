@@ -20,6 +20,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.VolumeDown
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.text.style.TextAlign
+import io.github.iaguito22.oto.desktop.ui.FineSlider
 import io.github.iaguito22.oto.desktop.ui.MobileIcons
 import io.github.iaguito22.oto.desktop.ui.OtoType
 import java.awt.EventQueue
@@ -32,9 +40,11 @@ import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import javax.imageio.ImageIO
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun OtoTray(toggle: () -> Unit, player: () -> Unit, library: () -> Unit, lyrics: () -> Unit, queue: () -> Unit, quit: () -> Unit,
-    playing: Boolean, hasSong: Boolean, previous: () -> Unit, playPause: () -> Unit, next: () -> Unit) {
+    playing: Boolean, hasSong: Boolean, previous: () -> Unit, playPause: () -> Unit, next: () -> Unit,
+    volume: Float, setVolume: (Float) -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     var position by remember { mutableStateOf(WindowPosition(0.dp,0.dp)) }
     val currentToggle by rememberUpdatedState(toggle)
@@ -50,7 +60,7 @@ internal fun OtoTray(toggle: () -> Unit, player: () -> Unit, library: () -> Unit
                             val point = MouseInfo.getPointerInfo().location
                             val area = desktopArea(point)
                             val x = (point.x-210).coerceIn(area.x,(area.x+area.width-220).coerceAtLeast(area.x))
-                            val y = (point.y-293).coerceIn(area.y,(area.y+area.height-293).coerceAtLeast(area.y))
+                            val y = (point.y-329).coerceIn(area.y,(area.y+area.height-329).coerceAtLeast(area.y))
                             EventQueue.invokeLater { position=WindowPosition(x.dp,y.dp);menuOpen=true }
                         } else if (e.button == MouseEvent.BUTTON1) EventQueue.invokeLater { currentToggle() }
                     }
@@ -61,7 +71,7 @@ internal fun OtoTray(toggle: () -> Unit, player: () -> Unit, library: () -> Unit
         onDispose { if(icon != null) tray?.remove(icon) }
     }
     if (menuOpen) {
-        val state = rememberWindowState(position=position,width=220.dp,height=293.dp)
+        val state = rememberWindowState(position=position,width=220.dp,height=329.dp)
         LaunchedEffect(position) { state.position=position }
         Window(onCloseRequest={menuOpen=false},state=state,title="Oto · Menú",undecorated=true,transparent=true,alwaysOnTop=true,
             onKeyEvent={ if(it.type==KeyEventType.KeyDown && it.key==Key.Escape) {menuOpen=false;true} else false }) {
@@ -85,6 +95,14 @@ internal fun OtoTray(toggle: () -> Unit, player: () -> Unit, library: () -> Unit
                         PlaybackButton(MobileIcons.skipPrevious,"Anterior",previous)
                         PlaybackButton(if(playing) MobileIcons.pause else MobileIcons.play,if(playing) "Pausar" else "Reproducir",playPause)
                         PlaybackButton(MobileIcons.skipNext,"Siguiente",next)
+                    }
+                    Row(Modifier.fillMaxWidth().height(36.dp).padding(horizontal=10.dp)
+                        .onPointerEvent(PointerEventType.Scroll) { e -> e.changes.firstOrNull()?.scrollDelta?.y?.let { if(it != 0f) setVolume(volume - it*.04f) } },
+                        verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                        Icon(when { volume <= 0f -> Icons.AutoMirrored.Rounded.VolumeOff; volume < .5f -> Icons.AutoMirrored.Rounded.VolumeDown; else -> Icons.AutoMirrored.Rounded.VolumeUp },
+                            "Volumen",Modifier.size(16.dp).clickable(interactionSource=null,indication=null) { setVolume(if(volume > 0f) 0f else .5f) },tint=Color.White.copy(alpha=.65f))
+                        FineSlider(volume,setVolume,Modifier.weight(1f),label="Volumen")
+                        Text("${(volume*100).toInt()}",Modifier.width(24.dp),style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),textAlign=TextAlign.End)
                     }
                     @Composable fun Entry(icon:ImageVector,label:String,action:()->Unit) {
                         val interaction=remember { MutableInteractionSource() }

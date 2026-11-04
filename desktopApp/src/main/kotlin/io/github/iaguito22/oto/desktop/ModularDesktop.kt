@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
+import androidx.compose.material.icons.outlined.PushPin as OutlinedPushPin
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -146,13 +147,16 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     val nowPlaying by player.state.collectAsState()
     val queue by player.queue.collectAsState()
     val ramSaver by prefs.ramSaver.collectAsState(initial = false)
-    LaunchedEffect(ramSaver) { ArtworkLoader.setRamSaver(ramSaver) }
+    LaunchedEffect(ramSaver) { RamSaver.apply(ramSaver) }
+    val nothingShown = windowsHidden || (!playerOpen && !menuOpen && !lyricsOpen && !queueOpen && !devicesOpen && savingTrack == null)
+    LaunchedEffect(ramSaver, nothingShown) { if (ramSaver && nothingShown) RamSaver.whileHidden() }
     val nextArtwork = if(ramSaver) emptyList() else queue.filter { it.index > nowPlaying.index }.take(2).mapNotNull { it.artwork }
     LaunchedEffect(nextArtwork) {
         nextArtwork.forEach { ArtworkLoader.load(it) }
     }
     val shuffle by player.shuffle.collectAsState()
     val loop by player.loop.collectAsState()
+    val loopMode by player.loopMode.collectAsState()
     val lyrics by player.lyrics.collectAsState()
     val lyricsLoading by player.lyricsLoading.collectAsState()
     val volume by player.volume.collectAsState()
@@ -252,13 +256,14 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     OtoTray(toggle={showOrHide()}, player={windowsHidden=false; playerOpen=true}, library={windowsHidden=false; menuOpen=true},
         lyrics={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; lyricsOpen=true},
         queue={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; queueOpen=true}, quit=quit,
-        playing=nowPlaying.playing, hasSong=nowPlaying.id != null, previous=player::previous, playPause=player::toggle, next=player::next)
+        playing=nowPlaying.playing, hasSong=nowPlaying.id != null, previous=player::previous, playPause=player::toggle, next=player::next,
+        volume=volume, setVolume=player::setVolume)
     ModuleWindow("Reproductor", playerWindow, playerOpen && !windowsHidden, { closePrimary(DockId.Player) }, pinned && playerSolo, accent = palette.primary, dock=docking, dockId=DockId.Player,
         keys = ::shortcuts, onWindow = { playerFrame = it }, immersive = true, chrome = chrome,
         minimum = if(form == PlayerForm.Vertical) DpSize(96.dp,240.dp) else if(form == PlayerForm.Horizontal) DpSize(280.dp,108.dp) else DpSize(260.dp,370.dp),
         backgroundArtwork = if(artworkBackground) backdrop else null, backgroundOpacity=backdropOpacity, actionsOnRight = form == PlayerForm.Horizontal, hover = {pointerInside = it}, extra = {
             WindowOptions(options,{options=it})
-            if(playerSolo && form != PlayerForm.Vertical) SmallAction(Icons.Rounded.PushPin, if(pinned) "Desfijar" else "Fijar sobre otras ventanas", active=pinned) { pinned = !pinned;kv.putString("pinned",pinned.toString()) }
+            if(playerSolo && form != PlayerForm.Vertical) PinAction(pinned) { pinned = !pinned;kv.putString("pinned",pinned.toString()) }
         }) {
         @Composable fun PlayerContents() {
         val quality by player.currentQuality.collectAsState()
@@ -269,11 +274,15 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             {nowPlaying.id?.let{openSave(Heard(it,nowPlaying.title,nowPlaying.artist,nowPlaying.artwork), "reproductor")}}, source, {
                 val src=source; if(src?.item != null || src?.local != null) { jump=LibraryJump(jump.version+1,src?.item,src?.local);menuOpen=true } else if(src?.kind != "DJ") queueOpen=true
             }, {id,name -> jump=LibraryJump(jump.version+1,artistId=id,artistName=name);menuOpen=true},
-            qualityLabel = qualityLabel, verticalPin = if(playerSolo && form==PlayerForm.Vertical) ({
-                HoverAction(Icons.Rounded.PushPin,if(pinned) "Desfijar" else "Fijar sobre otras ventanas",enabled=chrome,
+            qualityLabel = qualityLabel,
+            shuffle = shuffle, loopMode = loopMode, onShuffle = { player.setShuffle(!shuffle) },
+            onLoop = { player.setLoop(when(loopMode) { io.github.iaguito22.oto.LoopMode.Off -> io.github.iaguito22.oto.LoopMode.All
+                io.github.iaguito22.oto.LoopMode.All -> io.github.iaguito22.oto.LoopMode.One
+                io.github.iaguito22.oto.LoopMode.One -> io.github.iaguito22.oto.LoopMode.Off }) },
+            verticalPin =if(playerSolo && form==PlayerForm.Vertical) ({
+                HoverAction(pinIcon(pinned),if(pinned) "Desfijar" else "Fijar sobre otras ventanas",enabled=chrome,
                     onClick={pinned=!pinned;kv.putString("pinned",pinned.toString())},
-                    tint=if(pinned)palette.primary else Color.White.copy(alpha=.45f),size=28.dp,
-                    modifier=if(pinned) Modifier.background(palette.primary.copy(alpha=.25f),RoundedCornerShape(9.dp)) else Modifier)
+                    tint=pinTint(pinned),size=28.dp)
             }) else null)
         }
         PlayerContents()
@@ -305,15 +314,14 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         }
     }
     ModuleWindow("Cola", queueWindow, queueOpen && !windowsHidden, { queueOpen = false }, dock=docking, dockId=DockId.Queue, keys = ::shortcuts, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity) {
-        Box(Modifier.fillMaxSize().padding(start=20.dp,end=20.dp,bottom=20.dp,top=4.dp)) { QueuePane(queue, nowPlaying.id, shuffle, loop, palette, { player.setShuffle(!shuffle) }, { player.setLoop(!loop) }, player::move, player::remove, player::clearQueue, player::skipTo, currentIndex = nowPlaying.index) }
+        Box(Modifier.fillMaxSize().padding(start=20.dp,end=20.dp,bottom=20.dp,top=4.dp)) { QueuePane(queue, nowPlaying.id, shuffle, loop, palette, { player.setShuffle(!shuffle) }, { player.cycleLoop() }, player::move, player::remove, player::clearQueue, player::skipTo, currentIndex = nowPlaying.index, loopMode = loopMode) }
     }
     ModuleWindow("Tu música", libraryWindow, menuOpen && !windowsHidden, {closePrimary(DockId.Library)}, dock=docking, dockId=DockId.Library, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity,
         extra={
-            SmallAction(Icons.Rounded.PlayArrow,"Reproductor") { docking.toggle(DockId.Player,DockId.Library) }
-            SmallAction(MobileIcons.lyrics,"Letra") { docking.toggle(DockId.Lyrics,DockId.Library) }
-            SmallAction(MobileIcons.queueMusic,"Cola") { docking.toggle(DockId.Queue,DockId.Library) }
-        }, keys={event -> if(librarySearchFocused && event.key==Key.Spacebar) false else shortcuts(event)}) {
-        LibrarySpace(player,prefs,menu,importer,account,cloud,login,downloads,palette,{openSave(it, "biblioteca")},{devicesOpen=true},libraryRequest,jump,artworkBackground,{ artworkBackground=it;kv.putString("artwork_background",it.toString()) },{librarySearchFocused=it},{ devices.requestAccount(); devicesOpen=true }, backdrop != null, backdropOpacity,{backdropOpacity=it;kv.putString("artwork_opacity",it.toString())}, { val src=source; if(src?.item != null || src?.local != null) jump=LibraryJump(jump.version+1,src?.item,src?.local) else if(src?.kind != "DJ") queueOpen=true }, shortcut,shortcutIssue,{shortcut=it;kv.putString("shortcut",it)})
+            SmallAction(Icons.Rounded.PlayArrow,if(playerOpen) "Cerrar reproductor" else "Abrir reproductor",active=playerOpen) { docking.toggle(DockId.Player,DockId.Library) }
+            SmallAction(MobileIcons.lyrics,if(lyricsOpen) "Cerrar letra" else "Abrir letra",active=lyricsOpen) { docking.toggle(DockId.Lyrics,DockId.Library) }
+            SmallAction(MobileIcons.queueMusic,if(queueOpen) "Cerrar cola" else "Abrir cola",active=queueOpen) { docking.toggle(DockId.Queue,DockId.Library) }        },keys={event -> if(librarySearchFocused && event.key==Key.Spacebar) false else shortcuts(event)}) {
+        LibrarySpace(player,prefs,menu,importer,account,cloud,login,downloads,palette,{openSave(it, "biblioteca")},{devicesOpen=true},libraryRequest,jump,artworkBackground,{ artworkBackground=it;kv.putString("artwork_background",it.toString()) },{librarySearchFocused=it},{ devices.requestAccount(); devicesOpen=true }, backdrop != null, backdropOpacity,{backdropOpacity=it;kv.putString("artwork_opacity",it.toString())}, { val src=source; if(src?.item != null || src?.local != null) jump=LibraryJump(jump.version+1,src?.item,src?.local) else if(src?.kind != "DJ") queueOpen=true }, shortcut,shortcutIssue,{shortcut=it;kv.putString("shortcut",it)},playerVisible=playerOpen,remoteLink=devices.link)
     }
     ModuleWindow("Guardar",rememberModuleState("save",380,540),savingTrack!=null && !windowsHidden,{savingTrack=null}) {
         savingTrack?.let { SaveSpace(it,prefs,palette) }
@@ -356,6 +364,21 @@ private fun rememberModuleState(id: String, w: Int, h: Int): WindowState {
     return state
 }
 
+/** Como el corazón de Me gusta: hueca al estar suelta, rellena al fijarla, sin recuadro. */
+private fun pinIcon(pinned: Boolean): ImageVector = if(pinned) Icons.Rounded.PushPin else Icons.Outlined.OutlinedPushPin
+private fun pinTint(pinned: Boolean) = Color.White.copy(alpha=if(pinned) .95f else .55f)
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun PinAction(pinned: Boolean, onClick: () -> Unit) {
+    val label = if(pinned) "Desfijar" else "Fijar sobre otras ventanas"
+    key(LocalWindowTooltipEpoch.current) {
+        TooltipArea(tooltip = { Surface(color = Color(0xFF30362F), shape = RoundedCornerShape(8.dp)) { Text(label, Modifier.padding(8.dp), style = OtoType.rowSub) } }) {
+            HoverAction(pinIcon(pinned),label,onClick=onClick,size=LocalWindowActionSize.current,tint=pinTint(pinned))
+        }
+    }
+}
+
 private val LocalWindowActionSize = staticCompositionLocalOf { 36.dp }
 internal val LocalWindowTooltipEpoch = staticCompositionLocalOf { 0 }
 
@@ -364,7 +387,9 @@ internal val LocalWindowTooltipEpoch = staticCompositionLocalOf { 0 }
 private fun SmallAction(icon: ImageVector, label: String, active:Boolean=false, onClick: () -> Unit) {
     key(LocalWindowTooltipEpoch.current) {
         TooltipArea(tooltip = { Surface(color = Color(0xFF30362F), shape = RoundedCornerShape(8.dp)) { Text(label, Modifier.padding(8.dp), style = OtoType.rowSub) } }) {
-            HoverAction(icon,label,onClick=onClick,size=LocalWindowActionSize.current,tint=if(active) MaterialTheme.colorScheme.primary else Color.White.copy(alpha=.45f),modifier=if(active) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha=.25f),RoundedCornerShape(9.dp)) else Modifier)
+            // Abierto: el icono se ve más claro, sin recuadro.
+            val on by animateFloatAsState(if(active) 1f else 0f, tween(180), label="activo")
+            HoverAction(icon,label,onClick=onClick,size=LocalWindowActionSize.current,tint=Color.White.copy(alpha=.45f+.47f*on))
         }
     }
 }
@@ -408,6 +433,7 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
     key(dockId ?: title) {
     Window(onCloseRequest = close, state = windowState, visible = true, title = "Oto · $title", undecorated = true, transparent = true, alwaysOnTop = pinned,
         icon = painterResource("oto-icon.png"), onKeyEvent = { if (keys(it)) true else if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { close(); true } else false }) {
+        SmoothWheel.Driver(window)
         val reveal = remember { Animatable(0f) }
         var warming by remember { mutableStateOf(visible) }
         val warmAlpha=remember { mutableFloatStateOf(.01f) }
@@ -435,13 +461,17 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
                     previous = now
                 } while (previous - started < 1_200_000_000L &&
                     (previous - started < 150_000_000L || stableFrames < 3))
+                // Si el conjunto se está apartando para hacerle sitio, entrar cuando termine.
+                if (dock != null && dockId != null) dock.startPendingShift(dockId)
+                while (dock != null && System.nanoTime() < dock.shiftEndsAt) withFrameNanos { }
             }
             warming=false
             val timings = if (System.getenv("OTO_MOTION_TRACE") == "1") mutableListOf<Double>() else null
             var previousFrame = System.nanoTime()
             val animationStarted=System.currentTimeMillis()
             reveal.animateTo(if (visible) 1f else 0f,
-                if (visible) spring(dampingRatio=.76f,stiffness=190f) else tween(330,easing=CubicBezierEasing(.4f,0f,1f,1f))) {
+                // Entrada con rebote; salida con un leve impulso previo (ease-in-back) hacia el mismo lado.
+                if (visible) spring(dampingRatio=.7f,stiffness=210f) else tween(300,easing=CubicBezierEasing(.42f,0f,.72f,-.32f))) {
                 if (timings != null) {
                     val now = System.nanoTime()
                     timings.add((now - previousFrame) / 1e6)
@@ -496,12 +526,16 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
                 // Un alfa no nulo y un cambio mínimo de matriz ejercitan el renderizado
                 // y los cálculos de posición antes de la transición visible.
                 val preparingStep=if(warming && warmAlpha.floatValue>.01f) 1f else 0f
-                alpha=if(warming) warmAlpha.floatValue else if(side == 0) reveal.value.coerceIn(0f,1f) else 1f
+                val r=reveal.value
+                // Las ventanas del conjunto salen deslizándose desde el borde del reproductor.
+                // Solo traslación, sin alfa ni escala: con alfa, toda la ventana se componía en
+                // un búfer aparte en cada fotograma y la animación perdía fluidez.
+                alpha=if(warming) warmAlpha.floatValue else if(side == 0) r.coerceIn(0f,1f) else 1f
                 transformOrigin=TransformOrigin(if(side < 0) 1f else if(side > 0) 0f else .5f,.5f)
-                scaleX=if(warming) 1f-preparingStep*.0001f else if(side == 0) .92f + .08f*reveal.value else 1f
-                scaleY=if(warming) 1f-preparingStep*.0001f else if(side == 0) .96f + .04f*reveal.value else 1f
-                translationX=if(warming) preparingStep*.25f else -side*size.width*(1f-reveal.value)
-                translationY=if(warming) 0f else if(side == 0) 20.dp.toPx()*(1f-reveal.value) else 0f
+                scaleX=if(warming) 1f-preparingStep*.0001f else if(side == 0) .92f + .08f*r else 1f
+                scaleY=if(warming) 1f-preparingStep*.0001f else if(side == 0) .96f + .04f*r else 1f
+                translationX=if(warming) preparingStep*.25f else -side*size.width*(1f-r).coerceAtLeast(-.04f)
+                translationY=if(warming) 0f else if(side == 0) 20.dp.toPx()*(1f-r) else 0f
             }.drawWithContent {
                 WindowWorkTrace.measure("$title/draw") { drawContent() }
                 firstDraw.compareAndSet(0L,System.nanoTime())

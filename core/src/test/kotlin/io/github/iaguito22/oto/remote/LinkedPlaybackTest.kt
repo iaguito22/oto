@@ -26,6 +26,27 @@ class LinkedPlaybackTest {
         override fun addToQueue(song:JSONObject,next:Boolean){added=song;nextAdded=next}
         override fun volume(value:Float){}
     }
+    @Test fun remoteNowReadsSnapshotAndIgnoresEmptySongs() {
+        assertNull(RemoteNow.of(null))
+        assertNull(RemoteNow.of(JSONObject().put("id", JSONObject.NULL)))
+        val now = RemoteNow.of(JSONObject().put("id","a").put("title","T").put("artist","A").put("artwork",JSONObject.NULL).put("playing",true))!!
+        assertEquals(RemoteNow("a","T","A",null,true,false), now)
+    }
+    @Test fun followingRemoteSticksAfterPausingThereAndYieldsToLocalPlayback() {
+        val playing = RemoteNow("a","T","A",null,true,false)
+        val paused = playing.copy(playing=false)
+        // Suena allí y aquí no: se muestra lo de allí.
+        assertTrue(RemoteNow.follow(false, localHasSong=true, localPlaying=false, remote=playing))
+        // Pausado allí desde aquí: se queda, para poder reanudarlo.
+        assertTrue(RemoteNow.follow(true, localHasSong=true, localPlaying=false, remote=paused))
+        // Ambos en pausa sin haberlo seguido: manda lo local.
+        assertFalse(RemoteNow.follow(false, localHasSong=true, localPlaying=false, remote=paused))
+        // Sin nada local, se muestra lo de allí aunque esté en pausa.
+        assertTrue(RemoteNow.follow(false, localHasSong=false, localPlaying=false, remote=paused))
+        // En cuanto suena aquí, o se desconecta, vuelve lo local.
+        assertFalse(RemoteNow.follow(true, localHasSong=true, localPlaying=true, remote=playing))
+        assertFalse(RemoteNow.follow(true, localHasSong=true, localPlaying=false, remote=null))
+    }
     @Test fun transferPreservesPausedStateAndPosition(): Unit=runBlocking {
         val player=Player()
         val state=JSONObject().put("id","song").put("position",37000).put("playing",false).put("loop",true).put("queue",JSONArray().put(JSONObject().put("id","song")))

@@ -34,7 +34,7 @@ class DevicesActivity : ComponentActivity() {
             val syncNotice by devices.syncNotice.collectAsState()
             val syncIssue by devices.syncIssue.collectAsState()
             val remote by devices.link.remote.collectAsState()
-            val local by (application as OtoApp).player.state.collectAsState()
+            val local by (application as OtoApp).player.localState.collectAsState()
             val scope=rememberCoroutineScope()
             var error by remember { mutableStateOf<String?>(null) }
             var busy by remember { mutableStateOf(false) }
@@ -46,7 +46,8 @@ class DevicesActivity : ComponentActivity() {
             fun action(block:suspend ()->Unit) {
                 if(busy) return
                 busy=true; error=null; result=null
-                scope.launch {
+                // En la app, no en la pantalla: salir de Dispositivos no corta una transferencia a medias.
+                (application as OtoApp).scope.launch(kotlinx.coroutines.Dispatchers.Main) {
                     try { block() } catch(e:Exception) { if(e is kotlinx.coroutines.CancellationException) throw e; error=e.message ?: "No se pudo completar la acción" }
                     finally { busy=false }
                 }

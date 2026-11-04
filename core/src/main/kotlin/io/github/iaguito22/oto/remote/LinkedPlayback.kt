@@ -21,6 +21,30 @@ interface LinkPlayer {
     suspend fun like()
     fun replace(state: JSONObject)
     fun setPlaying(on: Boolean)
+    /** Empieza la mezcla del DJ en este dispositivo. */
+    fun dj() {}
+}
+
+/** Lo que suena en el otro dispositivo, leído de su estado periódico. */
+data class RemoteNow(val id: String, val title: String, val artist: String, val artwork: String?, val playing: Boolean, val buffering: Boolean) {
+    companion object {
+        fun of(state: JSONObject?): RemoteNow? {
+            state ?: return null
+            val id = state.optString("id").takeUnless { it.isBlank() || it == "null" } ?: return null
+            fun text(key: String) = state.optString(key).takeUnless { it == "null" }.orEmpty()
+            return RemoteNow(id, text("title"), text("artist"), text("artwork").ifBlank { null }, state.optBoolean("playing"), state.optBoolean("buffering"))
+        }
+
+        /**
+         * Si el reproductor local debe mostrar y controlar lo del otro dispositivo.
+         * Se mantiene tras pausar allí, para poder reanudarlo; lo local manda en cuanto suena.
+         */
+        fun follow(previous: Boolean, localHasSong: Boolean, localPlaying: Boolean, remote: RemoteNow?): Boolean = when {
+            remote == null || localPlaying -> false
+            remote.playing || !localHasSong -> true
+            else -> previous
+        }
+    }
 }
 
 /** Las órdenes se ejecutan en el hilo de UI de la plataforma. */
@@ -44,6 +68,7 @@ class LinkedPlayback(private val player: LinkPlayer) {
             }
             "volume" -> player.volume(message.getDouble("value").toFloat().coerceIn(0f, 1f))
             "pause" -> player.setPlaying(false)
+            "dj" -> player.dj()
             "transfer" -> {
                 val state = message.getJSONObject("state")
                 require(state.getJSONArray("queue").length() in 1..10000)

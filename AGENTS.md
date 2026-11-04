@@ -288,3 +288,24 @@ Cada tanda incluye un arranque en frío y cinco reaperturas. JFR activo en todas
 - Iago autorizó explícitamente subir TODO al repo, arreglar ramas y crear releases Windows/Ubuntu/Arch/Android. Todo el código acumulado quedó en a63c409; `main` se adelantó conservando historial, con correcciones posteriores. Se amplió remote.origin.fetch a todas las ramas; el clon solo seguía feat/prueba-acoplamiento. Un intento inicial de crear tracking para origin/main falló y dejó su árbol antiguo en índice; se comprobó que coincidía EXACTAMENTE con el tree de origin/main y se recuperó HEAD confirmado sin pérdida de cambios. Rama canónica main. No forzar ramas; sincronizar rama antigua por fast-forward al terminar.
 - Release v1.2.3 preparada como BORRADOR con MSI, DEB, Arch, APKphone y SHA256SUMS. Actualizar etiqueta del borrador al commit probado antes de publicarla: no dejarla apuntando al primer empaquetado anterior a la corrección DPI. No reescribir etiquetas ya publicadas.
 - Capturas originales, perfiles, herramientas descargadas, keystores y logs permanecen FUERA del repo. prompt.md ahora es guía pública de continuidad en main; la petición privada antigua está preservada en `.../quier/work/prompt-key-transfer-private.md`. Direcciones IP locales retiradas de las notas públicas.
+
+## Rueda suave y ahorro RAM agresivo — 04/11/2026 (instalado, sin commit)
+
+- `SmoothWheel.kt`: EventQueue propia retiene las muescas enteras de la rueda y las reparte en pasos fraccionarios por fotograma (τ 62 ms). Compose los trata como panel táctil. Touchpad, páginas y Ctrl/Alt pasan intactos. Driver en cada ModuleWindow; la bandeja no se registra.
+- `RamSaver.kt`: con ahorro, caché carátulas 3 MiB/32 entradas, Skia 4 MiB recursos y 0,5 MiB fuentes, Min/MaxHeapFreeRatio 5/15 y G1PeriodicGCInterval 20 s. Con todo oculto: limpia carátulas y Skia, System.gc y EmptyWorkingSet cada 2 min. Requiere el módulo `jdk.management` en el runtime (añadido).
+- A/B con perfiles aislados `q-x20/work/ram-{off1,off3,on1,on2}` (sin cuenta ni reproducción, biblioteca+bienvenida): visible 427→371 MB residente (−13 %), privada 527→482; oculto residente 384→62 MB, privada 421→360. El residente oculto baja por el recorte; esas páginas vuelven al usarse. Sin probar con tres ventanas y audio.
+- Script: `ram-ab.ps1` en el scratchpad de la sesión; lanzarlo en un `powershell` nuevo cada vez porque modifica APPDATA/LOCALAPPDATA.
+
+## Lo que suena en el otro dispositivo — 04/11/2026 (instalado en PC y móvil, sin commit)
+
+- `RemoteNow` (core, LinkedPlayback.kt) lee el estado remoto y `follow()` decide si seguirlo: suena allí y aquí no, o aquí no hay nada; se mantiene tras pausar allí; lo local manda en cuanto suena o al desconectar. Pruebas en LinkedPlaybackTest.
+- Móvil, modo tipo Connect: `PlayerConnection.Mirror`/`showRemote`/`hideRemote`. Siguiendo al PC, state/cola/aleatorio/bucle/origen/posición mostrados son los del PC y TODAS las órdenes de la interfaz se le envían; lo que se pone nuevo (play/listas) se monta aquí en pausa y se pasa entero con «transfer»; DJ con orden «dj». `localState`/`localSource`/… y `here {}` son siempre del teléfono: los usa MobileConnection.adapter (órdenes que llegan del PC) y Dispositivos. `MobileConnection.following` decide y alimenta el espejo. «Traer aquí» suelta el seguimiento aunque llegue en pausa.
+- Píldora arriba (IslaScreen.RemoteBanner) SIN botones por petición de Iago: se controla con la gota; tocarla abre Dispositivos. Calidad de audio oculta en espejo. Crash corregido: el padding del hueco de la píldora rebotaba a negativo al desaparecer.
+- PC (LibrarySpace): el mini reproductor muestra y controla lo del móvil. El PC no hace espejo completo (lo nuevo puesto en el PC suena en el PC).
+- Probado con el Nothing real y el PC habitual: siguiente, pausa/reanudar, seek (1:52 vs 1:53), elegir canción en el móvil → suena en el PC (pantalla del PC verificada) y el móvil no suena, Traer aquí (también saliendo de Dispositivos), gota local tras traer. Cola habitual 58/índice17/177107 ms restaurada con `.linktest` (detenida). El PC quedó en pausa con canciones de prueba.
+
+## APK pública 1.2.3 — 04/11/2026
+
+- Iago aportó la firma de publicación en ../tools/signing/oto-firma; no compartir ni subir sus archivos. Se configuró local.properties y se compiló :app:assembleRelease con éxito (incluido lint vital).
+- APK pública Oto-1.2.3-android.apk publicada en v1.2.3; paquete io.github.iaguito22.oto, versionCode 13, certificado SHA-256 4043c8f48bbd633dec99cd9c2ce370e7a89a176a2d0fd69f398f3276f9749cb4, igual a las APK públicas 1.2.0 y 1.2.2. SHA-256 de la APK b5052dbc2fc10f9373d1bbca5dafd0df25b90a4843e332a83c0ba18e297663ff. Se mantienen la variante personal phone y sus notas de compatibilidad; SHA256SUMS actualizado. No se instaló en ningún móvil.
+

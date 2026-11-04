@@ -12,10 +12,12 @@ internal class ArtworkCache<V>(private var maxBytes:Long,private val sizeOf:(V)-
         if(weight<=maxBytes) { entries[key]=value;bytes+=weight }
         trim()
     }
-    @Synchronized fun resize(limit:Long) { require(limit>0);maxBytes=limit;trim() }
+    private var maxEntries=96
+    @Synchronized fun resize(limit:Long,entryLimit:Int=96) { require(limit>0 && entryLimit>0);maxBytes=limit;maxEntries=entryLimit;trim() }
+    @Synchronized fun clear() { entries.clear();bytes=0L }
     private fun trim() {
         val iterator=entries.entries.iterator()
-        while((bytes>maxBytes || entries.size>96) && iterator.hasNext()) {
+        while((bytes>maxBytes || entries.size>maxEntries) && iterator.hasNext()) {
             bytes-=sizeOf(iterator.next().value);iterator.remove()
         }
     }

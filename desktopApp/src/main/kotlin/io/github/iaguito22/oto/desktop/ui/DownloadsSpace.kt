@@ -22,7 +22,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-internal fun DownloadsSpace(player:DesktopPlayerConnection,prefs:Prefs,downloads:DesktopDownloads,palette:ArtworkPalette,currentId:String?,onOpen:(String)->Unit,onSave:(Heard)->Unit,workScope:CoroutineScope) {
+internal fun DownloadsSpace(player:DesktopPlayerConnection,prefs:Prefs,downloads:DesktopDownloads,palette:ArtworkPalette,currentId:String?,onOpen:(String)->Unit,onSave:(Heard)->Unit,workScope:CoroutineScope,onArtist:((String,String)->Unit)?=null) {
+    val songActions=rememberSongActions(player,prefs,onSave,onArtist)
     val wanted by prefs.downloadLists.collectAsState(initial=emptySet())
     val singles by prefs.downloadSongs.collectAsState(initial=emptyList())
     val playlists by prefs.playlists.collectAsState(initial=emptyList())
@@ -38,7 +39,7 @@ internal fun DownloadsSpace(player:DesktopPlayerConnection,prefs:Prefs,downloads
     val all=(lists.flatMap{it.songs}+songs).distinctBy{it.id}.filter{entries[it.id]?.state==DesktopDownloads.State.Done}
     val totalBytes by produceState(0L,entries){value=withContext(Dispatchers.IO){downloads.bytes()}}
     val pending=entries.values.count{it.state==DesktopDownloads.State.Queued||it.state==DesktopDownloads.State.Downloading}
-    var shuffle by remember {mutableStateOf(false)}
+    val shuffle=rememberListShuffle(player,DOWNLOADS_ID)
     fun removeList(list:LocalPlaylist) {val key="list:${list.id}";if(key in hidden)return;hidden.add(key);workScope.launch{val result=withTimeoutOrNull(6000){snackbar.showSnackbar("Descarga de «${list.name}» quitada","Deshacer")};if(result!=SnackbarResult.ActionPerformed)prefs.setDownloadList(list.id,false);hidden.remove(key)}}
     fun removeSong(song:Heard) {val key="song:${song.id}";if(key in hidden)return;hidden.add(key);workScope.launch{val result=withTimeoutOrNull(6000){snackbar.showSnackbar("Descarga de «${song.title}» quitada","Deshacer")};if(result!=SnackbarResult.ActionPerformed)prefs.setDownloadSong(song,false);hidden.remove(key)}}
     Box(Modifier.fillMaxSize()) {
@@ -48,8 +49,8 @@ internal fun DownloadsSpace(player:DesktopPlayerConnection,prefs:Prefs,downloads
                     Mp3ExportControls(downloads)
                     if(lists.isNotEmpty()||songs.isNotEmpty())Text(buildString {append("Suenan sin conexión. ${all.size} canciones");if(totalBytes>0)append(" · ${formatBytes(totalBytes)}");if(pending>0)append(" · bajando $pending")},style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
                     if(all.isNotEmpty())Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                        Button(onClick={player.setShuffle(shuffle);player.playLocal(LocalPlaylist(DOWNLOADS_ID,"Tus descargas",all),null,false)},colors=ButtonDefaults.buttonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))){Text("Reproducir todo",fontWeight=FontWeight.SemiBold)}
-                        HoverAction(MobileIcons.shuffle,if(shuffle)"Desactivar aleatorio" else "Activar aleatorio",onClick={shuffle=!shuffle;if(player.source.value?.local==DOWNLOADS_ID)player.setShuffle(shuffle)},tint=if(shuffle)palette.primary else Color.White.copy(alpha=.55f))
+                        Button(onClick={player.playLocal(LocalPlaylist(DOWNLOADS_ID,"Tus descargas",all),null,false)},colors=ButtonDefaults.buttonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))){Text("Reproducir todo",fontWeight=FontWeight.SemiBold)}
+                        HoverAction(MobileIcons.shuffle,if(shuffle)"Desactivar aleatorio" else "Activar aleatorio",onClick={player.setShuffle(!shuffle,DOWNLOADS_ID)},tint=if(shuffle)palette.primary else Color.White.copy(alpha=.55f))
                     }
                 }
             }
@@ -71,7 +72,7 @@ internal fun DownloadsSpace(player:DesktopPlayerConnection,prefs:Prefs,downloads
             if(songs.isNotEmpty())item(key="songsTitle"){Text("CANCIONES",Modifier.padding(top=12.dp,bottom=6.dp),style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))}
             items(songs,key={"s:${it.id}"}) {song ->
                 val entry=entries[song.id]
-                PlaylistContextMenu(listOf(ContextMenuItem("Guardar en…"){onSave(song)},ContextMenuItem("Reproducir a continuación"){player.playNext(song.toSong())})) {
+                PlaylistContextMenu(songActions(song,null)) {
                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable{player.play(song.toSong())}.padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
                         LibraryArt(song.artwork,Modifier.size(48.dp));Column(Modifier.weight(1f)){Text(song.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(song.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)}
                         if(entry?.state==DesktopDownloads.State.Done)Icon(MobileIcons.downloadDone,"Descargada",Modifier.size(16.dp),tint=palette.primary)

@@ -23,15 +23,14 @@ import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 
 @Composable
-internal fun ArtistSpace(page:Page.Remote,currentId:String?,player:DesktopPlayerConnection,prefs:Prefs,palette:ArtworkPalette,onSave:(Heard)->Unit,onBack:()->Unit,onOpen:(YTItem)->Unit) {
+internal fun ArtistSpace(page:Page.Remote,currentId:String?,player:DesktopPlayerConnection,prefs:Prefs,palette:ArtworkPalette,onSave:(Heard)->Unit,onBack:()->Unit,onOpen:(YTItem)->Unit,onArtist:(String,String)->Unit={_,_->}) {
     val songs=page.songs
+    val songActions=rememberSongActions(player,prefs,onSave,onArtist,here=page.item.id)
     val scope=rememberCoroutineScope()
-    val globalShuffle by player.shuffle.collectAsState()
-    val kv=remember{OtoDirs.keyValue("desktop_list_modes")}
-    var shuffle by remember(page.item.id){mutableStateOf(kv.getString(page.item.id)?.toBooleanStrictOrNull() ?: globalShuffle)}
+    val shuffle=rememberListShuffle(player,page.item.id)
     val downloaded by prefs.downloadSongs.collectAsState(initial=emptyList())
     fun play(index:Int?) { if(songs!=null && songs.isNotEmpty()) {
-        player.setShuffle(shuffle);player.playAll(songs,index,page.item)
+        player.playAll(songs,index,page.item)
         val artist=page.item as? ArtistItem ?: return
         val albums=page.shelves.flatMap{it.items}.filterIsInstance<AlbumItem>()
         scope.launch { val more=ArtistTracks.more(artist,songs,albums);player.appendArtistTracks(artist.id,more) }
@@ -51,7 +50,7 @@ internal fun ArtistSpace(page:Page.Remote,currentId:String?,player:DesktopPlayer
                         if(!page.sub.isNullOrBlank())Text(page.sub!!,style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),maxLines=1)
                         if(!songs.isNullOrEmpty()) Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                             Button(onClick={play(null)},colors=ButtonDefaults.buttonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))){Text("Reproducir",fontWeight=FontWeight.SemiBold)}
-                            HoverAction(MobileIcons.shuffle,if(shuffle)"Desactivar aleatorio" else "Activar aleatorio",onClick={shuffle=!shuffle;kv.putString(page.item.id,shuffle.toString());if(player.source.value?.item?.id==page.item.id)player.setShuffle(shuffle)},tint=if(shuffle)palette.primary else Color.White.copy(alpha=.55f))
+                            HoverAction(MobileIcons.shuffle,if(shuffle)"Desactivar aleatorio" else "Activar aleatorio",onClick={player.setShuffle(!shuffle,page.item.id)},tint=if(shuffle)palette.primary else Color.White.copy(alpha=.55f))
                         }
                     }
                 }
@@ -63,17 +62,13 @@ internal fun ArtistSpace(page:Page.Remote,currentId:String?,player:DesktopPlayer
             else -> {
                 if(songs.isNotEmpty()) item {Text("Destacadas",Modifier.padding(top=8.dp,bottom=8.dp),style=OtoType.section)}
                 itemsIndexed(songs.take(5),key={i,s->"top:${s.id}:$i"}) {i,song ->
-                    val h=song.toHeard();var open by remember(song.id){mutableStateOf(false)}
-                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {play(i)}.padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
-                        LibraryArt(h.artwork,Modifier.size(48.dp));Column(Modifier.weight(1f)){Text(h.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(h.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)}
-                        if(h.id==currentId)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=palette.primary)
-                        Box {HoverAction(MobileIcons.moreHoriz,"Opciones de ${h.title}",onClick={open=true});LibraryDropdownMenu(open,{open=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(230.dp)) {
-                            @Composable fun Action(label:String,click:()->Unit){DropdownMenuItem(text={Text(label,style=OtoType.rowSub)},onClick={open=false;click()})}
-                            Action("Reproducir a continuación"){player.playNext(song)}
-                            Action("Guardar en…"){onSave(h)}
-                            Action(if(downloaded.any{it.id==h.id})"Quitar la descarga" else "Descargar"){scope.launch{prefs.setDownloadSong(h,downloaded.none{it.id==h.id})}}
-                            Action("Copiar enlace"){runCatching{Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection("https://music.youtube.com/watch?v=${h.id}"),null)}}
-                        }}
+                    val h=song.toHeard();val actions=songActions(h,null)
+                    PlaylistContextMenu(actions) {
+                        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {play(i)}.padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
+                            LibraryArt(h.artwork,Modifier.size(48.dp));Column(Modifier.weight(1f)){Text(h.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(h.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)}
+                            if(h.id==currentId)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=palette.primary)
+                            SongMenuButton(h.title,actions)
+                        }
                     }
                 }
                 page.shelves.forEachIndexed { index,shelf -> item(key="shelf:$index") {
