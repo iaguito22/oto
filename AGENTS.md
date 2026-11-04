@@ -1,6 +1,6 @@
 # Oto — continuidad después de /clear
 
-Actualizado: 03/11/2026, cierre de la release 1.2.3. Actualizar este archivo después de cambios importantes o antes de un /clear. Distinguir implementado, probado, instalado y publicado.
+Actualizado: 04/11/2026, release 2.0.0 publicada (ver «Release 2.0.0»). Actualizar este archivo después de cambios importantes o antes de un /clear. Distinguir implementado, probado, instalado y publicado.
 
 ## Punto de partida
 
@@ -296,7 +296,14 @@ Cada tanda incluye un arranque en frío y cinco reaperturas. JFR activo en todas
 - A/B con perfiles aislados `q-x20/work/ram-{off1,off3,on1,on2}` (sin cuenta ni reproducción, biblioteca+bienvenida): visible 427→371 MB residente (−13 %), privada 527→482; oculto residente 384→62 MB, privada 421→360. El residente oculto baja por el recorte; esas páginas vuelven al usarse. Sin probar con tres ventanas y audio.
 - Script: `ram-ab.ps1` en el scratchpad de la sesión; lanzarlo en un `powershell` nuevo cada vez porque modifica APPDATA/LOCALAPPDATA.
 
-## Lo que suena en el otro dispositivo — 04/11/2026 (instalado en PC y móvil, sin commit)
+## Release 2.0.0 — 04/11/2026 (publicada)
+
+- Todo fusionado en `main` (merge 2c64f3c de `feat/pc-como-movil`); `feat/prueba-acoplamiento` avanzada por fast-forward; las tres ramas subidas. Etiqueta v2.0.0 → 2c64f3c.
+- https://github.com/iaguito22/oto/releases/tag/v2.0.0 (Latest): MSI, DEB, Arch, APK pública (`io.github.iaguito22.oto`, firma 4043c8…) y APK phone (`.debug`, firma 717d8f…), ambas versionCode 14, y SHA256SUMS. Copias y notas en `C:\Users\iago\Documents\Codex\2026-11-04\release-2.0.0`.
+- Herramientas: gh en `...\2026-11-03\quier\work\gh-cli\bin\gh.exe` sin sesión; usar `GH_TOKEN` desde `git credential fill` en bash (en PowerShell falla). WiX: `WIX_TOOLSET_DIR=...\quier\work\wix`. Linux: runtime y zstandard en `...\quier\work\linux-runtime` y `python-packages`, Python de `~\.cache\codex-runtimes\...\python.exe`.
+- Actions «Comprobar paquetes Linux» 41890416138 y «Comprobar paquete Arch» 41890422226 correctos. La 2.0.0 NO está instalada aún en el PC ni en el móvil habituales.
+
+## Lo que suena en el otro dispositivo — 04/11/2026 (en la release 2.0.0)
 
 - `RemoteNow` (core, LinkedPlayback.kt) lee el estado remoto y `follow()` decide si seguirlo: suena allí y aquí no, o aquí no hay nada; se mantiene tras pausar allí; lo local manda en cuanto suena o al desconectar. Pruebas en LinkedPlaybackTest.
 - Móvil, modo tipo Connect: `PlayerConnection.Mirror`/`showRemote`/`hideRemote`. Siguiendo al PC, state/cola/aleatorio/bucle/origen/posición mostrados son los del PC y TODAS las órdenes de la interfaz se le envían; lo que se pone nuevo (play/listas) se monta aquí en pausa y se pasa entero con «transfer»; DJ con orden «dj». `localState`/`localSource`/… y `here {}` son siempre del teléfono: los usa MobileConnection.adapter (órdenes que llegan del PC) y Dispositivos. `MobileConnection.following` decide y alimenta el espejo. «Traer aquí» suelta el seguimiento aunque llegue en pausa.
