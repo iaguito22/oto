@@ -72,7 +72,7 @@ compose.desktop {
                 TargetFormat.Exe,
             )
             packageName = "Oto"
-            packageVersion = "1.2.3"
+            packageVersion = "2.0.0"
             description = "Oto — Tu música, a tu manera"
             vendor = "iaguito22"
             modules("java.instrument", "java.management", "jdk.management","java.naming", "java.prefs", "java.sql", "jdk.unsupported", "jdk.httpserver", "java.desktop", "java.net.http")

@@ -5,7 +5,7 @@ on:
       tag:
         description: Etiqueta de la release
         required: true
-        default: v1.2.3
+        default: v2.0.0
 permissions:
   contents: write
 jobs:
