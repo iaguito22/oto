@@ -81,6 +81,8 @@ import io.github.iaguito22.oto.desktop.playback.*
 import io.github.iaguito22.oto.importer.Importer
 import io.github.iaguito22.oto.ui.menu.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 
 internal data class LibraryJump(val version:Int=0,val item:YTItem?=null,val local:String?=null,val artistId:String?=null,val artistName:String="")
@@ -91,7 +93,7 @@ private data class LibraryEdit(val kind:String,val id:String="",val value:String
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuController,importer:Importer,
-    account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={},playerVisible:Boolean=false) {
+    account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={},playerVisible:Boolean=false,remoteLink:io.github.iaguito22.oto.remote.LocalLink?=null) {
     val lists by prefs.playlists.collectAsState(initial=emptyList())
     val liked by prefs.likedList.collectAsState(initial=LocalPlaylist(LIKED_ID,"Me gusta",emptyList()))
     val history by prefs.history.collectAsState(initial=emptyList())
@@ -179,15 +181,26 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 var miniDirection by remember { mutableIntStateOf(1) }
                 var miniStamp by remember { mutableIntStateOf(0) }
                 LaunchedEffect(miniStamp) { kotlinx.coroutines.delay(1500); miniDirection=1 }
-                fun skipMini(d:Int) { miniDirection=d; miniStamp++; if(d<0) player.previous() else player.next() }
-                // Con la ventana del reproductor abierta, el mini reproductor sobraría.
-                androidx.compose.animation.AnimatedVisibility(np.id!=null && !playerVisible,
+                // Lo que suena en el móvil conectado: solo cambia con la canción o la pausa, no con cada posición.
+                val remoteNow by remember(remoteLink) { remoteLink?.remote?.map(io.github.iaguito22.oto.remote.RemoteNow::of)?.distinctUntilChanged() ?: kotlinx.coroutines.flow.flowOf(null) }.collectAsState(null)
+                val followMemory=remember { booleanArrayOf(false) }
+                val rn=io.github.iaguito22.oto.remote.RemoteNow.follow(followMemory[0],np.id!=null,np.playing,remoteNow).also { followMemory[0]=it }.let { if(it) remoteNow else null }
+                fun remoteAction(action:String) { val link=remoteLink ?: return; scope.launch {
+                    runCatching { link.command(org.json.JSONObject().put("action",action)) }.onFailure { snackbar.showSnackbar("No se pudo controlar el móvil") }
+                } }
+                val miniSong=if(rn!=null) MiniSong(rn.id,rn.artwork,rn.title,rn.artist) else MiniSong(np.id,np.artwork,np.title,np.artist)
+                val miniPlaying=rn?.playing ?: np.playing
+                val miniToggle={ if(rn!=null) remoteAction("toggle") else player.toggle() }
+                val miniOpen={ if(rn!=null) onDevices() else onSource() }
+                fun skipMini(d:Int) { miniDirection=d; miniStamp++; if(rn!=null) remoteAction(if(d<0) "previous" else "next") else if(d<0) player.previous() else player.next() }
+                // Con la ventana del reproductor abierta, el mini reproductor sobraría, salvo para lo del móvil.
+                androidx.compose.animation.AnimatedVisibility(rn!=null || (np.id!=null && !playerVisible),
                     enter=fadeIn(tween(220))+androidx.compose.animation.expandVertically(spring(dampingRatio=.8f,stiffness=380f),expandFrom=Alignment.Bottom),
                     exit=fadeOut(tween(160))+androidx.compose.animation.shrinkVertically(tween(220),shrinkTowards=Alignment.Bottom)) {
                     if(wide) {
                         Column(Modifier.fillMaxWidth().padding(horizontal=6.dp,vertical=8.dp),verticalArrangement=Arrangement.spacedBy(5.dp)) {
-                            MiniSongSwap(MiniSong(np.id,np.artwork,np.title,np.artist),miniDirection) { song ->
-                                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick=onSource),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(9.dp)) {
+                            MiniSongSwap(miniSong,miniDirection) { song ->
+                                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick=miniOpen),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(9.dp)) {
                                     LibraryArt(song.artwork,Modifier.size(40.dp).graphicsLayer { val s=1f+.022f*pulse.value;scaleX=s;scaleY=s })
                                     Column(Modifier.weight(1f)) {
                                         Text(song.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis)
@@ -197,7 +210,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                     }
                                 }
                             }
-                            val qualityText=qualityPlaying?.let { q -> listOfNotNull(q.codec.uppercase(),q.bitrate?.let { "${(it+500)/1000} kbps" },q.sampleRate?.let { if(it%1000==0) "${it/1000} kHz" else "${it/1000f} kHz" }).joinToString(" · ") } ?: if(np.buffering) "Preparando audio…" else "Calidad no disponible"
+                            val qualityText=if(rn!=null) (if(rn.buffering) "En el móvil · preparando…" else "Sonando en el móvil") else qualityPlaying?.let { q -> listOfNotNull(q.codec.uppercase(),q.bitrate?.let { "${(it+500)/1000} kbps" },q.sampleRate?.let { if(it%1000==0) "${it/1000} kHz" else "${it/1000f} kHz" }).joinToString(" · ") } ?: if(np.buffering) "Preparando audio…" else "Calidad no disponible"
                             // Siempre en una línea: si no cabe, la letra se reduce un poco hasta caber.
                             AnimatedContent(qualityText,transitionSpec={ fadeIn(tween(260,delayMillis=60)) togetherWith fadeOut(tween(140)) },label="calidad") { text ->
                                 var qualitySize by remember(text) { mutableStateOf(11.5f) }
@@ -207,16 +220,16 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                             }
                             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.Center) {
                                 KickAction(MobileIcons.skipPrevious,"Anterior",-1) { skipMini(-1) }
-                                MinimalPlayback(np.playing,player::toggle,controlSize=36.dp)
+                                MinimalPlayback(miniPlaying,miniToggle,controlSize=36.dp)
                                 KickAction(MobileIcons.skipNext,"Siguiente",1) { skipMini(1) }
                             }
                         }
                     } else {
                         Column(Modifier.fillMaxWidth(),horizontalAlignment=Alignment.CenterHorizontally) {
-                            MiniSongSwap(MiniSong(np.id,np.artwork,np.title,np.artist),miniDirection) { song ->
-                                LibraryArt(song.artwork,Modifier.size(36.dp).graphicsLayer { val s=1f+.022f*pulse.value;scaleX=s;scaleY=s }.clickable(onClick=onSource))
+                            MiniSongSwap(miniSong,miniDirection) { song ->
+                                LibraryArt(song.artwork,Modifier.size(36.dp).graphicsLayer { val s=1f+.022f*pulse.value;scaleX=s;scaleY=s }.clickable(onClick=miniOpen))
                             }
-                            MinimalPlayback(np.playing,player::toggle,controlSize=36.dp)
+                            MinimalPlayback(miniPlaying,miniToggle,controlSize=36.dp)
                         }
                     }
                 }

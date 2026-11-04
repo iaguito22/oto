@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * La interfaz habla con [PlaybackService] a través de un MediaController, igual que la notificación o los auriculares.
@@ -43,14 +45,30 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     private var controller: MediaController? = null
     private val pending = ArrayList<(MediaController) -> Unit>()
 
+    /**
+     * Con el ordenador sonando y enlazado, la interfaz lo muestra y lo controla a él (como si sonara aquí): las órdenes
+     * se le envían y lo nuevo que se ponga se prepara aquí en pausa y se le pasa entero. Ver [showRemote].
+     */
+    interface Mirror {
+        fun send(action: String, fill: (JSONObject) -> Unit = {})
+        fun handOff(state: JSONObject)
+    }
+    private var mirror: Mirror? = null
+    val mirrored: Boolean get() = mirror != null
+
+    // Lo que suena en este teléfono, aunque la interfaz muestre el ordenador: es lo que se le cuenta a él.
+    private val _localState = MutableStateFlow(NowPlaying())
+    val localState: StateFlow<NowPlaying> = _localState.asStateFlow()
     private val _state = MutableStateFlow(NowPlaying())
     override val state: StateFlow<NowPlaying> = _state.asStateFlow()
 
     // Aparte del estado: se rehace solo cuando cambia la cola, no en cada pausa.
+    private var localQueue = emptyList<QueueEntry>()
+    private var localPrevious: QueueEntry? = null
     private val _queue = MutableStateFlow<List<QueueEntry>>(emptyList())
     override val queue: StateFlow<List<QueueEntry>> = _queue.asStateFlow()
     // La cola visual solo contiene lo siguiente. Una transferencia necesita también
-    // la canción actual y las anteriores, con los índices reales del reproductor.
+    // la canción actual y las anteriores, con los índices reales del reproductor. Siempre la de aquí.
     private val _sessionQueue = MutableStateFlow<List<QueueEntry>>(emptyList())
     val sessionQueue: StateFlow<List<QueueEntry>> = _sessionQueue.asStateFlow()
     private val _previous = MutableStateFlow<QueueEntry?>(null)
@@ -58,15 +76,29 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
 
     // Solo vive en memoria, como la cola: si el servicio muere, se pierden los dos.
     private val _source = MutableStateFlow<Source?>(null)
-    override val source: StateFlow<Source?> = _source.asStateFlow()
+    private val _shownSource = MutableStateFlow<Source?>(null)
+    override val source: StateFlow<Source?> = _shownSource.asStateFlow()
+    val localSource: StateFlow<Source?> = _source.asStateFlow()
 
     private val _shuffle = MutableStateFlow(true)
-    override val shuffle: StateFlow<Boolean> = _shuffle.asStateFlow()
+    private val _shownShuffle = MutableStateFlow(true)
+    override val shuffle: StateFlow<Boolean> = _shownShuffle.asStateFlow()
+    val localShuffle: StateFlow<Boolean> = _shuffle.asStateFlow()
 
     private val _loopMode = MutableStateFlow(LoopMode.Off)
+    private val _shownLoop = MutableStateFlow(LoopMode.Off)
     /** El bucle de la lista que suena (ver [Prefs.playlistModes]). */
-    val loopMode: StateFlow<LoopMode> = _loopMode.asStateFlow()
-    override val loop: StateFlow<Boolean> = _loopMode.map { it != LoopMode.Off }.stateIn(scope, SharingStarted.Eagerly, false)
+    val loopMode: StateFlow<LoopMode> = _shownLoop.asStateFlow()
+    val localLoopMode: StateFlow<LoopMode> = _loopMode.asStateFlow()
+    override val loop: StateFlow<Boolean> = _shownLoop.map { it != LoopMode.Off }.stateIn(scope, SharingStarted.Eagerly, false)
+
+    // Posición del ordenador: llega cada medio segundo y entre medias se calcula.
+    private var remotePosition = 0L
+    private var remoteAt = 0L
+    private var remoteIndex = 0
+    // Recién enviada una canción, el ordenador tarda un poco: no volver a la anterior mientras.
+    private var pendingId: String? = null
+    private var pendingUntil = 0L
 
     private val _defaultShuffle = MutableStateFlow(false)
     val defaultShuffle: StateFlow<Boolean> = _defaultShuffle.asStateFlow()
@@ -88,6 +120,9 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     private var currentListId: String? = null
 
     init {
+        scope.launch(Dispatchers.Main) { _source.collect { if (mirror == null) _shownSource.value = it } }
+        scope.launch(Dispatchers.Main) { _shuffle.collect { if (mirror == null) _shownShuffle.value = it } }
+        scope.launch(Dispatchers.Main) { _loopMode.collect { if (mirror == null) _shownLoop.value = it } }
         scope.launch {
             prefs.shuffle.collect {
                 _defaultShuffle.value = it
@@ -143,9 +178,81 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         _loopMode.value = LoopMode.Off
         it.repeatMode = Player.REPEAT_MODE_OFF
         it.setMediaItem(song.toMediaItem())
-        it.prepare()
-        it.play()
+        start(it)
     }
+
+    /** Arranca lo recién puesto; con el ordenador al mando, se queda aquí en pausa y suena allí. */
+    private fun start(c: MediaController) {
+        val m = mirror
+        if (m == null) { c.prepare(); c.play(); return }
+        c.playWhenReady = false
+        val id = c.currentMediaItem?.mediaId ?: return
+        m.handOff(transferState(c, playing = true))
+        // Se ve ya la nueva, preparándose, sin esperar a que el ordenador conteste.
+        pendingId = id
+        pendingUntil = android.os.SystemClock.elapsedRealtime() + 12_000
+        publish(c)
+        _state.value = _localState.value.copy(playing = false, buffering = true)
+        _queue.value = localQueue; _previous.value = localPrevious
+        _shownSource.value = _source.value; _shownShuffle.value = _shuffle.value; _shownLoop.value = _loopMode.value
+        remotePosition = 0; remoteAt = android.os.SystemClock.elapsedRealtime(); remoteIndex = c.currentMediaItemIndex
+    }
+
+    /** Lo que hay aquí, en el formato del canal local (ver LinkedPlayback «transfer»). */
+    fun transferState(p: Player, playing: Boolean): JSONObject = JSONObject()
+        .put("id", p.currentMediaItem?.mediaId).put("index", p.currentMediaItemIndex).put("position", p.currentPosition.coerceAtLeast(0))
+        .put("playing", playing).put("shuffle", _shuffle.value).put("loop", _loopMode.value != LoopMode.Off)
+        .put("queue", JSONArray((0 until p.mediaItemCount).map { i ->
+            val m = p.getMediaItemAt(i).mediaMetadata
+            JSONObject().put("id", p.getMediaItemAt(i).mediaId).put("title", m.title?.toString().orEmpty())
+                .put("artist", m.artist?.toString().orEmpty()).put("artwork", m.artworkUri?.toString())
+        }))
+
+    /** Muestra y controla lo que suena en el ordenador ([state]: su estado periódico). */
+    fun showRemote(state: JSONObject, target: Mirror) {
+        mirror = target
+        val id = state.optString("id").takeUnless { it.isBlank() || it == "null" }
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (pendingId != null) { if (id != pendingId && now < pendingUntil) return; pendingId = null }
+        fun JSONObject.text(key: String) = optString(key).takeUnless { it == "null" }.orEmpty()
+        val array = state.optJSONArray("queue")
+        val all = (0 until (array?.length() ?: 0)).map { i -> array!!.getJSONObject(i).let { QueueEntry(i, it.text("id"), it.text("title"), it.text("artist"), it.text("artwork").ifBlank { null }) } }
+        val index = state.optInt("index").coerceAtLeast(0)
+        val loop = state.optBoolean("loop")
+        val artist = state.text("artist")
+        _state.value = NowPlaying(
+            id = id, title = state.text("title"), artist = artist, artists = listOf(artist to null),
+            artwork = state.text("artwork").ifBlank { null }, playing = state.optBoolean("playing"), buffering = state.optBoolean("buffering"),
+            durationMs = state.optLong("duration").coerceAtLeast(0), upNext = (all.size - index - 1).coerceAtLeast(0), index = index,
+        )
+        _queue.value = all.drop(index + 1) + (if (loop) all.take(index) else emptyList())
+        _previous.value = all.getOrNull(index - 1)
+        _shownShuffle.value = state.optBoolean("shuffle")
+        _shownLoop.value = if (loop) LoopMode.All else LoopMode.Off
+        _shownSource.value = state.text("sourceTitle").takeIf { it.isNotBlank() }?.let { Source(state.text("sourceKind").ifBlank { "Lista" }, it) }
+        remotePosition = state.optLong("position").coerceAtLeast(0); remoteAt = now; remoteIndex = index
+    }
+
+    /** Vuelve a mostrar lo de este teléfono. */
+    fun hideRemote() {
+        if (mirror == null) return
+        mirror = null; pendingId = null
+        _state.value = _localState.value
+        _queue.value = localQueue; _previous.value = localPrevious
+        _shownSource.value = _source.value; _shownShuffle.value = _shuffle.value; _shownLoop.value = _loopMode.value
+    }
+
+    /** Lo que llega del otro dispositivo se hace siempre en este teléfono, aunque se muestre el ordenador. */
+    fun <T> here(block: () -> T): T { val m = mirror; mirror = null; try { return block() } finally { mirror = m } }
+
+    private fun remotePosition(): Long {
+        val s = _state.value
+        val run = if (s.playing) android.os.SystemClock.elapsedRealtime() - remoteAt else 0L
+        return (remotePosition + run).coerceIn(0, s.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE)
+    }
+
+    private fun songJson(song: SongItem) = JSONObject().put("id", song.id).put("title", song.title)
+        .put("artist", song.artists.joinToString { it.name }).put("artwork", song.thumbnail)
 
     /** Suena la lista entera (un álbum, una playlist), sin radio: desde [start] o, si es null, desde el principio. */
     override fun playAll(songs: List<SongItem>, start: Int?, from: YTItem?) {
@@ -225,8 +332,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         c.shuffleModeEnabled = false
         c.repeatMode = repeatModeOf(_loopMode.value)
         c.setMediaItems(items, start, 0)
-        c.prepare()
-        c.play()
+        start(c)
     }
 
     /**
@@ -237,6 +343,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     override fun setShuffle(on: Boolean) = setShuffle(on, null)
 
     fun setShuffle(on: Boolean, listId: String?) {
+        if (listId == null) mirror?.let { m -> _shownShuffle.value = on; return m.send("shuffle") { it.put("value", on) } }
         val id = listId ?: currentListId
         if (id != null) {
             val loop = if (id == currentListId) _loopMode.value else _modes.value[id]?.loop ?: defaultLoopMode()
@@ -270,6 +377,8 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
 
     /** Pasa al siguiente estado del bucle: apagado -> lista entera -> una canción -> apagado. */
     fun cycleLoop() {
+        // El ordenador solo tiene bucle de lista: se enciende o se apaga.
+        if (mirror != null) return setLoop(if (_shownLoop.value == LoopMode.Off) LoopMode.All else LoopMode.Off)
         val next = when (_loopMode.value) {
             LoopMode.Off -> LoopMode.All
             LoopMode.All -> LoopMode.One
@@ -282,6 +391,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     override fun setLoop(on: Boolean) = setLoop(if (on) LoopMode.All else LoopMode.Off)
 
     fun setLoop(mode: LoopMode) {
+        mirror?.let { m -> _shownLoop.value = mode; return m.send("loop") { it.put("value", mode != LoopMode.Off) } }
         _loopMode.value = mode
         currentListId?.let { id ->
             val shuffle = _modes.value[id]?.shuffle ?: _shuffle.value
@@ -312,7 +422,9 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
      * El DJ (ver [io.github.iaguito22.oto.dj.Dj]): lo elige el servicio, de una en una. [onFail]: aún no sabe nada de
      * ti (no hay listas, Me gusta ni historial).
      */
-    override fun playDj(onFail: () -> Unit) = withController { c ->
+    override fun playDj(onFail: () -> Unit) { mirror?.let { return it.send("dj") }; playDjHere(onFail) }
+
+    private fun playDjHere(onFail: () -> Unit) = withController { c ->
         shuffling?.cancel()
         val before = _source.value
         val beforeId = currentListId
@@ -332,29 +444,40 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     }
 
     /** Detrás de la que suena. */
-    override fun playNext(song: SongItem) = withController {
-        if (it.mediaItemCount == 0) play(song) else it.addMediaItem(it.currentMediaItemIndex + 1, song.toMediaItem())
+    override fun playNext(song: SongItem) {
+        mirror?.let { m -> return m.send("addToQueue") { it.put("next", true).put("song", songJson(song)) } }
+        withController { if (it.mediaItemCount == 0) play(song) else it.addMediaItem(it.currentMediaItemIndex + 1, song.toMediaItem()) }
     }
 
     /** Añade una canción recibida del otro dispositivo al final de la cola. */
-    fun enqueue(song: SongItem) = withController {
-        if (it.mediaItemCount == 0) play(song) else it.addMediaItem(song.toMediaItem())
+    fun enqueue(song: SongItem) {
+        mirror?.let { m -> return m.send("addToQueue") { it.put("next", false).put("song", songJson(song)) } }
+        withController { if (it.mediaItemCount == 0) play(song) else it.addMediaItem(song.toMediaItem()) }
     }
 
     /** Mueve una de la cola a otro sitio ([from] y [to]: posiciones en la lista del reproductor, como [QueueEntry.index]). */
-    override fun move(from: Int, to: Int) = withController { if (from != to) it.moveMediaItem(from, to) }
+    override fun move(from: Int, to: Int) {
+        mirror?.let { m -> if (from != to) m.send("move") { it.put("from", from).put("to", to) }; return }
+        withController { if (from != to) it.moveMediaItem(from, to) }
+    }
 
     /** Mueve [from] justo detrás de [after] (o de la que suena, si es null), o justo delante de [before]. */
-    override fun place(from: Int, after: Int?, before: Int?) = withController {
-        val to = when {
+    override fun place(from: Int, after: Int?, before: Int?) {
+        fun target(current: Int) = when {
             before != null -> if (from < before) before - 1 else before
-            else -> (after ?: it.currentMediaItemIndex).let { a -> if (from < a) a else a + 1 }
+            else -> (after ?: current).let { a -> if (from < a) a else a + 1 }
         }
-        if (from != to) it.moveMediaItem(from, to)
+        if (mirror != null) return move(from, target(remoteIndex))
+        withController { val to = target(it.currentMediaItemIndex); if (from != to) it.moveMediaItem(from, to) }
     }
 
     /** Quita una de la cola, también de la lista que se rebaraja al tocar el aleatorio (si no, volvería). */
-    override fun remove(index: Int) = withController {
+    override fun remove(index: Int) {
+        mirror?.let { m -> if (index != remoteIndex) m.send("remove") { it.put("index", index) }; return }
+        removeHere(index)
+    }
+
+    private fun removeHere(index: Int) = withController {
         if (index == it.currentMediaItemIndex) return@withController
         val id = it.getMediaItemAt(index).mediaId
         original?.indexOfFirst { m -> m.mediaId == id }?.takeIf { at -> at >= 0 }?.let { at ->
@@ -364,17 +487,36 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         it.removeMediaItem(index)
     }
 
-    override fun toggle() = withController { if (it.isPlaying) it.pause() else it.play() }
-    override fun next() = withController { it.seekToNextMediaItem() }
+    override fun toggle() {
+        mirror?.let { m ->
+            // Se nota al instante; la confirmación llega con su siguiente estado.
+            _state.value = _state.value.let { s -> remotePosition = remotePosition(); remoteAt = android.os.SystemClock.elapsedRealtime(); s.copy(playing = !s.playing) }
+            return m.send("toggle")
+        }
+        withController { if (it.isPlaying) it.pause() else it.play() }
+    }
+    override fun next() { mirror?.let { return it.send("next") }; withController { it.seekToNextMediaItem() } }
     /** A la anterior si esta acaba de empezar; si no (o no hay anterior), al principio de esta. Ver [restarts]. */
-    override fun previous() = withController { if (restarts()) it.seekTo(0) else it.seekToPreviousMediaItem() }
+    override fun previous() {
+        mirror?.let { return it.send("previous") }
+        withController { if (restarts()) it.seekTo(0) else it.seekToPreviousMediaItem() }
+    }
     /** Si «anterior» ahora volvería al principio de esta: pasados [RESTART_MS], o sin anterior. Barata, se lee en cada fotograma. */
-    override fun restarts(): Boolean = controller?.let { it.currentPosition > RESTART_MS || !it.hasPreviousMediaItem() } ?: true
-    override fun seekTo(ms: Long) = withController { it.seekTo(ms) }
-    override fun skipTo(index: Int) = withController { it.seekToDefaultPosition(index) }
+    override fun restarts(): Boolean {
+        if (mirror != null) return remotePosition() > RESTART_MS || remoteIndex <= 0
+        return controller?.let { it.currentPosition > RESTART_MS || !it.hasPreviousMediaItem() } ?: true
+    }
+    override fun seekTo(ms: Long) {
+        mirror?.let { m -> remotePosition = ms.coerceAtLeast(0); remoteAt = android.os.SystemClock.elapsedRealtime(); return m.send("seek") { it.put("position", ms.coerceAtLeast(0)) } }
+        withController { it.seekTo(ms) }
+    }
+    override fun skipTo(index: Int) {
+        mirror?.let { m -> return m.send("skip") { it.put("index", index) } }
+        withController { it.seekToDefaultPosition(index) }
+    }
 
     /** Posición en ms; barata, pensada para leerse en cada fotograma. */
-    override fun position(): Long = controller?.currentPosition ?: 0L
+    override fun position(): Long = if (mirror != null) remotePosition() else controller?.currentPosition ?: 0L
 
     private fun withController(action: (MediaController) -> Unit) {
         controller?.let(action) ?: run { pending += action; connect() }
@@ -392,7 +534,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         // Los del propio MediaItem, no p.mediaMetadata: al pasar de canción, el controlador da un instante el id
         // nuevo con los metadatos de la anterior (y la carátula vieja entraba como si fuera la nueva).
         val meta = item?.mediaMetadata ?: p.mediaMetadata
-        _state.value = NowPlaying(
+        _localState.value = NowPlaying(
             id = item?.mediaId,
             title = meta.title?.toString().orEmpty(),
             artist = meta.artist?.toString().orEmpty(),
@@ -410,6 +552,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
             index = p.currentMediaItemIndex,
             error = p.playerError?.errorCodeName,
         )
+        if (mirror == null) _state.value = _localState.value
     }
 
     private fun publishQueue(p: Player) {
@@ -417,8 +560,9 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         val wrap = if (p.repeatMode == Player.REPEAT_MODE_ALL) (0 until p.currentMediaItemIndex) else IntRange.EMPTY
         val all = (0 until p.mediaItemCount).map { entry(p, it) }
         _sessionQueue.value = all
-        _queue.value = ((p.currentMediaItemIndex + 1 until p.mediaItemCount) + wrap).mapNotNull { all.getOrNull(it) }
-        _previous.value = all.getOrNull(p.currentMediaItemIndex - 1)
+        localQueue = ((p.currentMediaItemIndex + 1 until p.mediaItemCount) + wrap).mapNotNull { all.getOrNull(it) }
+        localPrevious = all.getOrNull(p.currentMediaItemIndex - 1)
+        if (mirror == null) { _queue.value = localQueue; _previous.value = localPrevious }
     }
 
     private fun entry(p: Player, i: Int): QueueEntry {
