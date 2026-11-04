@@ -6,6 +6,8 @@ import com.metrolist.innertube.models.PlaylistItem
 import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
 import io.github.iaguito22.oto.LocalPlaylist
+import io.github.iaguito22.oto.LoopMode
+import io.github.iaguito22.oto.PlaylistMode
 import io.github.iaguito22.oto.OtoDirs
 import io.github.iaguito22.oto.desktop.isWindowsDesktop
 import io.github.iaguito22.oto.Prefs
@@ -20,7 +22,10 @@ import io.github.iaguito22.oto.dj.YouTubeCatalog
 import io.github.iaguito22.oto.lyrics.Lyrics
 import io.github.iaguito22.oto.lyrics.LyricsQuery
 import io.github.iaguito22.oto.lyrics.LyricsStore
+import io.github.iaguito22.oto.importer.songKey
+import io.github.iaguito22.oto.playback.Autoplay
 import io.github.iaguito22.oto.playback.InnerTubeXPlayer
+import io.github.iaguito22.oto.playback.Shuffle
 import io.github.iaguito22.oto.playback.NowPlaying
 import io.github.iaguito22.oto.playback.OtoPlayer
 import io.github.iaguito22.oto.playback.Quality
@@ -88,8 +93,28 @@ class DesktopPlayerConnection(
     private val _shuffle = MutableStateFlow(true)
     override val shuffle: StateFlow<Boolean> = _shuffle.asStateFlow()
 
+    private val _loopMode = MutableStateFlow(LoopMode.Off)
+    /** El bucle de lo que suena: apagado, la lista entera o una canción (como en el móvil). */
+    val loopMode: StateFlow<LoopMode> = _loopMode.asStateFlow()
     private val _loop = MutableStateFlow(false)
     override val loop: StateFlow<Boolean> = _loop.asStateFlow()
+
+    // Como en el móvil: los valores de Ajustes valen para las listas nuevas y cada lista recuerda cómo la dejaste.
+    private val _defaultShuffle = MutableStateFlow(true)
+    val defaultShuffle: StateFlow<Boolean> = _defaultShuffle.asStateFlow()
+    private val _defaultLoop = MutableStateFlow(false)
+    private val _modes = MutableStateFlow<Map<String, PlaylistMode>>(emptyMap())
+    val modes: StateFlow<Map<String, PlaylistMode>> = _modes.asStateFlow()
+    /** La lista que suena (id de lista tuya, álbum, artista…), o null con la radio y el DJ. */
+    private var currentListId: String? = null
+    /** Lo reciente que entró cada canción de [originalQueue] (ver [Shuffle.Item]). */
+    private var ages: List<Float?> = emptyList()
+    @Volatile private var liked = emptySet<String>()
+    @Volatile private var heardAt = emptyMap<String, Long>()
+    /** Lo que sigue a una lista acabada sin bucle (ver [Autoplay]); lo que añade va en [autoIds]. */
+    private var auto: Autoplay? = null
+    private val autoIds = HashSet<String>()
+    private var autoJob: Job? = null
 
     private val _positionMs = MutableStateFlow(0L)
     val positionMs: StateFlow<Long> = _positionMs.asStateFlow()
@@ -160,10 +185,23 @@ class DesktopPlayerConnection(
             } }
         }
         scope.launch {
-            prefs.shuffle.collect { _shuffle.value = it }
+            prefs.shuffle.collect {
+                _defaultShuffle.value = it
+                if (currentListId == null) _shuffle.value = it
+            }
         }
         scope.launch {
-            prefs.loop.collect { _loop.value = it }
+            prefs.loop.collect {
+                _defaultLoop.value = it
+                if (currentListId == null && originalQueue != null) applyLoopMode(if (it) LoopMode.All else LoopMode.Off)
+            }
+        }
+        scope.launch { prefs.playlistModes.collect { _modes.value = it } }
+        scope.launch { prefs.likedIds.collect { liked = it } }
+        scope.launch {
+            prefs.history.collect {
+                heardAt = withContext(Dispatchers.IO) { runCatching { plays.all() }.getOrDefault(emptyList()) }.filter { it.heard }.associate { it.id to it.at }
+            }
         }
         if(isWindowsDesktop) {
             scope.launch { kotlinx.coroutines.flow.combine(prefs.crossfade, prefs.ramSaver) { seconds, saving -> if(saving) 0 else seconds }.collect { fadeSeconds=it.coerceAtLeast(0); if(fadeSeconds==0) cancelCrossfade() } }
@@ -172,6 +210,9 @@ class DesktopPlayerConnection(
     }
 
     fun beat(): Float = engine.beat(position())
+
+    /** El diario de escuchas, para las listas «Hecho con lo tuyo». */
+    suspend fun allPlays(): List<Play> = withContext(Dispatchers.IO) { runCatching { plays.all() }.getOrDefault(emptyList()) }
 
     /** Mantiene el volumen del usuario y la normalización separados de la curva del fundido. */
     private fun applyDeckGains() {
@@ -295,8 +336,12 @@ class DesktopPlayerConnection(
 
     override fun play(song: SongItem) {
         dj = null
+        stopAutoplay()
         radio = Radio(song.id)
         originalQueue = null
+        currentListId = null
+        _shuffle.value = _defaultShuffle.value
+        applyLoopMode(LoopMode.Off)
         _source.value = Source("Radio", song.title)
         songQueue = mutableListOf(song)
         currentIndex = 0
@@ -317,6 +362,7 @@ class DesktopPlayerConnection(
         val added = tracks.filter { seen.add(it.id) }
         if (added.isEmpty()) return
         originalQueue = (originalQueue ?: songQueue.toList()) + added
+        ages = ages + List(added.size) { null }
         songQueue.addAll(if (_shuffle.value) added.shuffled() else added)
         syncQueueFlow()
     }
@@ -341,36 +387,55 @@ class DesktopPlayerConnection(
 
     override fun playAll(songs: List<SongItem>, start: Int?, from: YTItem?) {
         if (songs.isEmpty()) return
-        dj = null
-        radio = null
         _source.value = when (from) {
             is PlaylistItem -> Source("DE LA PLAYLIST", from.title, from)
             is AlbumItem -> Source("DEL ÁLBUM", from.title, from)
             is ArtistItem -> Source("DEL ARTISTA", from.title, from)
             else -> null
         }
-        originalQueue = songs.toList()
-        val (ordered, index) = playbackOrder(songs, start, _shuffle.value)
+        playList(from?.id, songs, List(songs.size) { null }, start)
+    }
+
+    /** Una lista tuya, tal y como se ve ([newestFirst]: lo último que entró, arriba). */
+    override fun playLocal(list: LocalPlaylist, start: Int?, newestFirst: Boolean) {
+        if (list.songs.isEmpty()) return
+        val smart = list.id.startsWith(io.github.iaguito22.oto.dj.Smart.PREFIX)
+        _source.value = Source(
+            when { smart -> "HECHA CON LO TUYO"; list.id.startsWith("folder:") -> "DE TU CARPETA"; else -> "DESDE TU LISTA" },
+            list.name, local = list.id.takeUnless { smart },
+        )
+        val n = list.songs.size
+        val age = { i: Int -> if (n == 1) 0f else (if (newestFirst) i else n - 1 - i) / (n - 1f) }
+        playList(list.id, list.songs.map { it.toSong() }, List(n) { age(it) }, start)
+    }
+
+    /**
+     * Como en el móvil: la lista recupera su aleatorio y su bucle (o los de Ajustes si es nueva). Con aleatorio, la
+     * tocada ([start]) suena la primera y el resto se baraja con [Shuffle], que evita repetir artista seguido.
+     */
+    private fun playList(listId: String?, items: List<SongItem>, itemAges: List<Float?>, start: Int?) {
+        dj = null
+        radio = null
+        stopAutoplay()
+        currentListId = listId
+        val mode = listId?.let { _modes.value[it] } ?: PlaylistMode(_defaultShuffle.value, defaultLoopMode())
+        _shuffle.value = mode.shuffle
+        applyLoopMode(mode.loop)
+        if (listId != null && listId !in _modes.value) saveMode(listId, mode)
+        originalQueue = items.toList()
+        ages = itemAges
+        val ordered = if (!mode.shuffle) items else {
+            val first = start?.coerceIn(items.indices)
+            Shuffle.order(shuffleItems(items, itemAges), first, liked, heardAt).map(items::get)
+        }
         songQueue = ordered.toMutableList()
-        currentIndex = index
+        currentIndex = if (mode.shuffle) 0 else (start ?: 0).coerceIn(items.indices)
         syncQueueFlow()
         startCurrentTrack()
     }
 
-    override fun playLocal(list: LocalPlaylist, start: Int?, newestFirst: Boolean) {
-        val base = if (newestFirst) list.songs.reversed() else list.songs
-        val items = base.map { it.toSong() }
-        if (items.isEmpty()) return
-        dj = null
-        radio = null
-        _source.value = Source("DESDE TU LISTA", list.name, local = list.id)
-        originalQueue = items.toList()
-        val (ordered, index) = playbackOrder(items, start, _shuffle.value)
-        songQueue = ordered.toMutableList()
-        currentIndex = index
-        syncQueueFlow()
-        startCurrentTrack()
-    }
+    private fun shuffleItems(items: List<SongItem>, itemAges: List<Float?>) =
+        items.mapIndexed { i, s -> Shuffle.Item(s.id, s.artists.joinToString { it.name }, itemAges.getOrNull(i)) }
 
     override fun playDj(onFail: () -> Unit) {
         scope.launch {
@@ -387,8 +452,11 @@ class DesktopPlayerConnection(
                 return@launch
             }
             radio = null
+            stopAutoplay()
             dj = newDj
             originalQueue = null
+            currentListId = null
+            applyLoopMode(LoopMode.Off)
             _source.value = Source("DJ", "Mezcla para ti")
             songQueue = mutableListOf(first.toSong())
             currentIndex = 0
@@ -430,7 +498,10 @@ class DesktopPlayerConnection(
         val wasPlaying = _state.value.playing
         if (removingCurrent) recordPlayProgress(completed = false)
         val removed = songQueue.removeAt(index)
-        originalQueue = originalQueue?.toMutableList()?.apply { remove(removed) }
+        originalQueue?.indexOf(removed)?.takeIf { it >= 0 }?.let { at ->
+            originalQueue = originalQueue!!.toMutableList().apply { removeAt(at) }
+            ages = ages.toMutableList().apply { if (at < size) removeAt(at) }
+        }
         if (index < currentIndex) currentIndex--
         if (songQueue.isEmpty()) {
             resolveJob?.cancel(); lyricsJob?.cancel(); resolvingTrack = false
@@ -460,6 +531,8 @@ class DesktopPlayerConnection(
             currentIndex = -1
         }
         originalQueue = songQueue.toList()
+        ages = List(songQueue.size) { null }
+        stopAutoplay()
         syncQueueFlow()
     }
 
@@ -474,29 +547,69 @@ class DesktopPlayerConnection(
         setVolume(_volume.value + delta)
     }
 
-    override fun setShuffle(on: Boolean) {
+    override fun setShuffle(on: Boolean) = setShuffle(on, null)
+
+    /**
+     * Pone o quita el aleatorio de [listId] (o de lo que suena) y lo recuerda para esa lista. Si es la que suena, se
+     * rehace lo que queda detrás de la actual: lo que ya sonó en esta vuelta va al final y no repite artista seguido.
+     * No toca el valor de Ajustes, que es solo para las listas nuevas.
+     */
+    fun setShuffle(on: Boolean, listId: String?) {
+        val id = listId ?: currentListId
+        if (id != null) {
+            val loop = if (id == currentListId) _loopMode.value else _modes.value[id]?.loop ?: defaultLoopMode()
+            saveMode(id, PlaylistMode(on, loop))
+        }
+        if (listId != null && listId != currentListId) return
         cancelCrossfade()
         val changed = _shuffle.value != on
         _shuffle.value = on
-        if (changed && currentIndex in songQueue.indices) {
-            val played = songQueue.take(currentIndex + 1)
-            val pending = songQueue.drop(currentIndex + 1)
-            val next = if (on) {
-                if (originalQueue == null) originalQueue = songQueue.toList()
-                pending.shuffled()
-            } else {
-                val rank = originalQueue.orEmpty().mapIndexed { i, song -> song.id to i }.toMap()
-                pending.sortedBy { rank[it.id] ?: Int.MAX_VALUE }
-            }
-            songQueue = (played + next).toMutableList()
-            syncQueueFlow()
+        if (!changed || currentIndex !in songQueue.indices) return
+        val current = songQueue[currentIndex]
+        val played = songQueue.take(currentIndex + 1)
+        val pending = songQueue.drop(currentIndex + 1)
+        val (listed, extra) = pending.partition { it.id !in autoIds }
+        val next = if (on) {
+            if (originalQueue == null) { originalQueue = songQueue.toList(); ages = List(songQueue.size) { null } }
+            val original = originalQueue.orEmpty()
+            val ageOf = original.withIndex().associate { (i, s) -> s.id to ages.getOrNull(i) }
+            val playedIds = played.mapTo(HashSet()) { it.id }
+            val order = Shuffle.order(listed.map { Shuffle.Item(it.id, it.artists.joinToString { a -> a.name }, ageOf[it.id]) }, null, liked, heardAt,
+                played = playedIds, after = current.artists.joinToString { it.name })
+            order.map(listed::get)
+        } else {
+            val rank = originalQueue.orEmpty().mapIndexed { i, song -> song.id to i }.toMap()
+            listed.sortedBy { rank[it.id] ?: Int.MAX_VALUE }
         }
-        scope.launch { prefs.setShuffle(on) }
+        songQueue = (played + next + extra).toMutableList()
+        syncQueueFlow()
     }
 
-    override fun setLoop(on: Boolean) {
-        _loop.value = on
-        scope.launch { prefs.setLoop(on) }
+    override fun setLoop(on: Boolean) = setLoop(if (on) LoopMode.All else LoopMode.Off)
+
+    /** Pasa al siguiente estado del bucle: apagado → lista entera → una canción → apagado. */
+    fun cycleLoop() = setLoop(when (_loopMode.value) { LoopMode.Off -> LoopMode.All; LoopMode.All -> LoopMode.One; LoopMode.One -> LoopMode.Off })
+
+    /** Pone el bucle de lo que suena y lo recuerda para esa lista. */
+    fun setLoop(mode: LoopMode) {
+        applyLoopMode(mode)
+        currentListId?.let { id ->
+            val shuffle = _modes.value[id]?.shuffle ?: _shuffle.value
+            saveMode(id, PlaylistMode(shuffle, mode))
+        }
+        if (mode != LoopMode.Off) dropAutoplay() else maybeAutoplay()
+    }
+
+    private fun applyLoopMode(mode: LoopMode) {
+        _loopMode.value = mode
+        _loop.value = mode != LoopMode.Off
+    }
+
+    private fun defaultLoopMode() = if (_defaultLoop.value) LoopMode.All else LoopMode.Off
+
+    private fun saveMode(id: String, mode: PlaylistMode) {
+        _modes.value = _modes.value + (id to mode)
+        scope.launch { prefs.setPlaylistMode(id, mode) }
     }
 
     override fun toggle() {
@@ -550,7 +663,11 @@ class DesktopPlayerConnection(
 
     private fun onTrackFinished(completedNaturally: Boolean) {
         recordPlayProgress(completed = completedNaturally)
-        if (_loop.value && currentIndex == songQueue.lastIndex && songQueue.isNotEmpty()) {
+        if (completedNaturally && _loopMode.value == LoopMode.One && currentIndex in songQueue.indices) {
+            startCurrentTrack()
+            return
+        }
+        if (_loopMode.value != LoopMode.Off && currentIndex == songQueue.lastIndex && songQueue.isNotEmpty()) {
             currentIndex = 0
             syncQueueFlow()
             startCurrentTrack()
@@ -567,6 +684,18 @@ class DesktopPlayerConnection(
             maybeReplenishQueue()
         } else {
             scope.launch {
+                // Una lista sin bucle: lo que ya tenía preparado la reproducción automática (o lo pide ahora).
+                if (originalQueue != null && dj == null && radio == null && _loopMode.value == LoopMode.Off) {
+                    maybeAutoplay()
+                    autoJob?.join()
+                    if (currentIndex + 1 < songQueue.size) {
+                        currentIndex++
+                        syncQueueFlow()
+                        startCurrentTrack()
+                        maybeReplenishQueue()
+                        return@launch
+                    }
+                }
                 val cur = songQueue.getOrNull(currentIndex) ?: return@launch
                 val more = withContext(Dispatchers.IO) {
                     (radio ?: Radio(cur.id).also { radio = it }).more().getOrDefault(emptyList())
@@ -581,7 +710,56 @@ class DesktopPlayerConnection(
         }
     }
 
+    /**
+     * Como en el móvil: una lista sin bucle, al acercarse a su final, sigue con canciones parecidas a ella (ver
+     * [Autoplay]). Se piden con [RADIO_AHEAD] por delante, así no hay silencio al acabar.
+     */
+    private fun maybeAutoplay() {
+        if (originalQueue == null || radio != null || dj != null || _loopMode.value != LoopMode.Off || songQueue.isEmpty()) return
+        if (songQueue.size - 1 - currentIndex > RADIO_AHEAD) return
+        val a = auto ?: run {
+            val items = songQueue.filter { it.id !in autoIds }.map { Shuffle.Item(it.id, it.artists.joinToString { a -> a.name }, null) }
+            Autoplay(Autoplay.seeds(items, songQueue.last().id, liked)).also { auto = it }
+        }
+        if (autoJob?.isActive == true) return
+        autoJob = scope.launch {
+            val exclude = HashSet<String>()
+            songQueue.forEach { s -> exclude += s.id; exclude += songKey(s.title, s.artists.joinToString { it.name }) }
+            val last = songQueue.lastOrNull()?.id
+            repeat(RADIO_PAGES) {
+                val fresh = withContext(Dispatchers.IO) { runCatching { a.next(exclude, last) }.getOrDefault(emptyList()) }
+                if (auto !== a) return@launch
+                if (fresh.isNotEmpty()) {
+                    fresh.forEach { autoIds += it.id }
+                    songQueue.addAll(fresh)
+                    syncQueueFlow()
+                    return@launch
+                }
+            }
+        }
+    }
+
+    private fun stopAutoplay() {
+        autoJob?.cancel(); autoJob = null
+        auto = null
+        autoIds.clear()
+    }
+
+    /** Se puso el bucle con las parecidas ya en la cola: fuera las que aún no han sonado. */
+    private fun dropAutoplay() {
+        if (auto == null && autoIds.isEmpty()) return
+        val ids = HashSet(autoIds)
+        stopAutoplay()
+        val kept = songQueue.filterIndexed { i, s -> i <= currentIndex || s.id !in ids }
+        if (kept.size != songQueue.size) {
+            cancelCrossfade()
+            songQueue = kept.toMutableList()
+            syncQueueFlow()
+        }
+    }
+
     private fun maybeReplenishQueue() {
+        maybeAutoplay()
         val remaining = songQueue.size - 1 - currentIndex
         if (remaining > 2) return
         val activeDj = dj
@@ -608,8 +786,8 @@ class DesktopPlayerConnection(
     fun prepareTransfer(songs: List<SongItem>, index: Int, positionMs: Long, shuffled: Boolean) {
         engine.pause()
         _shuffle.value = shuffled
-        scope.launch { prefs.setShuffle(shuffled) }
-        radio = null; dj = null; originalQueue = songs.toList(); songQueue = songs.toMutableList(); currentIndex = index.coerceIn(songs.indices)
+        stopAutoplay(); currentListId = null
+        radio = null; dj = null; originalQueue = songs.toList(); ages = List(songs.size) { null }; songQueue = songs.toMutableList(); currentIndex = index.coerceIn(songs.indices)
         syncQueueFlow(); startCurrentTrack(false, positionMs)
     }
 
@@ -739,6 +917,7 @@ class DesktopPlayerConnection(
                     plays.add(Play(id, song.title, song.artist, song.artistId, System.currentTimeMillis(), pos, dur.coerceAtLeast(pos), kind))
                 }
                 if (kind != null) dj?.heard(id, pos, dur.coerceAtLeast(pos))
+                if (id in autoIds && song != null) auto?.heard(id, song.artist, pos, dur)
             }
         }
     }
@@ -755,5 +934,11 @@ class DesktopPlayerConnection(
         }
         _previousEntry.value = if (currentIndex > 0) _queue.value.getOrNull(currentIndex - 1) else null
         _state.value = _state.value.copy(index = currentIndex, upNext = (songQueue.size - currentIndex - 1).coerceAtLeast(0))
+    }
+
+    private companion object {
+        /** Con cuántas por delante se piden las parecidas al acabar una lista (igual que el móvil). */
+        const val RADIO_AHEAD = 2
+        const val RADIO_PAGES = 3
     }
 }

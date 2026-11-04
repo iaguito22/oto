@@ -165,7 +165,6 @@ import java.io.File
 private enum class MenuSubView { None, Settings, Import, Downloads }
 
 /** El id con el que una carpeta suena como una lista (y se vuelve a abrir desde lo que suena). */
-private const val FOLDER_PREFIX = "folder:"
 
 
 /**
@@ -4199,6 +4198,7 @@ internal fun QueuePane(
     onSkipTo: (Int) -> Unit,
     onClose: (() -> Unit)? = null,
     currentIndex: Int? = null,
+    loopMode: io.github.iaguito22.oto.LoopMode = if (loop) io.github.iaguito22.oto.LoopMode.All else io.github.iaguito22.oto.LoopMode.Off,
 ) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         FlowRow(
@@ -4235,9 +4235,13 @@ internal fun QueuePane(
                     onClick = onToggleShuffle,
                 )
                 SheetCircleIconButton(
-                    icon = MobileIcons.repeat,
-                    tooltip = if (loop) "Bucle activo" else "Activar bucle",
-                    active = loop,
+                    icon = if (loopMode == io.github.iaguito22.oto.LoopMode.One) MobileIcons.repeatOne else MobileIcons.repeat,
+                    tooltip = when (loopMode) {
+                        io.github.iaguito22.oto.LoopMode.Off -> "Repetir lista"
+                        io.github.iaguito22.oto.LoopMode.All -> "Repitiendo la lista · repetir esta canción"
+                        io.github.iaguito22.oto.LoopMode.One -> "Repitiendo esta canción · quitar bucle"
+                    },
+                    active = loopMode != io.github.iaguito22.oto.LoopMode.Off,
                     accent = palette.primary,
                     onClick = onToggleLoop,
                 )

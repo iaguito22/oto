@@ -88,6 +88,7 @@ internal data class LibraryJump(val version:Int=0,val item:YTItem?=null,val loca
 private data class LibraryEdit(val kind:String,val id:String="",val value:String="")
 
 /** Biblioteca de escritorio: navegación lateral y un lienzo que cambia entre colección, búsqueda y escucha. */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuController,importer:Importer,
     account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={}) {
@@ -126,27 +127,39 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     val libraryKv=remember { OtoDirs.keyValue("desktop_library") }
     var cardSize by remember { mutableStateOf(libraryKv.getString("card_size")?.toIntOrNull()?.coerceIn(0,2) ?: 1) }
     var sizeMenu by remember { mutableStateOf(false) }
-    var desktopOrder by remember { mutableStateOf(runCatching { val a=JSONArray(libraryKv.getString("list_order") ?: "[]"); (0 until a.length()).map { a.getString(it) } }.getOrDefault(emptyList())) }
-    fun reorderCards(id:String,target:String,available:List<String>) {
-        val order=available.toMutableList()
-        val from=order.indexOf(id);val to=order.indexOf(target)
-        if(from<0 || to<0 || from==to)return
-        order.add(to,order.removeAt(from))
-        desktopOrder=desktopOrder.filter { it !in available }+order
+    val spots by prefs.spots.collectAsState(initial=mapOf("dj" to 0,LIKED_ID to 1))
+    var filling by remember {mutableStateOf<String?>(null)}
+    // Lo buscado hace poco (compartido con la lógica del móvil): sale al pulsar el buscador vacío.
+    val memory=remember { MenuMemory.of() }
+    val recents by memory.recents.collectAsState(initial=null)
+    var recentsOpen by remember {mutableStateOf(false)}
+    val focusManager=androidx.compose.ui.platform.LocalFocusManager.current
+    fun rememberSearch(item:YTItem?) { val q=menu.state.value.query; scope.launch { if(q.trim().length>=2)memory.remember(Recent.query(q)); item?.let(Recent::of)?.let{memory.remember(it)} } }
+    // «Hecho con lo tuyo»: se rehacen con tus listas, Me gusta y lo oído, sin esperar a YouTube.
+    var smart by remember {mutableStateOf<List<LocalPlaylist>>(emptyList())}
+    var smartOpen by remember {mutableStateOf<LocalPlaylist?>(null)}
+    LaunchedEffect(lists,liked,history) {
+        kotlinx.coroutines.delay(400)
+        val plays=player.allPlays()
+        smart=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { io.github.iaguito22.oto.dj.Smart.lists(lists,liked.songs,history,plays,System.currentTimeMillis()) }.getOrDefault(emptyList()) }
     }
-    fun saveOrder() {
-        libraryKv.putString("list_order",JSONArray(desktopOrder).toString())
-        val ranks=desktopOrder.withIndex().associate { it.value to it.index }
-        val ordered=lists.sortedBy { ranks[it.id] ?: Int.MAX_VALUE }.map { it.id }
-        scope.launch { prefs.orderLists(ordered) }
-    }
-    fun home(name:String) { section=name;local=null;folder=null;menu.onQuery("");while(menu.state.value.pages.isNotEmpty())menu.closeDetail() }
+    fun home(name:String) { section=name;local=null;folder=null;smartOpen=null;recentsOpen=false;menu.onQuery("");while(menu.state.value.pages.isNotEmpty())menu.closeDetail() }
     LaunchedEffect(navigation.first) {if(navigation.first>0)home(if(navigation.second==1)"Explorar" else "Tu música")}
-    LaunchedEffect(jump.version) { if(jump.version>0) { home("Tu música"); when { jump.item!=null -> menu.open(jump.item); jump.local==DOWNLOADS_ID -> home("Descargas"); jump.local!=null -> local=jump.local; jump.artistId!=null -> menu.openArtist(jump.artistId,jump.artistName) } } }
+    LaunchedEffect(jump.version) { if(jump.version>0) { home("Tu música"); when { jump.item!=null -> menu.open(jump.item); jump.local==DOWNLOADS_ID -> home("Descargas"); jump.local?.startsWith(FOLDER_PREFIX)==true -> folder=jump.local.removePrefix(FOLDER_PREFIX); jump.local!=null -> local=jump.local; jump.artistId!=null -> menu.openArtist(jump.artistId,jump.artistName) } } }
     fun openItem(item:YTItem) {if(item is SongItem)player.play(item) else {local=null;menu.onQuery("");menu.open(item)}}
+    fun openArtist(id:String,name:String) {home("Tu música");menu.openArtist(id,name)}
+    val songActions=rememberSongActions(player,prefs,onSave,::openArtist)
+    /** Toda la carpeta seguida, como una lista (igual que el móvil). */
+    fun playFolder(name:String,inside:List<LocalPlaylist>) = player.playLocal(LocalPlaylist(FOLDER_PREFIX+name,name,inside.flatMap{it.songs}.distinctBy{it.id}),null,false)
+    fun folderMenu(name:String)=listOf(
+        ContextMenuItem(if("d:$name" in pinned)"Quitar de arriba" else "Fijar arriba") {scope.launch {prefs.togglePin("d:$name")}},
+        ContextMenuItem("Añadir o quitar listas") {filling=name},
+        ContextMenuItem("Cambiar el nombre") {editor=LibraryEdit("renameFolder",name,name)},
+        ContextMenuItem("Deshacer la carpeta") {scope.launch{prefs.ungroup(name)};if(folder==name)folder=null},
+    )
     fun listMenu(list:LocalPlaylist)=listOf(
-        ContextMenuItem("Reproducir") {player.playLocal(list,0,false)},
-        ContextMenuItem(if(list.id in pinned)"Desfijar" else "Fijar arriba") {scope.launch {prefs.togglePin(list.id)}},
+        ContextMenuItem("Reproducir") {player.playLocal(list,null,false)},
+        ContextMenuItem(if(list.id in pinned)"Quitar de arriba" else "Fijar arriba") {scope.launch {prefs.togglePin(list.id)}},
         ContextMenuItem("Renombrar") {editor=LibraryEdit("rename",list.id,list.name)},
         ContextMenuItem("Mover a carpeta…") {moveList=list},
         ContextMenuItem(if(list.id in wanted)"Quitar descarga" else "Descargar") {scope.launch {prefs.setDownloadList(list.id,list.id !in wanted)}},
@@ -206,7 +219,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
             Column(Modifier.weight(1f).fillMaxHeight().padding(start=16.dp,end=28.dp,top=18.dp,bottom=12.dp),verticalArrangement=Arrangement.spacedBy(20.dp)) {
                 Row(Modifier.fillMaxWidth().height(48.dp).clip(CircleShape).background(Color.White.copy(alpha=.045f)).padding(start=16.dp,end=6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                     Icon(MobileIcons.search,null,Modifier.size(18.dp),tint=Color.White.copy(alpha=.35f))
-                    BasicTextField(state.query,{menu.onQuery(it);local=null},Modifier.weight(1f).onFocusChanged { onSearchFocus(it.isFocused) }.focusRequester(searchFocus),textStyle=OtoType.body.copy(color=Color.White),cursorBrush=SolidColor(Color.White),singleLine=true,decorationBox={field -> if(state.query.isBlank())Text("Buscar canciones, artistas o listas",style=OtoType.body,color=Color.White.copy(alpha=.36f));field()})
+                    BasicTextField(state.query,{menu.onQuery(it);local=null;smartOpen=null},Modifier.weight(1f).onFocusChanged { onSearchFocus(it.isFocused);if(!it.isFocused)recentsOpen=false }.focusRequester(searchFocus).onPointerEvent(PointerEventType.Press){recentsOpen=true}.onPreviewKeyEvent { e -> if(e.type==KeyEventType.KeyDown && e.key==Key.Escape && recentsOpen){recentsOpen=false;true} else false },textStyle=OtoType.body.copy(color=Color.White),cursorBrush=SolidColor(Color.White),singleLine=true,decorationBox={field -> if(state.query.isBlank())Text("Buscar canciones, artistas o listas",style=OtoType.body,color=Color.White.copy(alpha=.36f));field()})
                     if(state.query.isNotBlank())IconButton(onClick={menu.onQuery("")}){Icon(MobileIcons.close,"Limpiar búsqueda",Modifier.size(17.dp))}
                     HoverAction(Icons.Rounded.Devices,"Dispositivos",onClick=onDevices,tint=Color.White.copy(alpha=.55f))
                 }
@@ -216,7 +229,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 val remoteSongs=page?.songs
                 val selected=(if(local==LIKED_ID)liked else lists.firstOrNull{it.id==local})
                 val title=when {state.query.isNotBlank()->"Resultados";page!=null->page.item.title;selected!=null->selected.name;folder!=null->folder!!;else->section}
-                if(selected==null && page?.item !is ArtistItem && page?.item !is AlbumItem && page?.item !is PlaylistItem) Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                val showRecents=recentsOpen && state.query.isBlank()
+                if(selected==null && smartOpen==null && !showRecents && page?.item !is ArtistItem && page?.item !is AlbumItem && page?.item !is PlaylistItem) Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                     if(local!=null||page!=null||folder!=null)IconButton(onClick={local=null;folder=null;if(page!=null)menu.closeDetail()}){Icon(MobileIcons.arrowBack,"Volver",Modifier.size(20.dp))}
                     Text(title,style=OtoType.display,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f))
                     if(section=="Tu música"&&selected==null&&page==null&&state.query.isBlank()){
@@ -242,12 +256,19 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                             (fadeOut(tween(160)) + slideOutVertically(tween(200)) { -direction * it / 8 })
                     }, label="librarySection") { animatedSection ->
                     when {
-                        state.query.isNotBlank() -> SearchSpace(state,lists,np.id,player,menu,prefs,palette,onSave,onOpen=::openItem,onLocal={local=it;menu.onQuery("")})
+                        showRecents -> RecentSearches(recents,onPick={ r ->
+                            scope.launch { memory.remember(r) }
+                            val item=r.item()
+                            recentsOpen=false
+                            if(item==null) menu.onQuery(r.title) else { focusManager.clearFocus();openItem(item) }
+                        },onForget={ r -> scope.launch { memory.forget(r) } })
+                        state.query.isNotBlank() -> SearchSpace(state,lists,np.id,player,menu,prefs,palette,onSave,onOpen=::openItem,onLocal={local=it;menu.onQuery("")},onArtist=::openArtist,onRemember=::rememberSearch)
+                        smartOpen!=null -> SmartSpace(smartOpen!!,np.id,player,prefs,palette,onSave,::openArtist,onBack={smartOpen=null})
                         selected!=null -> LocalPlaylistView(selected,np.id,player,prefs,downloads,palette,onSave,
                             onBack={local=null},onFind={home("Tu música");searchFocus.requestFocus()},
                             onArtist={id,name->home("Tu música");menu.openArtist(id,name)},
                             actions=if(selected.id==LIKED_ID) listOf(ContextMenuItem(if(selected.id in wanted) "Quitar la descarga" else "Descargar") {scope.launch { prefs.setDownloadList(selected.id,selected.id !in wanted) }}) else listMenu(selected))
-                        page!=null && page.item is ArtistItem -> ArtistSpace(page,np.id,player,prefs,palette,onSave,onBack={menu.closeDetail()},onOpen=::openItem)
+                        page!=null && page.item is ArtistItem -> ArtistSpace(page,np.id,player,prefs,palette,onSave,onBack={menu.closeDetail()},onOpen=::openItem,onArtist={id,name->menu.openArtist(id,name)})
                         page!=null && (page.item is AlbumItem || page.item is PlaylistItem) -> AlbumSpace(page,np.id,player,prefs,palette,onSave,onBack={menu.closeDetail()},onArtist={id,name->menu.openArtist(id,name)})
                         page!=null -> {
                             when {page.error!=null->EmptyLibrary(page.error!!);remoteSongs==null->LinearProgressIndicator(Modifier.fillMaxWidth());else->Column(verticalArrangement=Arrangement.spacedBy(16.dp)) {
@@ -255,74 +276,112 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                     LibraryArt(page.item.thumbnail,Modifier.size(80.dp))
                                     Button(enabled=remoteSongs.isNotEmpty(),onClick={player.playAll(remoteSongs,0,page.item)}){Text("Reproducir")}
                                 }
-                                if(remoteSongs.isNotEmpty())SongList(remoteSongs.map{it.toHeard()},np.id,{i->player.playAll(remoteSongs,i,page.item)},onSave,player,prefs)
+                                if(remoteSongs.isNotEmpty())SongList(remoteSongs.map{it.toHeard()},np.id,{i->player.playAll(remoteSongs,i,page.item)},onSave,player,prefs,onArtist=::openArtist)
                                 else LazyColumn {page.shelves.forEach{shelf->item{Text(shelf.title,style=OtoType.section)};items(shelf.items){item->LibraryLine(item.title,"",item.thumbnail,{openItem(item)})}}}
                             }}
                         }
                         animatedSection=="Ajustes" -> SettingsSpace(prefs,player,palette,session,importState,artworkBackground,onArtworkBackground,backdropOpacity,onBackdropOpacity,shortcut,shortcutIssue,onShortcut,onAccount={home("Cuenta")},onImport={home("Importar")},onDevices=onDevices)
                         animatedSection=="Cuenta" -> SettingsAndAccountPane(prefs,importer,account,cloud,login,session,cloudState,importState,quality,dataSaver,shuffle,loop,player::setShuffle,player::setLoop,palette,{home("Importar")}, accountOnly = true, onAccountFromMobile = onAccountFromMobile)
                         animatedSection=="Importar" -> ImportPane(importer,prefs,palette,{home("Ajustes")},{home("Tu música")})
-                        animatedSection=="Descargas" -> DownloadsSpace(player,prefs,downloads,palette,np.id,onOpen={local=it},onSave=onSave,workScope=scope)
-                        animatedSection=="Recientes" -> SongList(history,np.id,{i->player.play(history[i].toSong())},onSave,player,prefs)
+                        animatedSection=="Descargas" -> DownloadsSpace(player,prefs,downloads,palette,np.id,onOpen={local=it},onSave=onSave,workScope=scope,onArtist=::openArtist)
+                        animatedSection=="Recientes" -> SongList(history,np.id,{i->player.play(history[i].toSong())},onSave,player,prefs,onArtist=::openArtist)
                         animatedSection=="Explorar" -> LazyColumn(verticalArrangement=Arrangement.spacedBy(24.dp)) {
                             item {Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){state.chips.forEach{chip->FilterChip(selected=state.chip==chip.title,onClick={menu.onChip(chip.title)},label={Text(chip.title)})}}}
+                            if(smart.isNotEmpty() && state.chip==null) item(key="smart") { SmartRow(smart,palette) { smartOpen=it } }
                             if(state.homeError!=null)item{TextButton(onClick=menu::loadHome){Text("Volver a cargar Explorar")}}
                             if(state.shelves==null)item{LinearProgressIndicator(Modifier.fillMaxWidth())}
                             state.shelves.orEmpty().forEach{shelf->item{Column(verticalArrangement=Arrangement.spacedBy(14.dp)){Text(shelf.title,style=OtoType.section);Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(18.dp)){shelf.items.forEach{item->LibraryCard(item.title,when(item){is SongItem->item.artists.joinToString{it.name};else->""},item.thumbnail,Modifier.width(150.dp)){openItem(item)}}}}}}
                         }
                         else -> {
-                            val ranks=desktopOrder.withIndex().associate { it.value to it.index }
-                            val visible=lists.filter{it.folder==folder}.sortedBy { ranks[it.id] ?: Int.MAX_VALUE }
-                            val featured=visible.filter{it.id in pinned}
-                            val regular=visible.filter{it.id !in pinned}
-                            val allFolders=(folders+lists.mapNotNull{it.folder}).sorted()
+                            // Mismo orden que el móvil: el de tus listas (compartido) y los sitios del DJ y Me gusta.
+                            val shelf=remember(lists,folders){shelfOf(lists,folders)}
+                            val inFolder=folder
+                            val folderLists=if(inFolder!=null) lists.filter{it.folder==inFolder} else emptyList()
+                            val (pinnedShelf,rest)=shelf.partition{it.key in pinned}
+                            val top=pinnedShelf.toMutableList().apply {
+                                listOf(Shelved(null,emptyList(),special="dj"),Shelved(null,listOf(liked),special=LIKED_ID))
+                                    .sortedBy{spots[it.special] ?: 0}
+                                    .forEach{add((spots[it.special] ?: 0).coerceIn(0,size),it)}
+                            }.toList()
+                            val gridEntries=if(inFolder!=null) folderLists.map{Shelved(null,listOf(it))} else rest
+                            var topOrder by remember{mutableStateOf(top)}
+                            LaunchedEffect(top){topOrder=top}
+                            var gridOrder by remember{mutableStateOf(gridEntries)}
+                            LaunchedEffect(gridEntries){gridOrder=gridEntries}
                             val featuredWidth=when(cardSize){0->112.dp;2->184.dp;else->144.dp}
                             val maxCardWidth=when(cardSize){0->150.dp;2->240.dp;else->190.dp}
-                            val cards=((if(folder==null) allFolders.map { it to null } else emptyList()) + (if(folder==null)regular else visible).map { it.name to it }).sortedBy { (name,list) -> ranks[list?.id ?: "folder:$name"] ?: if(list==null) -1 else Int.MAX_VALUE }
-                            val ids=cards.map { (name,list)->list?.id ?: "folder:$name" }
                             val grid=rememberLazyGridState()
-                            val moveGrid by rememberUpdatedState<(String,String)->Unit>({from,to->reorderCards(from,to,ids)})
-                            val movePinned by rememberUpdatedState<(String,String)->Unit>({from,to->reorderCards(from,to,featured.map{it.id})})
-                            val persistOrder by rememberUpdatedState(::saveOrder)
-                            val reorder=rememberReorderableLazyGridState(grid) { from,to -> moveGrid(from.key as String,to.key as String) }
+                            val moveIn:(List<Shelved>,Any,Any)->List<Shelved>? = { order,from,to ->
+                                val a=order.indexOfFirst{it.key==from};val b=order.indexOfFirst{it.key==to}
+                                if(a<0||b<0||a==b||!order[b].movable||!order[a].movable) null else order.toMutableList().apply{add(b,removeAt(a))}
+                            }
+                            val reorder=rememberReorderableLazyGridState(grid) { from,to -> moveIn(gridOrder,from.key,to.key)?.let{gridOrder=it} }
                             val pinnedRow=rememberLazyListState()
-                            val pinnedReorder=rememberReorderableLazyListState(pinnedRow) { from,to -> movePinned(from.key as String,to.key as String) }
+                            val pinnedReorder=rememberReorderableLazyListState(pinnedRow) { from,to -> moveIn(topOrder,from.key,to.key)?.let{topOrder=it} }
+                            val saveTop by rememberUpdatedState({ if(topOrder.map{it.key}!=top.map{it.key}){val row=topOrder;scope.launch{prefs.orderLists(reorderedIds(shelf,row));prefs.setSpots(spotsOf(row))}} })
+                            val saveGrid by rememberUpdatedState({
+                                if(gridOrder.map{it.key}!=gridEntries.map{it.key}) {
+                                    val base=if(inFolder!=null) lists.map{Shelved(null,listOf(it))} else shelf
+                                    val row=gridOrder
+                                    scope.launch{prefs.orderLists(reorderedIds(base,row))}
+                                }
+                            })
+                            @Composable fun ShelvedCard(e:Shelved,modifier:Modifier,dragging:Boolean) {
+                                when {
+                                    e.special=="dj" -> PlaylistCard("DJ","Mezcla para ti",null,modifier,special="dj",accent=palette.primary,lifted=dragging,onPlay={player.playDj {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ")}}}) {player.playDj {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ")}}}
+                                    e.special!=null -> PlaylistContextMenu(listOf(ContextMenuItem(if(LIKED_ID in wanted) "Quitar la descarga" else "Descargar") {scope.launch { prefs.setDownloadList(LIKED_ID,LIKED_ID !in wanted) }})) {
+                                        PlaylistCard("Me gusta","${liked.songs.size} canciones",null,modifier,special="liked",accent=palette.primary,lifted=dragging,onPlay=if(liked.songs.isNotEmpty()){{player.playLocal(liked,null,true)}}else null) {local=LIKED_ID}
+                                    }
+                                    e.folder!=null -> PlaylistContextMenu(folderMenu(e.folder)) {
+                                        PlaylistCard(e.folder,folderCount(e.lists.size),null,modifier,special="folder",accent=palette.primary,lifted=dragging,folderLists=e.lists,
+                                            onPlay=if(e.lists.any{it.songs.isNotEmpty()}){{playFolder(e.folder,e.lists)}}else null){folder=e.folder}
+                                    }
+                                    else -> { val list=e.lists.first(); PlaylistContextMenu(listMenu(list)) {
+                                        PlaylistCard(list.name,"${list.songs.size} canciones",list.songs.firstOrNull()?.artwork,modifier,onPlay=if(list.songs.isNotEmpty()){{player.playLocal(list,null,false)}}else null,lifted=dragging,playlist=list){local=list.id}
+                                    } }
+                                }
+                            }
                             LazyVerticalGrid(columns=GridCells.Adaptive(when(cardSize){0->130.dp;2->220.dp;else->170.dp}),state=grid,verticalArrangement=Arrangement.spacedBy(18.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(bottom=28.dp)) {
-                                if(folder==null) item(key="featured",span={GridItemSpan(maxLineSpan)}) {
+                                if(inFolder==null) item(key="featured",span={GridItemSpan(maxLineSpan)}) {
                                     Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
                                         Text("Tus listas",style=OtoType.section)
                                         LazyRow(state=pinnedRow,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
-                                            item(key="dj") { PlaylistCard("DJ","Mezcla para ti",null,Modifier.width(featuredWidth),special="dj",accent=palette.primary,onPlay={player.playDj {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ")}}}) {player.playDj {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ")}}} }
-                                            item(key="liked") { PlaylistCard("Me gusta","${liked.songs.size} canciones",null,Modifier.width(featuredWidth),special="liked",accent=palette.primary,onPlay=if(liked.songs.isNotEmpty()){{player.playLocal(liked,0,false)}}else null) {local=LIKED_ID} }
-                                            items(featured,key={it.id}) { list ->
-                                                ReorderableItem(pinnedReorder,list.id) { dragging ->
-                                                    PlaylistContextMenu(listMenu(list)) {
-                                                        PlaylistCard(list.name,"${list.songs.size} canciones",list.songs.firstOrNull()?.artwork,Modifier.width(featuredWidth).longPressDraggableHandle(onDragStopped={persistOrder()}),onPlay=if(list.songs.isNotEmpty()){{player.playLocal(list,0,false)}}else null,lifted=dragging,playlist=list){local=list.id}
-                                                    }
+                                            items(topOrder,key={it.key}) { e ->
+                                                ReorderableItem(pinnedReorder,e.key) { dragging ->
+                                                    ShelvedCard(e,Modifier.width(featuredWidth).longPressDraggableHandle(enabled=e.movable,onDragStopped={saveTop()}),dragging)
                                                 }
                                             }
                                         }
                                     }
-                                }
-                                if(cards.isNotEmpty())item(key="lists-title",span={GridItemSpan(maxLineSpan)}) {Text(if(folder==null) "Más de tus listas" else "Listas de la carpeta",style=OtoType.section)}
-                                items(cards,key={ (name,list)->list?.id ?: "folder:$name" }) { (name,list) ->
-                                    val id=list?.id ?: "folder:$name"
-                                    Box(Modifier.fillMaxWidth()) {
-                                    ReorderableItem(reorder,id) { dragging ->
-                                        val drag=Modifier.widthIn(max=maxCardWidth).fillMaxWidth().longPressDraggableHandle(onDragStopped={persistOrder()})
-                                        if(list==null) PlaylistContextMenu(listOf(ContextMenuItem("Renombrar"){editor=LibraryEdit("renameFolder",name,name)},ContextMenuItem("Desagrupar"){scope.launch{prefs.ungroup(name)}})) {
-                                            val count=lists.count{it.folder==name}
-                                            PlaylistCard(name,if(count==1) "Carpeta · 1 lista" else "Carpeta · $count listas",null,drag,special="folder",accent=palette.primary,lifted=dragging){folder=name}
-                                        } else PlaylistContextMenu(listMenu(list)) {
-                                            PlaylistCard(list.name,"${list.songs.size} canciones",list.songs.firstOrNull()?.artwork,drag,onPlay=if(list.songs.isNotEmpty()){{player.playLocal(list,0,false)}}else null,lifted=dragging,playlist=list){local=list.id}
+                                } else item(key="folder-actions",span={GridItemSpan(maxLineSpan)}) {
+                                    val folderShuffle=rememberListShuffle(player,FOLDER_PREFIX+inFolder)
+                                    Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                        Text(folderCount(folderLists.size),style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),modifier=Modifier.padding(end=8.dp))
+                                        if(folderLists.any{it.songs.isNotEmpty()}) {
+                                            Button(onClick={playFolder(inFolder,folderLists)},colors=ButtonDefaults.buttonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))){Text("Reproducir",style=OtoType.rowTitle)}
+                                            HoverAction(MobileIcons.shuffle,if(folderShuffle)"Desactivar aleatorio" else "Activar aleatorio",onClick={player.setShuffle(!folderShuffle,FOLDER_PREFIX+inFolder)},tint=if(folderShuffle)palette.primary else Color.White.copy(alpha=.6f))
+                                        }
+                                        TextButton(onClick={filling=inFolder}){Icon(MobileIcons.add,null,Modifier.size(17.dp));Spacer(Modifier.width(6.dp));Text("Añadir o quitar listas")}
+                                        Box { var open by remember{mutableStateOf(false)}
+                                            HoverAction(MobileIcons.moreHoriz,"Opciones de la carpeta",onClick={open=true})
+                                            LibraryDropdownMenu(open,{open=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(230.dp)) {
+                                                folderMenu(inFolder).forEach { item -> DropdownMenuItem(text={Text(item.label,style=OtoType.rowSub)},onClick={open=false;item.onClick()}) }
+                                            }
                                         }
                                     }
+                                }
+                                if(gridOrder.isNotEmpty())item(key="lists-title",span={GridItemSpan(maxLineSpan)}) {Text(if(inFolder==null) "Más de tus listas" else "Listas de la carpeta",style=OtoType.section)}
+                                items(gridOrder,key={it.key}) { e ->
+                                    Box(Modifier.fillMaxWidth()) {
+                                        ReorderableItem(reorder,e.key) { dragging ->
+                                            ShelvedCard(e,Modifier.widthIn(max=maxCardWidth).fillMaxWidth().longPressDraggableHandle(enabled=e.movable,onDragStopped={saveGrid()}),dragging)
+                                        }
                                     }
                                 }
-                                if(folder!=null && visible.isEmpty())item(span={GridItemSpan(maxLineSpan)}){EmptyLibrary("Esta carpeta está vacía.")}
+                                if(inFolder!=null && folderLists.isEmpty())item(span={GridItemSpan(maxLineSpan)}){EmptyLibrary("Esta carpeta está vacía. Añade listas con «Añadir o quitar listas».")}
                                 if(folder==null && history.isNotEmpty()) {
                                     item(key="recent-title",span={GridItemSpan(maxLineSpan)}) {Text("Oído hace poco",style=OtoType.section)}
-                                    items(history.take(8),key={"recent:${it.id}"},span={GridItemSpan(maxLineSpan)}) {h->LibraryLine(h.title,h.artist,h.artwork,{player.play(h.toSong())})}
+                                    items(history.take(8),key={"recent:${it.id}"},span={GridItemSpan(maxLineSpan)}) {h->val actions=songActions(h,null);PlaylistContextMenu(actions){LibraryLine(h.title,h.artist,h.artwork,{player.play(h.toSong())}){if(h.id==np.id)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=Color.White.copy(alpha=.7f));SongMenuButton(h.title,actions)}}}
                                 }
                             }
                         }
@@ -336,15 +395,15 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     }
     editor?.let {edit ->
         var text by remember(edit){mutableStateOf(edit.value)}
-        val isFolder = edit.kind == "folder" || edit.kind == "renameFolder"
-        val creating = edit.kind == "list" || edit.kind == "folder"
-        val title = when(edit.kind){"folder"->"Nueva carpeta";"list"->"Nueva lista";"renameFolder"->"Renombrar carpeta";else->"Renombrar lista"}
-        val action = when(edit.kind){"folder"->"Crear carpeta";"list"->"Crear lista";else->"Guardar cambios"}
+        val isFolder = edit.kind == "folder" || edit.kind == "renameFolder" || edit.kind == "folderFor"
+        val creating = edit.kind == "list" || edit.kind == "folder" || edit.kind == "folderFor"
+        val title = when(edit.kind){"folder","folderFor"->"Nueva carpeta";"list"->"Nueva lista";"renameFolder"->"Renombrar carpeta";else->"Renombrar lista"}
+        val action = when(edit.kind){"folder","folderFor"->"Crear carpeta";"list"->"Crear lista";else->"Guardar cambios"}
         val focus = remember(edit) { FocusRequester() }
         fun save() {
             val name = text.trim()
             if(name.isBlank()) return
-            scope.launch { when(edit.kind){"list"->prefs.createPlaylist(name);"folder"->prefs.createFolder(name);"renameFolder"->prefs.renameFolder(edit.id,name);else->prefs.renamePlaylist(edit.id,name)} }
+            scope.launch { when(edit.kind){"list"->prefs.createPlaylist(name);"folder"->prefs.createFolder(name);"folderFor"->{prefs.createFolder(name);prefs.moveToFolder(edit.id,name)};"renameFolder"->{prefs.renameFolder(edit.id,name);if(folder==edit.id)folder=name};else->prefs.renamePlaylist(edit.id,name)} }
             editor=null
         }
         Dialog(onDismissRequest={editor=null}) {
@@ -396,7 +455,42 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         }
                     }
                 }
-                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.End) { TextButton(onClick={moveList=null}) { Text("Cancelar",color=Color.White.copy(alpha=.65f)) } }
+                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                    TextButton(onClick={moveList=null;editor=LibraryEdit("folderFor",list.id)}) { Icon(MobileIcons.createNewFolder,null,Modifier.size(17.dp),tint=palette.primary);Spacer(Modifier.width(6.dp));Text("Nueva carpeta…",color=palette.primary) }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick={moveList=null}) { Text("Cancelar",color=Color.White.copy(alpha=.65f)) }
+                }
+            }
+        }
+    }
+    filling?.let { name ->
+        // Qué listas van en la carpeta: todas las tuyas con su marca; las de otra carpeta dicen cuál (como el móvil).
+        Dialog(onDismissRequest={filling=null}) {
+            Column(Modifier.width(420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF242826)).border(1.dp,Color.White.copy(alpha=.08f),RoundedCornerShape(24.dp)).padding(24.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(15.dp)) {
+                    FolderArt(lists.filter{it.folder==name},Modifier.size(62.dp))
+                    Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                        Text(name,style=OtoType.section,color=Color.White,maxLines=1,overflow=TextOverflow.Ellipsis)
+                        Text("Marca las listas que van dentro",style=OtoType.rowSub,color=Color.White.copy(alpha=.55f))
+                    }
+                }
+                if(lists.isEmpty()) Text("Aún no tienes listas.",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
+                LazyColumn(Modifier.heightIn(max=380.dp),verticalArrangement=Arrangement.spacedBy(3.dp)) {
+                    items(lists,key={it.id}) { l ->
+                        val inside=l.folder==name
+                        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { scope.launch { prefs.moveToFolder(l.id,if(inside) null else name) } }.padding(horizontal=10.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                            PlaylistMosaic(l,palette.primary,Modifier.size(40.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(l.name,style=OtoType.body,maxLines=1,overflow=TextOverflow.Ellipsis)
+                                Text(l.folder?.takeIf{!inside}?.let{"En «$it»"} ?: "${l.songs.size} canciones",style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1)
+                            }
+                            Box(Modifier.size(22.dp).clip(CircleShape).background(if(inside) palette.primary else Color.Transparent).border(1.5.dp,if(inside) palette.primary else Color.White.copy(alpha=.38f),CircleShape),contentAlignment=Alignment.Center) {
+                                if(inside) Icon(MobileIcons.check,null,Modifier.size(15.dp),tint=Color(0xFF101010))
+                            }
+                        }
+                    }
+                }
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.End) { TextButton(onClick={filling=null}) { Text("Listo",color=palette.primary) } }
             }
         }
     }
@@ -493,7 +587,9 @@ private fun LibraryNavigation(name:String,icon:androidx.compose.ui.graphics.vect
         Text(sub,Modifier.fillMaxWidth().padding(start=2.dp),style=OtoType.rowSub,color=Color.White.copy(alpha=.38f),maxLines=1,overflow=TextOverflow.Ellipsis)
     }
 }
-@Composable private fun PlaylistCard(title:String,sub:String,url:String?,modifier:Modifier=Modifier,special:String?=null,accent:Color=Color.White,onPlay:(()->Unit)?=null,lifted:Boolean=false,playlist:LocalPlaylist?=null,click:()->Unit) {
+internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $n listas"
+
+@Composable private fun PlaylistCard(title:String,sub:String,url:String?,modifier:Modifier=Modifier,special:String?=null,accent:Color=Color.White,onPlay:(()->Unit)?=null,lifted:Boolean=false,playlist:LocalPlaylist?=null,folderLists:List<LocalPlaylist> = emptyList(),click:()->Unit) {
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val grow by animateFloatAsState(if(hovered)1f else 0f,tween(180),label="playlistHover")
@@ -504,7 +600,7 @@ private fun LibraryNavigation(name:String,icon:androidx.compose.ui.graphics.vect
             Box(Modifier.fillMaxSize().padding((4f*(1f-grow)).dp).clip(RoundedCornerShape(12.dp)).then(if(lifted) Modifier.border(2.dp,accent.copy(alpha=.65f),RoundedCornerShape(12.dp)) else Modifier),contentAlignment=Alignment.Center) {
                 when(special) {
                     "liked" -> Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(accent,lerp(accent,Color(0xFF121212),.55f)))),contentAlignment=Alignment.Center) {Icon(MobileIcons.favorite,null,Modifier.fillMaxSize(.42f),tint=Color(0xFF121212))}
-                    "folder" -> Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(lerp(accent,Color(0xFF121212),.7f),Color(0xFF222822)))),contentAlignment=Alignment.Center) { Icon(MobileIcons.folder,null,Modifier.fillMaxSize(.34f),tint=accent.copy(alpha=.8f)) }
+                    "folder" -> FolderArt(folderLists,Modifier.fillMaxSize())
                     "dj" -> Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(lerp(accent,Color(0xFF121212),.25f),lerp(accent,Color(0xFF121212),.8f)))),contentAlignment=Alignment.Center) {
                         Box(Modifier.fillMaxSize(.72f).background(Color(0xFF121212),CircleShape),contentAlignment=Alignment.Center) {Box(Modifier.fillMaxSize(.36f).background(accent,CircleShape))}
                     }
@@ -539,18 +635,12 @@ private fun LibraryNavigation(name:String,icon:androidx.compose.ui.graphics.vect
     }
 }
 @Composable private fun EmptyLibrary(text:String){Text(text,Modifier.padding(vertical=24.dp),style=OtoType.body,color=Color.White.copy(alpha=.4f))}
-@Composable private fun SongList(songs:List<Heard>,current:String?,play:(Int)->Unit,save:(Heard)->Unit,player:DesktopPlayerConnection,prefs:Prefs,listId:String?=null) {
-    val scope=rememberCoroutineScope()
-    val requestedDownloads by prefs.downloadSongs.collectAsState(initial=emptyList())
-    val requestedIds=remember(requestedDownloads){requestedDownloads.mapTo(HashSet()){it.id}}
+@Composable private fun SongList(songs:List<Heard>,current:String?,play:(Int)->Unit,save:(Heard)->Unit,player:DesktopPlayerConnection,prefs:Prefs,listId:String?=null,onArtist:((String,String)->Unit)?=null) {
+    val songActions=rememberSongActions(player,prefs,save,onArtist)
     LazyColumn(verticalArrangement=Arrangement.spacedBy(2.dp)) {
         itemsIndexed(songs,key={i,h->"${h.id}:$i"}){i,h ->
-            PlaylistContextMenu(buildList {
-                add(ContextMenuItem("Guardar en…"){save(h)})
-                add(ContextMenuItem("Reproducir después"){player.playNext(h.toSong())})
-                add(ContextMenuItem(if(h.id in requestedIds) "Quitar la descarga" else "Descargar"){scope.launch{prefs.setDownloadSong(h,h.id !in requestedIds)}})
-                if(listId!=null)add(ContextMenuItem("Quitar de esta lista"){scope.launch{if(listId==LIKED_ID)prefs.setLiked(h,false)else prefs.removeFromPlaylist(listId,h.id)}})
-            }) { LibraryLine(h.title,h.artist,h.artwork,{play(i)}) {if(h.id==current)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=Color.White.copy(alpha=.7f));IconButton(onClick={save(h)}){Icon(MobileIcons.moreHoriz,"Guardar en…",Modifier.size(18.dp),tint=Color.White.copy(alpha=.35f))}} }
+            val actions=songActions(h,listId)
+            PlaylistContextMenu(actions) { LibraryLine(h.title,h.artist,h.artwork,{play(i)}) {if(h.id==current)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=Color.White.copy(alpha=.7f));SongMenuButton(h.title,actions)} }
         }
         if(songs.isEmpty())item{EmptyLibrary("Todavía no hay canciones aquí.")}
     }

@@ -21,11 +21,13 @@ import io.github.iaguito22.oto.ui.menu.*
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun SearchSpace(state:MenuState,lists:List<LocalPlaylist>,currentId:String?,player:DesktopPlayerConnection,menu:MenuController,prefs:Prefs,palette:ArtworkPalette,onSave:(Heard)->Unit,onOpen:(YTItem)->Unit,onLocal:(String)->Unit) {
+internal fun SearchSpace(state:MenuState,lists:List<LocalPlaylist>,currentId:String?,player:DesktopPlayerConnection,menu:MenuController,prefs:Prefs,palette:ArtworkPalette,onSave:(Heard)->Unit,onOpen:(YTItem)->Unit,onLocal:(String)->Unit,onArtist:(String,String)->Unit={_,_->},onRemember:(YTItem?)->Unit={}) {
     val scope=rememberCoroutineScope()
+    val songActions=rememberSongActions(player,prefs,onSave,onArtist)
     var loading by remember {mutableStateOf<String?>(null)}
     val local=if(state.filter==Filter.All||state.filter==Filter.Lists)lists.filter{it.name.contains(state.query,true)} else emptyList()
     fun playItem(item:YTItem) {
+        onRemember(item)
         if(item is SongItem){player.play(item);return}
         if(loading!=null)return
         loading=item.id
@@ -51,10 +53,10 @@ internal fun SearchSpace(state:MenuState,lists:List<LocalPlaylist>,currentId:Str
             state.query.trim().length<2 && state.results.isEmpty() && local.isEmpty() -> Text("Sigue escribiendo. Con dos letras ya busca.",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
             state.results.isEmpty() && local.isEmpty() -> Text("Sin resultados. Prueba con otro nombre o artista.",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
             else -> LazyColumn(contentPadding=PaddingValues(bottom=20.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
-                items(local,key={"local:${it.id}"}) {list->SearchLine(list.name,"Tu lista · ${list.songs.size} canciones",list.songs.firstOrNull()?.artwork,false,{onLocal(list.id)})}
+                items(local,key={"local:${it.id}"}) {list->SearchLine(list.name,"Tu lista · ${list.songs.size} canciones",list.songs.firstOrNull()?.artwork,false,{onRemember(null);onLocal(list.id)})}
                 itemsIndexed(state.results,key={i,item->"$i:${item.id}"}) {i,item->
                     val subtitle=when(item){is SongItem->"Canción · "+item.artists.joinToString{it.name};is ArtistItem->"Artista";is AlbumItem->listOfNotNull("Álbum",item.artists?.joinToString{it.name}?.takeIf{it.isNotBlank()},item.year?.toString()).joinToString(" · ");is PlaylistItem->listOfNotNull("Lista",item.author?.name).joinToString(" · ");else->""}
-                    val open={if(item is SongItem)player.play(item) else onOpen(item)}
+                    val open={onRemember(item);if(item is SongItem)player.play(item) else onOpen(item)}
                     if(i==0 && state.filter==Filter.All) {
                         Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color.White.copy(alpha=.045f)).clickable(onClick=open).padding(20.dp)) {
                             Column(Modifier.padding(end=60.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -66,9 +68,10 @@ internal fun SearchSpace(state:MenuState,lists:List<LocalPlaylist>,currentId:Str
                                 androidx.compose.foundation.Canvas(Modifier.size(20.dp)) {val p=androidx.compose.ui.graphics.Path().apply{moveTo(size.width*.32f,size.height*.16f);lineTo(size.width*.82f,size.height*.5f);lineTo(size.width*.32f,size.height*.84f);close()};drawPath(p,Color(0xFF111111),style=androidx.compose.ui.graphics.drawscope.Stroke(1.8.dp.toPx(),cap=androidx.compose.ui.graphics.StrokeCap.Round,join=androidx.compose.ui.graphics.StrokeJoin.Round))}
                             }
                         }
-                    } else SearchLine(item.title,subtitle,item.thumbnail,item is ArtistItem,open) {
-                        if(item is SongItem) { val h=item.toHeard();var openMenu by remember(item.id){mutableStateOf(false)};Box{HoverAction(MobileIcons.moreHoriz,"Opciones de ${item.title}",onClick={openMenu=true});LibraryDropdownMenu(openMenu,{openMenu=false},shape=RoundedCornerShape(18.dp)){DropdownMenuItem(text={Text("Guardar en…")},onClick={openMenu=false;onSave(h)});DropdownMenuItem(text={Text("Reproducir a continuación")},onClick={openMenu=false;player.playNext(item)});DropdownMenuItem(text={Text("Descargar")},onClick={openMenu=false;scope.launch{prefs.setDownloadSong(h,true)}})}} }
-                    }
+                    } else if(item is SongItem) {
+                        val h=item.toHeard();val actions=songActions(h,null)
+                        PlaylistContextMenu(actions) { SearchLine(item.title,subtitle,item.thumbnail,false,open) { SongMenuButton(item.title,actions) } }
+                    } else SearchLine(item.title,subtitle,item.thumbnail,item is ArtistItem,open)
                 }
             }
         }

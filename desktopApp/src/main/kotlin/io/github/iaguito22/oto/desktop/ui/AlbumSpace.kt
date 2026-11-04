@@ -26,13 +26,12 @@ import java.awt.datatransfer.StringSelection
 internal fun AlbumSpace(page:Page.Remote,currentId:String?,player:DesktopPlayerConnection,prefs:Prefs,palette:ArtworkPalette,onSave:(Heard)->Unit,onBack:()->Unit,onArtist:(String,String)->Unit) {
     val album=page.item
     val songs=page.songs
-    val globalShuffle by player.shuffle.collectAsState()
-    val kv=remember {OtoDirs.keyValue("desktop_list_modes")}
-    var shuffle by remember(album.id){mutableStateOf(kv.getString(album.id)?.toBooleanStrictOrNull() ?: globalShuffle)}
+    val shuffle=rememberListShuffle(player,album.id)
     var saving by remember(album.id){mutableStateOf(false)}
     val downloaded by prefs.downloadSongs.collectAsState(initial=emptyList())
     val scope=rememberCoroutineScope()
-    fun play(index:Int?) {if(!songs.isNullOrEmpty()){player.setShuffle(shuffle);player.playAll(songs,index,album)}}
+    fun play(index:Int?) {if(!songs.isNullOrEmpty()){player.playAll(songs,index,album)}}
+    val songActions=rememberSongActions(player,prefs,onSave,onArtist)
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=28.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
         item(key="header") {Column(Modifier.fillMaxWidth().padding(bottom=24.dp)) {
             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
@@ -51,7 +50,7 @@ internal fun AlbumSpace(page:Page.Remote,currentId:String?,player:DesktopPlayerC
                     if(sub.isNotBlank())Text(sub,style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),maxLines=2,overflow=TextOverflow.Ellipsis)
                     if(!songs.isNullOrEmpty())Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         Button(onClick={play(null)},colors=ButtonDefaults.buttonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))){Text("Reproducir",fontWeight=FontWeight.SemiBold)}
-                        HoverAction(MobileIcons.shuffle,if(shuffle)"Desactivar aleatorio" else "Activar aleatorio",onClick={shuffle=!shuffle;kv.putString(album.id,shuffle.toString());if(player.source.value?.item?.id==album.id)player.setShuffle(shuffle)},tint=if(shuffle)palette.primary else Color.White.copy(alpha=.6f))
+                        HoverAction(MobileIcons.shuffle,if(shuffle)"Desactivar aleatorio" else "Activar aleatorio",onClick={player.setShuffle(!shuffle,album.id)},tint=if(shuffle)palette.primary else Color.White.copy(alpha=.6f))
                         HoverAction(MobileIcons.add,"Guardar canciones",onClick={saving=true})
                     }
                 }
@@ -62,18 +61,13 @@ internal fun AlbumSpace(page:Page.Remote,currentId:String?,player:DesktopPlayerC
             songs==null -> item{LinearProgressIndicator(Modifier.fillMaxWidth(),color=palette.primary)}
             songs.isEmpty() -> item{Text("No hay canciones disponibles.",Modifier.padding(20.dp),style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))}
             else -> itemsIndexed(songs,key={i,s->"${s.id}:$i"}){i,song ->
-                val h=song.toHeard();var menu by remember(song.id){mutableStateOf(false)}
-                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable{play(i)}.padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
-                    LibraryArt(h.artwork,Modifier.size(48.dp));Column(Modifier.weight(1f)){Text(h.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(h.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)}
-                    if(h.id==currentId)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=palette.primary)
-                    Box {HoverAction(MobileIcons.moreHoriz,"Opciones de ${h.title}",onClick={menu=true});LibraryDropdownMenu(menu,{menu=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(240.dp)) {
-                        @Composable fun Action(label:String,click:()->Unit){DropdownMenuItem(text={Text(label,style=OtoType.rowSub)},onClick={menu=false;click()})}
-                        Action("Reproducir a continuación"){player.playNext(song)}
-                        Action("Guardar en…"){onSave(h)}
-                        Action(if(downloaded.any{it.id==h.id})"Quitar la descarga" else "Descargar"){scope.launch{prefs.setDownloadSong(h,downloaded.none{it.id==h.id})}}
-                        h.artistId?.let{id->Action("Ir a ${h.artist}"){onArtist(id,h.artist)}}
-                        Action("Copiar enlace"){runCatching{Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(song.shareLink),null)}}
-                    }}
+                val h=song.toHeard();val actions=songActions(h,null)
+                PlaylistContextMenu(actions) {
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable{play(i)}.padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
+                        LibraryArt(h.artwork,Modifier.size(48.dp));Column(Modifier.weight(1f)){Text(h.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(h.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)}
+                        if(h.id==currentId)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=palette.primary)
+                        SongMenuButton(h.title,actions)
+                    }
                 }
             }
         }

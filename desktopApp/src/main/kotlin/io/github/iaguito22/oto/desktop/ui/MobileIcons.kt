@@ -52,6 +52,7 @@ object MobileIcons {
     val queueMusic: ImageVector get() = icon("ic_queue_music")
     val refresh: ImageVector get() = icon("ic_refresh")
     val repeat: ImageVector get() = icon("ic_repeat")
+    val repeatOne: ImageVector get() = icon("ic_repeat_one")
     val ring: ImageVector get() = icon("ic_ring")
     val search: ImageVector get() = icon("ic_search")
     val settings: ImageVector get() = icon("ic_settings")

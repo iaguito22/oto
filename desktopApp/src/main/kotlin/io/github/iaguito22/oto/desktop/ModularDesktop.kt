@@ -153,6 +153,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     }
     val shuffle by player.shuffle.collectAsState()
     val loop by player.loop.collectAsState()
+    val loopMode by player.loopMode.collectAsState()
     val lyrics by player.lyrics.collectAsState()
     val lyricsLoading by player.lyricsLoading.collectAsState()
     val volume by player.volume.collectAsState()
@@ -305,7 +306,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         }
     }
     ModuleWindow("Cola", queueWindow, queueOpen && !windowsHidden, { queueOpen = false }, dock=docking, dockId=DockId.Queue, keys = ::shortcuts, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity) {
-        Box(Modifier.fillMaxSize().padding(start=20.dp,end=20.dp,bottom=20.dp,top=4.dp)) { QueuePane(queue, nowPlaying.id, shuffle, loop, palette, { player.setShuffle(!shuffle) }, { player.setLoop(!loop) }, player::move, player::remove, player::clearQueue, player::skipTo, currentIndex = nowPlaying.index) }
+        Box(Modifier.fillMaxSize().padding(start=20.dp,end=20.dp,bottom=20.dp,top=4.dp)) { QueuePane(queue, nowPlaying.id, shuffle, loop, palette, { player.setShuffle(!shuffle) }, { player.cycleLoop() }, player::move, player::remove, player::clearQueue, player::skipTo, currentIndex = nowPlaying.index, loopMode = loopMode) }
     }
     ModuleWindow("Tu música", libraryWindow, menuOpen && !windowsHidden, {closePrimary(DockId.Library)}, dock=docking, dockId=DockId.Library, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity,
         extra={
