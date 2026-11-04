@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
+import androidx.compose.material.icons.outlined.PushPin as OutlinedPushPin
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -253,13 +254,14 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     OtoTray(toggle={showOrHide()}, player={windowsHidden=false; playerOpen=true}, library={windowsHidden=false; menuOpen=true},
         lyrics={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; lyricsOpen=true},
         queue={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; queueOpen=true}, quit=quit,
-        playing=nowPlaying.playing, hasSong=nowPlaying.id != null, previous=player::previous, playPause=player::toggle, next=player::next)
+        playing=nowPlaying.playing, hasSong=nowPlaying.id != null, previous=player::previous, playPause=player::toggle, next=player::next,
+        volume=volume, setVolume=player::setVolume)
     ModuleWindow("Reproductor", playerWindow, playerOpen && !windowsHidden, { closePrimary(DockId.Player) }, pinned && playerSolo, accent = palette.primary, dock=docking, dockId=DockId.Player,
         keys = ::shortcuts, onWindow = { playerFrame = it }, immersive = true, chrome = chrome,
         minimum = if(form == PlayerForm.Vertical) DpSize(96.dp,240.dp) else if(form == PlayerForm.Horizontal) DpSize(280.dp,108.dp) else DpSize(260.dp,370.dp),
         backgroundArtwork = if(artworkBackground) backdrop else null, backgroundOpacity=backdropOpacity, actionsOnRight = form == PlayerForm.Horizontal, hover = {pointerInside = it}, extra = {
             WindowOptions(options,{options=it})
-            if(playerSolo && form != PlayerForm.Vertical) SmallAction(Icons.Rounded.PushPin, if(pinned) "Desfijar" else "Fijar sobre otras ventanas", active=pinned) { pinned = !pinned;kv.putString("pinned",pinned.toString()) }
+            if(playerSolo && form != PlayerForm.Vertical) PinAction(pinned) { pinned = !pinned;kv.putString("pinned",pinned.toString()) }
         }) {
         @Composable fun PlayerContents() {
         val quality by player.currentQuality.collectAsState()
@@ -271,10 +273,9 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
                 val src=source; if(src?.item != null || src?.local != null) { jump=LibraryJump(jump.version+1,src?.item,src?.local);menuOpen=true } else if(src?.kind != "DJ") queueOpen=true
             }, {id,name -> jump=LibraryJump(jump.version+1,artistId=id,artistName=name);menuOpen=true},
             qualityLabel = qualityLabel, verticalPin = if(playerSolo && form==PlayerForm.Vertical) ({
-                HoverAction(Icons.Rounded.PushPin,if(pinned) "Desfijar" else "Fijar sobre otras ventanas",enabled=chrome,
+                HoverAction(pinIcon(pinned),if(pinned) "Desfijar" else "Fijar sobre otras ventanas",enabled=chrome,
                     onClick={pinned=!pinned;kv.putString("pinned",pinned.toString())},
-                    tint=if(pinned)palette.primary else Color.White.copy(alpha=.45f),size=28.dp,
-                    modifier=if(pinned) Modifier.background(palette.primary.copy(alpha=.25f),RoundedCornerShape(9.dp)) else Modifier)
+                    tint=pinTint(pinned),size=28.dp)
             }) else null)
         }
         PlayerContents()
@@ -355,6 +356,21 @@ private fun rememberModuleState(id: String, w: Int, h: Int): WindowState {
         if (x != Long.MIN_VALUE && y != Long.MIN_VALUE && GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.any { it.defaultConfiguration.bounds.contains(x.toInt(), y.toInt()) }) state.position = WindowPosition(x.toInt().dp, y.toInt().dp)
     }
     return state
+}
+
+/** Como el corazón de Me gusta: hueca al estar suelta, rellena al fijarla, sin recuadro. */
+private fun pinIcon(pinned: Boolean): ImageVector = if(pinned) Icons.Rounded.PushPin else Icons.Outlined.OutlinedPushPin
+private fun pinTint(pinned: Boolean) = Color.White.copy(alpha=if(pinned) .95f else .55f)
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun PinAction(pinned: Boolean, onClick: () -> Unit) {
+    val label = if(pinned) "Desfijar" else "Fijar sobre otras ventanas"
+    key(LocalWindowTooltipEpoch.current) {
+        TooltipArea(tooltip = { Surface(color = Color(0xFF30362F), shape = RoundedCornerShape(8.dp)) { Text(label, Modifier.padding(8.dp), style = OtoType.rowSub) } }) {
+            HoverAction(pinIcon(pinned),label,onClick=onClick,size=LocalWindowActionSize.current,tint=pinTint(pinned))
+        }
+    }
 }
 
 private val LocalWindowActionSize = staticCompositionLocalOf { 36.dp }

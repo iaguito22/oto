@@ -91,20 +91,38 @@ internal class DockSession(val layout: DockLayout, val supportsMaximize: Boolean
         layout.changed = { revision++ }
     }
     fun trace(message: String) { if(System.getenv("OTO_DOCK_TRACE") == "1") println("Dock: $message") }
+    /** Sube todo el conjunto: también lo saca de minimizado. La ventana [id] queda delante y con el foco. */
     fun raise(id: DockId) {
         trace("raise $id, raising=$raising")
         lastFocused = id
-        if (raising) return
+        if (raising || id !in layout.bounds) return
         raising = true
         try {
             layout.group(id).members.filter { it != id }.forEach { member ->
                 windows[member]?.let { w ->
+                    if (!w.isShowing) return@let
+                    (w as? Frame)?.let { if (it.extendedState and Frame.ICONIFIED != 0) it.extendedState = it.extendedState and Frame.ICONIFIED.inv() }
                     val previous = w.isAutoRequestFocus
                     try { w.isAutoRequestFocus=false; w.toFront() } finally { w.isAutoRequestFocus=previous }
                 }
             }
             windows[id]?.toFront()
         } finally { EventQueue.invokeLater { raising = false } }
+    }
+    /** Solo la ventana principal tiene botón en la barra de tareas: el resto la sigue al minimizar y restaurar. */
+    private var minimizing = false
+    fun setGroupMinimized(id: DockId, minimized: Boolean) {
+        if (minimizing || id !in layout.bounds) return
+        minimizing = true
+        try {
+            layout.group(id).members.filter { it != id }.forEach { member ->
+                (windows[member] as? Frame)?.takeIf { it.isShowing }?.let { frame ->
+                    val state = if (minimized) frame.extendedState or Frame.ICONIFIED else frame.extendedState and Frame.ICONIFIED.inv()
+                    if (state != frame.extendedState) frame.extendedState = state
+                }
+            }
+        } finally { minimizing = false }
+        if (!minimized) EventQueue.invokeLater { raise(layout.group(id).leader.takeIf { it in windows } ?: id) }
     }
     fun maximize(id: DockId) {
         if(!supportsMaximize) return
@@ -158,16 +176,15 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
         session.windows[id] = window
         val listener = object : WindowAdapter() {
             override fun windowStateChanged(e: WindowEvent) {
-                if (id !in session.layout.bounds || session.layout.group(id).leader != id) return
+                // Cualquier miembro (también con Win+↓): las demás no tienen botón propio y se perderían.
+                if (id !in session.layout.bounds) return
                 val wasMinimized = e.oldState and Frame.ICONIFIED != 0
                 val minimized = e.newState and Frame.ICONIFIED != 0
-                if (wasMinimized == minimized) return
-                session.layout.group(id).members.filter { it != id }.forEach { member ->
-                    (session.windows[member] as? Frame)?.let { frame ->
-                        frame.extendedState = if (minimized) frame.extendedState or Frame.ICONIFIED
-                        else frame.extendedState and Frame.ICONIFIED.inv()
-                    }
-                }
+                if (wasMinimized != minimized) session.setGroupMinimized(id, minimized)
+            }
+            override fun windowActivated(e: WindowEvent) {
+                // Clic en la barra de tareas o Alt+Tab activan solo la ventana principal: traer el conjunto entero.
+                if (id in session.layout.bounds && !session.draggingGroup) EventQueue.invokeLater { session.raise(id) }
             }
             override fun windowGainedFocus(e: WindowEvent) {
                 if (id in session.layout.bounds) {
@@ -206,9 +223,10 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
         }
         window.addWindowFocusListener(listener)
         window.addWindowStateListener(listener)
+        window.addWindowListener(listener)
         window.addComponentListener(geometry)
         onDispose {
-            bridge.job?.cancel(); window.removeWindowFocusListener(listener); window.removeWindowStateListener(listener)
+            bridge.job?.cancel(); window.removeWindowFocusListener(listener); window.removeWindowStateListener(listener); window.removeWindowListener(listener)
             window.removeComponentListener(geometry); session.windows.remove(id)
         }
     }
