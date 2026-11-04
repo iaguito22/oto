@@ -30,6 +30,34 @@ internal fun useSharpTaskbarIcons(window: Window) {
     if (System.getProperty("os.name").startsWith("Windows")) window.iconImages = taskbarIcons
 }
 
+private val isWindows = System.getProperty("os.name").startsWith("Windows")
+private fun hwnd(window: Window) = com.sun.jna.platform.win32.WinDef.HWND(Native.getWindowPointer(window))
+
+/**
+ * Coloca [window] justo debajo de [above] sin activarla. Window.toFront de AWT puede
+ * quitarle el primer plano a la ventana principal, y entonces Windows ya no la
+ * minimiza al volver a clicar su botón de la barra de tareas.
+ */
+internal fun placeBelowWithoutActivation(window: Window, above: Window): Boolean {
+    if (!isWindows || !window.isShowing || !above.isShowing) return false
+    return runCatching {
+        val user = com.sun.jna.platform.win32.User32.INSTANCE
+        // SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER
+        user.SetWindowPos(hwnd(window), hwnd(above), 0, 0, 0, 0, 0x0001 or 0x0002 or 0x0010 or 0x0200)
+    }.getOrDefault(false)
+}
+
+/** Restaura [window] de minimizada sin activarla y la deja debajo de [above]. */
+internal fun restoreBelowWithoutActivation(window: Window, above: Window): Boolean {
+    if (!isWindows || !window.isShowing) return false
+    return runCatching {
+        val target = hwnd(window)
+        if (((window as? java.awt.Frame)?.extendedState ?: 0) and java.awt.Frame.ICONIFIED != 0)
+            com.sun.jna.platform.win32.User32.INSTANCE.ShowWindow(target, 4) // SW_SHOWNOACTIVATE
+        placeBelowWithoutActivation(window, above)
+    }.getOrDefault(false)
+}
+
 /** The shell owns taskbar buttons; changing them must not hide or recreate AWT windows. */
 internal fun updateTaskbarEntry(window: Window, show: Boolean) {
     if (!System.getProperty("os.name").startsWith("Windows") || !window.isShowing) return

@@ -91,38 +91,72 @@ internal class DockSession(val layout: DockLayout, val supportsMaximize: Boolean
         layout.changed = { revision++ }
     }
     fun trace(message: String) { if(System.getenv("OTO_DOCK_TRACE") == "1") println("Dock: $message") }
-    /** Sube todo el conjunto: también lo saca de minimizado. La ventana [id] queda delante y con el foco. */
+    private fun Window.iconified() = this is Frame && extendedState and Frame.ICONIFIED != 0
+    /**
+     * Sube el conjunto detrás de [id], que queda delante y con el foco. Nunca saca nada de
+     * minimizado: eso solo lo hace [setGroupMinimized] cuando vuelve la ventana principal.
+     * (Al minimizar, Windows activa la siguiente ventana; si aquí se restaurase, minimizar
+     * y restaurar se dispararían en bucle.)
+     */
     fun raise(id: DockId) {
         trace("raise $id, raising=$raising")
         lastFocused = id
         if (raising || id !in layout.bounds) return
+        val front = windows[id]
+        if (front == null || !front.isShowing || front.iconified()) return
         raising = true
         try {
             layout.group(id).members.filter { it != id }.forEach { member ->
                 windows[member]?.let { w ->
-                    if (!w.isShowing) return@let
-                    (w as? Frame)?.let { if (it.extendedState and Frame.ICONIFIED != 0) it.extendedState = it.extendedState and Frame.ICONIFIED.inv() }
+                    if (!w.isShowing || w.iconified()) return@let
+                    // En Windows, sin activarlas: la ventana elegida conserva el primer plano y el
+                    // botón de la barra de tareas puede volver a esconder el conjunto.
+                    if (placeBelowWithoutActivation(w, front)) return@let
                     val previous = w.isAutoRequestFocus
                     try { w.isAutoRequestFocus=false; w.toFront() } finally { w.isAutoRequestFocus=previous }
                 }
             }
-            windows[id]?.toFront()
+            if (!front.isActive) front.toFront()
         } finally { EventQueue.invokeLater { raising = false } }
     }
-    /** Solo la ventana principal tiene botón en la barra de tareas: el resto la sigue al minimizar y restaurar. */
-    private var minimizing = false
+    /** Durante un minimizado o restaurado del conjunto llegan eventos propios con retraso: ignorarlos. */
+    private var groupChangedAt = 0L
+    fun settlingGroup() = System.nanoTime() - groupChangedAt < 800_000_000L
+    /**
+     * El botón de la barra de tareas es de la ventana principal. Si estaba activa otra del
+     * conjunto, Windows activa la principal en vez de minimizar: lo tratamos como «esconder».
+     */
+    fun taskbarToggle(id: DockId, previous: Window?): Boolean {
+        if (id !in layout.bounds || settlingGroup()) return false
+        val g = layout.group(id)
+        if (g.leader != id || previous == null || g.members.none { it != id && windows[it] === previous }) return false
+        if (previous.iconified() || !previous.isShowing) return false
+        val pointer = MouseInfo.getPointerInfo()?.location ?: return false
+        if (g.members.any { windows[it]?.let { w -> w.isShowing && w.bounds.contains(pointer) } == true }) return false
+        val frame = windows[id] as? Frame ?: return false
+        trace("taskbar toggle $id")
+        frame.extendedState = frame.extendedState or Frame.ICONIFIED
+        return true
+    }
+    /**
+     * Solo la ventana principal tiene botón en la barra de tareas: el resto la sigue.
+     * Minimizar cualquier miembro esconde el conjunto; restaurar solo cuenta si vuelve la principal.
+     */
     fun setGroupMinimized(id: DockId, minimized: Boolean) {
-        if (minimizing || id !in layout.bounds) return
-        minimizing = true
-        try {
-            layout.group(id).members.filter { it != id }.forEach { member ->
-                (windows[member] as? Frame)?.takeIf { it.isShowing }?.let { frame ->
-                    val state = if (minimized) frame.extendedState or Frame.ICONIFIED else frame.extendedState and Frame.ICONIFIED.inv()
-                    if (state != frame.extendedState) frame.extendedState = state
-                }
+        if (id !in layout.bounds) return
+        val g = layout.group(id)
+        if (!minimized && g.leader != id) return
+        if (settlingGroup() && g.leader != id) return
+        trace("group minimized=$minimized by $id")
+        groupChangedAt = System.nanoTime()
+        val own = windows[id]
+        g.members.filter { it != id }.forEach { member ->
+            (windows[member] as? Frame)?.takeIf { it.isShowing }?.let { frame ->
+                if (minimized) { if (!frame.iconified()) frame.extendedState = frame.extendedState or Frame.ICONIFIED; return@let }
+                if (own != null && restoreBelowWithoutActivation(frame, own)) return@let
+                if (frame.iconified()) frame.extendedState = frame.extendedState and Frame.ICONIFIED.inv()
             }
-        } finally { minimizing = false }
-        if (!minimized) EventQueue.invokeLater { raise(layout.group(id).leader.takeIf { it in windows } ?: id) }
+        }
     }
     fun maximize(id: DockId) {
         if(!supportsMaximize) return
@@ -184,7 +218,10 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
             }
             override fun windowActivated(e: WindowEvent) {
                 // Clic en la barra de tareas o Alt+Tab activan solo la ventana principal: traer el conjunto entero.
-                if (id in session.layout.bounds && !session.draggingGroup) EventQueue.invokeLater { session.raise(id) }
+                if (id !in session.layout.bounds || session.draggingGroup) return
+                if (session.taskbarToggle(id, e.oppositeWindow)) return
+                if (session.settlingGroup()) return
+                EventQueue.invokeLater { session.raise(id) }
             }
             override fun windowGainedFocus(e: WindowEvent) {
                 if (id in session.layout.bounds) {
