@@ -160,7 +160,7 @@ private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).t
 
 /** El selector del móvil: un indicador que se desliza a la opción elegida. */
 @Composable private fun ChoiceSelector(options:List<String>,selected:Int,width:Dp,accent:Color,onSelect:(Int)->Unit) {
-    val at by animateFloatAsState(selected.toFloat(),spring(dampingRatio=.8f,stiffness=500f),label="choice")
+    val at by animateFloatAsState(selected.toFloat(),Motion.toggle(),label="choice")
     Row(Modifier.height(36.dp).clip(CircleShape).background(Color.White.copy(alpha=.06f)).drawBehind {
         val w=size.width/options.size
         drawRoundRect(accent.copy(alpha=.22f),Offset(w*at+3.dp.toPx(),3.dp.toPx()),Size(w-6.dp.toPx(),size.height-6.dp.toPx()),CornerRadius(size.height))
@@ -178,7 +178,7 @@ private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).t
 
 /** La marca del móvil: un aro vacío que se llena de acento con un pequeño rebote. */
 @Composable private fun Check(on:Boolean,accent:Color) {
-    val f by animateFloatAsState(if(on)1f else 0f,spring(dampingRatio=.55f,stiffness=700f),label="check")
+    val f by animateFloatAsState(if(on)1f else 0f,Motion.toggle(),label="check")
     Box(Modifier.size(26.dp).graphicsLayer { val s=1f+.12f*(f*(1f-f)*4f);scaleX=s;scaleY=s }.clip(CircleShape)
         .border(1.5.dp,lerp(Color.White.copy(alpha=.36f),accent,f.coerceIn(0f,1f)),CircleShape).background(accent.copy(alpha=f.coerceIn(0f,1f))),contentAlignment=Alignment.Center) {
         Icon(MobileIcons.check,null,Modifier.size(18.dp).graphicsLayer { val s=f.coerceIn(0f,1.2f);scaleX=s;scaleY=s;alpha=f.coerceIn(0f,1f) },tint=Color(0xFF101010))
@@ -223,7 +223,7 @@ private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).t
 }
 
 @Composable private fun SettingFrame(icon:ImageVector,accent:Color,content:@Composable ColumnScope.()->Unit) {
-    Row(Modifier.fillMaxWidth().padding(horizontal=12.dp,vertical=12.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),verticalAlignment=Alignment.Top) {
+    Row(Modifier.fillMaxWidth().cascadeIn().padding(horizontal=12.dp,vertical=12.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),verticalAlignment=Alignment.Top) {
         SettingIcon(icon,accent);Column(Modifier.weight(1f).padding(top=2.dp),verticalArrangement=Arrangement.spacedBy(4.dp),content=content)
     }
 }
@@ -232,7 +232,7 @@ private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).t
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val highlight by animateFloatAsState(if(hovered).055f else 0f,tween(180),label="settingsHover")
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha=highlight)).hoverable(interaction).clickable(interactionSource=interaction,indication=null,onClick=onClick).padding(horizontal=12.dp,vertical=12.dp),
+    Row(Modifier.fillMaxWidth().cascadeIn().clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha=highlight)).hoverable(interaction).clickable(interactionSource=interaction,indication=null,onClick=onClick).padding(horizontal=12.dp,vertical=12.dp),
         verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp),content=content)
 }
 

@@ -255,6 +255,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         (fadeIn(tween(260)) + slideInVertically(spring(dampingRatio=.8f,stiffness=280f)) { direction * it / 5 }) togetherWith
                             (fadeOut(tween(160)) + slideOutVertically(tween(200)) { -direction * it / 8 })
                     }, label="librarySection") { animatedSection ->
+                    CascadeScope(listOf(animatedSection,showRecents,state.query.isNotBlank(),smartOpen,selected?.id,page?.item,folder)) {
                     when {
                         showRecents -> RecentSearches(recents,onPick={ r ->
                             scope.launch { memory.remember(r) }
@@ -385,6 +386,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                 }
                             }
                         }
+                    }
                     }
                     }
                 }
@@ -581,8 +583,17 @@ private fun LibraryNavigation(name:String,icon:androidx.compose.ui.graphics.vect
     Icon(MobileIcons.libraryMusic,null,Modifier.size(24.dp),tint=Color.White.copy(alpha=.15f))
 }
 @Composable private fun LibraryCard(title:String,sub:String,url:String?,modifier:Modifier=Modifier,click:()->Unit) {
-    Column(modifier.clickable(onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
-        LibraryArt(url,Modifier.fillMaxWidth().aspectRatio(1f))
+    val interaction=remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val grow by animateFloatAsState(if(hovered)1f else 0f,Motion.hover(),label="cardHover")
+    Column(modifier.cascadeIn().hoverable(interaction).clickable(interactionSource=interaction,indication=null,onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+        val cardShape=RoundedCornerShape(12.dp)
+        LibraryArt(url,Modifier.fillMaxWidth().aspectRatio(1f).graphicsLayer {
+            val s=.97f+.03f*grow;scaleX=s;scaleY=s
+            translationY=-4.dp.toPx()*grow
+            shadowElevation=14.dp.toPx()*grow.coerceIn(0f,1f)
+            shape=cardShape;clip=true
+        })
         Text(title,Modifier.fillMaxWidth().padding(start=2.dp),style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis)
         Text(sub,Modifier.fillMaxWidth().padding(start=2.dp),style=OtoType.rowSub,color=Color.White.copy(alpha=.38f),maxLines=1,overflow=TextOverflow.Ellipsis)
     }
@@ -592,12 +603,20 @@ internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $
 @Composable private fun PlaylistCard(title:String,sub:String,url:String?,modifier:Modifier=Modifier,special:String?=null,accent:Color=Color.White,onPlay:(()->Unit)?=null,lifted:Boolean=false,playlist:LocalPlaylist?=null,folderLists:List<LocalPlaylist> = emptyList(),click:()->Unit) {
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val grow by animateFloatAsState(if(hovered)1f else 0f,tween(180),label="playlistHover")
-    val playVisibility by animateFloatAsState(if(hovered && onPlay!=null)1f else 0f,tween(180),label="playlistPlay")
+    val grow by animateFloatAsState(if(hovered)1f else 0f,Motion.hover(),label="playlistHover")
+    val playVisibility by animateFloatAsState(if(hovered && onPlay!=null)1f else 0f,Motion.hover(),label="playlistPlay")
     val elevation by animateFloatAsState(if(lifted)1f else 0f,tween(140),label="dragLift")
-    Column(modifier.graphicsLayer { alpha=1f-.08f*elevation }.hoverable(interaction).clickable(interactionSource=interaction,indication=null,enabled=!lifted,onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+    Column(modifier.cascadeIn().graphicsLayer { alpha=1f-.08f*elevation }.hoverable(interaction).clickable(interactionSource=interaction,indication=null,enabled=!lifted,onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f),contentAlignment=Alignment.Center) {
-            Box(Modifier.fillMaxSize().padding((4f*(1f-grow)).dp).clip(RoundedCornerShape(12.dp)).then(if(lifted) Modifier.border(2.dp,accent.copy(alpha=.65f),RoundedCornerShape(12.dp)) else Modifier),contentAlignment=Alignment.Center) {
+            // Se eleva con sombra y un pequeño rebote; solo capa gráfica, sin volver a medir la cuadrícula.
+            val cardShape=RoundedCornerShape(12.dp)
+            Box(Modifier.fillMaxSize().graphicsLayer {
+                val s=.955f+.045f*grow
+                scaleX=s;scaleY=s
+                translationY=-4.dp.toPx()*grow
+                shadowElevation=14.dp.toPx()*grow.coerceIn(0f,1f)
+                shape=cardShape;clip=true
+            }.then(if(lifted) Modifier.border(2.dp,accent.copy(alpha=.65f),RoundedCornerShape(12.dp)) else Modifier),contentAlignment=Alignment.Center) {
                 when(special) {
                     "liked" -> Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(accent,lerp(accent,Color(0xFF121212),.55f)))),contentAlignment=Alignment.Center) {Icon(MobileIcons.favorite,null,Modifier.fillMaxSize(.42f),tint=Color(0xFF121212))}
                     "folder" -> FolderArt(folderLists,Modifier.fillMaxSize())
@@ -630,7 +649,7 @@ internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val glow by animateFloatAsState(if(hovered).055f else 0f,tween(160),label="songHover")
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha=glow)).hoverable(interaction).clickable(interactionSource=interaction,indication=null,onClick=click).padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
+    Row(Modifier.fillMaxWidth().cascadeIn().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha=glow)).hoverable(interaction).clickable(interactionSource=interaction,indication=null,onClick=click).padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
         LibraryArt(url,Modifier.size(44.dp));Column(Modifier.weight(1f)){Text(title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(sub,style=OtoType.rowSub,maxLines=1,color=Color.White.copy(alpha=.4f))};trailing()
     }
 }

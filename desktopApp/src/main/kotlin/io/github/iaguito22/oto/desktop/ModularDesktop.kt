@@ -272,7 +272,12 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             {nowPlaying.id?.let{openSave(Heard(it,nowPlaying.title,nowPlaying.artist,nowPlaying.artwork), "reproductor")}}, source, {
                 val src=source; if(src?.item != null || src?.local != null) { jump=LibraryJump(jump.version+1,src?.item,src?.local);menuOpen=true } else if(src?.kind != "DJ") queueOpen=true
             }, {id,name -> jump=LibraryJump(jump.version+1,artistId=id,artistName=name);menuOpen=true},
-            qualityLabel = qualityLabel, verticalPin = if(playerSolo && form==PlayerForm.Vertical) ({
+            qualityLabel = qualityLabel,
+            shuffle = shuffle, loopMode = loopMode, onShuffle = { player.setShuffle(!shuffle) },
+            onLoop = { player.setLoop(when(loopMode) { io.github.iaguito22.oto.LoopMode.Off -> io.github.iaguito22.oto.LoopMode.All
+                io.github.iaguito22.oto.LoopMode.All -> io.github.iaguito22.oto.LoopMode.One
+                io.github.iaguito22.oto.LoopMode.One -> io.github.iaguito22.oto.LoopMode.Off }) },
+            verticalPin =if(playerSolo && form==PlayerForm.Vertical) ({
                 HoverAction(pinIcon(pinned),if(pinned) "Desfijar" else "Fijar sobre otras ventanas",enabled=chrome,
                     onClick={pinned=!pinned;kv.putString("pinned",pinned.toString())},
                     tint=pinTint(pinned),size=28.dp)
@@ -452,13 +457,17 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
                     previous = now
                 } while (previous - started < 1_200_000_000L &&
                     (previous - started < 150_000_000L || stableFrames < 3))
+                // Si el conjunto se está apartando para hacerle sitio, entrar cuando termine.
+                if (dock != null && dockId != null) dock.startPendingShift(dockId)
+                while (dock != null && System.nanoTime() < dock.shiftEndsAt) withFrameNanos { }
             }
             warming=false
             val timings = if (System.getenv("OTO_MOTION_TRACE") == "1") mutableListOf<Double>() else null
             var previousFrame = System.nanoTime()
             val animationStarted=System.currentTimeMillis()
             reveal.animateTo(if (visible) 1f else 0f,
-                if (visible) spring(dampingRatio=.76f,stiffness=190f) else tween(330,easing=CubicBezierEasing(.4f,0f,1f,1f))) {
+                // Entrada con rebote; salida con un leve impulso previo (ease-in-back) hacia el mismo lado.
+                if (visible) spring(dampingRatio=.7f,stiffness=210f) else tween(300,easing=CubicBezierEasing(.42f,0f,.72f,-.32f))) {
                 if (timings != null) {
                     val now = System.nanoTime()
                     timings.add((now - previousFrame) / 1e6)
@@ -513,12 +522,16 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
                 // Un alfa no nulo y un cambio mínimo de matriz ejercitan el renderizado
                 // y los cálculos de posición antes de la transición visible.
                 val preparingStep=if(warming && warmAlpha.floatValue>.01f) 1f else 0f
-                alpha=if(warming) warmAlpha.floatValue else if(side == 0) reveal.value.coerceIn(0f,1f) else 1f
+                val r=reveal.value
+                // Las ventanas del conjunto salen deslizándose desde el borde del reproductor.
+                // Solo traslación, sin alfa ni escala: con alfa, toda la ventana se componía en
+                // un búfer aparte en cada fotograma y la animación perdía fluidez.
+                alpha=if(warming) warmAlpha.floatValue else if(side == 0) r.coerceIn(0f,1f) else 1f
                 transformOrigin=TransformOrigin(if(side < 0) 1f else if(side > 0) 0f else .5f,.5f)
-                scaleX=if(warming) 1f-preparingStep*.0001f else if(side == 0) .92f + .08f*reveal.value else 1f
-                scaleY=if(warming) 1f-preparingStep*.0001f else if(side == 0) .96f + .04f*reveal.value else 1f
-                translationX=if(warming) preparingStep*.25f else -side*size.width*(1f-reveal.value)
-                translationY=if(warming) 0f else if(side == 0) 20.dp.toPx()*(1f-reveal.value) else 0f
+                scaleX=if(warming) 1f-preparingStep*.0001f else if(side == 0) .92f + .08f*r else 1f
+                scaleY=if(warming) 1f-preparingStep*.0001f else if(side == 0) .96f + .04f*r else 1f
+                translationX=if(warming) preparingStep*.25f else -side*size.width*(1f-r).coerceAtLeast(-.04f)
+                translationY=if(warming) 0f else if(side == 0) 20.dp.toPx()*(1f-r) else 0f
             }.drawWithContent {
                 WindowWorkTrace.measure("$title/draw") { drawContent() }
                 firstDraw.compareAndSet(0L,System.nanoTime())

@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.hoverable
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
@@ -65,10 +66,13 @@ internal fun MinimalPlayback(playing:Boolean, toggle:()->Unit, modifier:Modifier
     val phase by animateFloatAsState(if(playing)1f else 0f,tween(240,easing=Motion.Standard),label="playPause")
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val scale by animateFloatAsState(if(hovered)1.22f else 1f,tween(160),label="playHover")
-    val halo by animateFloatAsState(if(hovered) .10f else 0f,tween(180,easing=Motion.Standard),label="playHalo")
-    Box(modifier.size(controlSize).clip(CircleShape).background(Color.White.copy(alpha=halo)).hoverable(interaction).clickable(interactionSource=interaction,indication=null,onClickLabel=if(playing)"Pausar" else "Reproducir",onClick=toggle).semantics {contentDescription=if(playing)"Pausar" else "Reproducir"},contentAlignment=Alignment.Center) {
-        Canvas(Modifier.size(19.dp * scale)) {
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if(hovered)1.22f else 1f,Motion.hover(),label="playHover")
+    val press by animateFloatAsState(if(pressed) .84f else 1f,if(pressed) Motion.press() else Motion.release(),label="playPress")
+    val halo by animateFloatAsState(if(pressed) .16f else if(hovered) .10f else 0f,tween(180,easing=Motion.Standard),label="playHalo")
+    Box(modifier.size(controlSize).graphicsLayer { scaleX=press;scaleY=press }.clip(CircleShape).background(Color.White.copy(alpha=halo)).hoverable(interaction).clickable(interactionSource=interaction,indication=null,onClickLabel=if(playing)"Pausar" else "Reproducir",onClick=toggle).semantics {contentDescription=if(playing)"Pausar" else "Reproducir"},contentAlignment=Alignment.Center) {
+        // Escala en la capa gráfica: el hover no vuelve a medir los controles vecinos.
+        Canvas(Modifier.size(19.dp).graphicsLayer { scaleX=scale;scaleY=scale }) {
             val c=Color.White.copy(alpha=.95f)
             if(phase<1f) {
                 val p=Path().apply {moveTo(size.width*.32f,size.height*.16f);lineTo(size.width*.82f,size.height*.5f);lineTo(size.width*.32f,size.height*.84f);close()}
@@ -107,13 +111,24 @@ internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:Imag
     beat:()->Float, beatEnabled:Boolean, liked:Boolean, showRemaining:Boolean, onPlay:()->Unit,onPrev:()->Unit,onNext:()->Unit,onSeek:(Long)->Unit,
     libraryOpen:Boolean,lyricsOpen:Boolean,queueOpen:Boolean,onLibrary:()->Unit,onLyrics:()->Unit,onQueue:()->Unit,
     onLike:()->Unit,onSave:()->Unit, source:Source?, onSource:()->Unit, onArtist:(String,String)->Unit,
-    qualityLabel:String? = null, verticalPin:(@Composable () -> Unit)? = null) {
+    qualityLabel:String? = null, verticalPin:(@Composable () -> Unit)? = null,
+    shuffle:Boolean=false, loopMode:io.github.iaguito22.oto.LoopMode=io.github.iaguito22.oto.LoopMode.Off,
+    onShuffle:(()->Unit)?=null, onLoop:(()->Unit)?=null) {
     val pulse = rememberCoverPulse(np.playing,beatEnabled,beat)
     val controls by animateFloatAsState(if(chrome)1f else 0f,tween(180),label="playerChrome")
+    // Sentido del último salto: «Anterior» desliza hacia la derecha; el resto, hacia la izquierda.
+    // Vuelve a «adelante» poco después, por si «Anterior» solo reinició la canción.
+    var direction by remember { mutableIntStateOf(1) }
+    var directionStamp by remember { mutableIntStateOf(0) }
+    LaunchedEffect(directionStamp) { if(direction != 1) { delay(1500); direction=1 } }
+    val previous:()->Unit = { direction=-1; directionStamp++; onPrev() }
+    val next:()->Unit = { direction=1; directionStamp++; onNext() }
     @Composable fun Cover(modifier:Modifier) {
         AnimatedContent(artwork, transitionSpec={
-            slideInHorizontally(spring(dampingRatio=.8f, stiffness=240f)) { it } togetherWith
-                slideOutHorizontally(tween(350,easing=Motion.Standard)) { -it }
+            val d=direction
+            (slideInHorizontally(Motion.slide()) { d*it } + fadeIn(tween(160))) togetherWith
+                (slideOutHorizontally(tween(320,easing=Motion.Standard)) { -d*it } +
+                    scaleOut(tween(320,easing=Motion.Standard),targetScale=.9f) + fadeOut(tween(280)))
         },label="artwork",modifier=modifier.clipToBounds()) { image ->
             Box(Modifier.fillMaxSize(), contentAlignment=Alignment.Center) {
             Box(Modifier.fillMaxSize(.975f).graphicsLayer { val s=1f+.022f*pulse.value;scaleX=s;scaleY=s }.clip(RoundedCornerShape(14.dp)).combinedClickable(onDoubleClick=onLike,onClick=onPlay),contentAlignment=Alignment.Center) {
@@ -122,19 +137,48 @@ internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:Imag
             }
         }
     }
-    @Composable fun Transport(reveal:Boolean=false, compact:Boolean=false) {
+    @Composable fun Transport(reveal:Boolean=false, compact:Boolean=false, modes:Boolean=false) {
         Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.Center) {
-            HoverAction(MobileIcons.skipPrevious,"Anterior",!reveal||chrome,onPrev,Modifier.graphicsLayer{alpha=if(reveal)controls else 1f},size=if(compact)26.dp else 36.dp)
+            val accent=MaterialTheme.colorScheme.primary
+            if(modes && onShuffle!=null) {
+                HoverAction(MobileIcons.shuffle,if(shuffle)"Desactivar aleatorio" else "Activar aleatorio",chrome,onShuffle,
+                    Modifier.graphicsLayer { alpha=controls },tint=if(shuffle) accent else Color.White.copy(alpha=.45f))
+                Spacer(Modifier.width(10.dp))
+            }
+            HoverAction(MobileIcons.skipPrevious,"Anterior",!reveal||chrome,previous,Modifier.graphicsLayer{alpha=if(reveal)controls else 1f},size=if(compact)26.dp else 36.dp)
             MinimalPlayback(np.playing,onPlay,controlSize=if(compact)28.dp else 42.dp)
-            HoverAction(MobileIcons.skipNext,"Siguiente",!reveal||chrome,onNext,Modifier.graphicsLayer{alpha=if(reveal)controls else 1f},size=if(compact)26.dp else 36.dp)
+            HoverAction(MobileIcons.skipNext,"Siguiente",!reveal||chrome,next,Modifier.graphicsLayer{alpha=if(reveal)controls else 1f},size=if(compact)26.dp else 36.dp)
+            if(modes && onLoop!=null) {
+                Spacer(Modifier.width(10.dp))
+                HoverAction(if(loopMode==io.github.iaguito22.oto.LoopMode.One) MobileIcons.repeatOne else MobileIcons.repeat,
+                    when(loopMode) {
+                        io.github.iaguito22.oto.LoopMode.Off -> "Repetir la lista"
+                        io.github.iaguito22.oto.LoopMode.All -> "Repitiendo la lista · repetir esta canción"
+                        io.github.iaguito22.oto.LoopMode.One -> "Repitiendo esta canción · quitar bucle"
+                    },chrome,onLoop,Modifier.graphicsLayer { alpha=controls },
+                    tint=if(loopMode!=io.github.iaguito22.oto.LoopMode.Off) accent else Color.White.copy(alpha=.45f))
+            }
         }
     }
     @Composable fun Saved(modifier:Modifier=Modifier) {
         val interaction=remember { MutableInteractionSource() }
         val hovered by interaction.collectIsHoveredAsState()
-        val scale by animateFloatAsState(if(hovered)1.22f else 1f,tween(160),label="savedHover")
+        val scale by animateFloatAsState(if(hovered)1.22f else 1f,Motion.hover(),label="savedHover")
+        val tint by animateFloatAsState(if(liked).95f else .55f,tween(220),label="savedTint")
+        // Rebote solo cuando cambia el Me gusta de la misma canción, no al pasar a otra.
+        val pop = remember { Animatable(1f) }
+        var known by remember { mutableStateOf(np.id to liked) }
+        LaunchedEffect(np.id, liked) {
+            val (id, was) = known
+            known = np.id to liked
+            if(id == np.id && was != liked) {
+                if(liked) { pop.snapTo(.55f); pop.animateTo(1f, Motion.pop()) }
+                else { pop.animateTo(.78f, tween(90)); pop.animateTo(1f, Motion.release()) }
+            }
+        }
         Box(modifier.size(30.dp).hoverable(interaction).combinedClickable(interactionSource=interaction,indication=null,onClick=onLike,onLongClick=onSave).semantics {contentDescription="Me gusta; mantener para guardar en una lista"},contentAlignment=Alignment.Center) {
-            Icon(if(liked) MobileIcons.favorite else MobileIcons.favoriteOutline,if(liked)"En Me gusta" else "Me gusta",Modifier.size(16.dp * scale),tint=Color.White.copy(alpha=if(liked).95f else .55f))
+            Icon(if(liked) MobileIcons.favorite else MobileIcons.favoriteOutline,if(liked)"En Me gusta" else "Me gusta",
+                Modifier.size(16.dp).graphicsLayer { val s=scale*pop.value;scaleX=s;scaleY=s },tint=Color.White.copy(alpha=tint))
         }
     }
     @Composable fun Modules() {
@@ -169,15 +213,36 @@ internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:Imag
             Spacer(Modifier.weight(1f))
             Box(Modifier.fillMaxWidth(),contentAlignment=Alignment.Center){Cover(Modifier.size(coverSize).padding(4.dp))}
             Row(verticalAlignment=Alignment.CenterVertically) {
-                AnimatedContent(np,Modifier.weight(1f),contentKey={it.id},transitionSpec={ (fadeIn(tween(300))+slideInVertically(tween(300,easing=Motion.Standard)){it/3}) togetherWith (fadeOut(tween(180))+slideOutVertically(tween(180)){-it/3}) },label="songInfo") { song ->
-                    Column {Text(song.title.ifBlank{"Elige tu música"},style=OtoType.title,maxLines=1,overflow=TextOverflow.Ellipsis);Text(buildAnnotatedString { if(song.artists.isEmpty()) append(song.artist) else song.artists.forEachIndexed { i,(name,id) -> if(i>0) append(", "); if(id!=null) pushLink(LinkAnnotation.Clickable(id) { onArtist(id,name) }); append(name); if(id!=null) pop() } },style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),maxLines=1)}
+                AnimatedContent(np,Modifier.weight(1f),contentKey={it.id},transitionSpec={
+                    val d=direction
+                    (fadeIn(tween(260,delayMillis=40))+slideInHorizontally(Motion.slide()){d*it/4}) togetherWith
+                        (fadeOut(tween(150))+slideOutHorizontally(tween(200,easing=Motion.Standard)){-d*it/6})
+                },label="songInfo") { song ->
+                    val d=remember { direction }
+                    Column {Text(song.title.ifBlank{"Elige tu música"},style=OtoType.title,maxLines=1,overflow=TextOverflow.Ellipsis)
+                        // El artista llega un instante después que el título, con el mismo sentido.
+                        Text(buildAnnotatedString { if(song.artists.isEmpty()) append(song.artist) else song.artists.forEachIndexed { i,(name,id) -> if(i>0) append(", "); if(id!=null) pushLink(LinkAnnotation.Clickable(id) { onArtist(id,name) }); append(name); if(id!=null) pop() } },Modifier.animateEnterExit(
+                            enter=slideInHorizontally(tween(420,delayMillis=70,easing=Motion.EmphasizedDecelerate)){d*it/5}+fadeIn(tween(260,delayMillis=90)),
+                            exit=ExitTransition.None),style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),maxLines=1)}
                 }
                 Saved()
             }
-            if(np.buffering || np.error != null) Text(if(np.buffering) "Preparando canción…" else "No se pudo reproducir · pulsa para reintentar",Modifier.clickable(interactionSource=remember { MutableInteractionSource() },indication=null,onClick=onPlay),style=OtoType.rowSub,color=Color.White.copy(alpha=.6f),maxLines=1)
-            PlayerProgress(np.id,position,np.durationMs,showRemaining,onSeek)
+            // El aviso flota sobre la barra de progreso: no empuja el resto del reproductor.
+            // Las cargas breves (reanudar, cambiar de canción en caché) no llegan a mostrarlo.
+            var slowBuffering by remember { mutableStateOf(false) }
+            LaunchedEffect(np.buffering) { if(np.buffering) { delay(600); slowBuffering=true } else slowBuffering=false }
+            val notice=if(np.error != null) "No se pudo reproducir · reintentar" else if(slowBuffering) "Preparando canción…" else null
+            Box {
+                PlayerProgress(np.id,position,np.durationMs,showRemaining,onSeek)
+                androidx.compose.animation.AnimatedVisibility(notice!=null,Modifier.align(Alignment.BottomCenter),enter=fadeIn(tween(200)),exit=fadeOut(tween(160))) {
+                    var shown by remember { mutableStateOf(notice ?: "") }
+                    if(notice!=null) shown=notice
+                    Text(shown,Modifier.clickable(interactionSource=remember { MutableInteractionSource() },indication=null,onClick=onPlay),
+                        style=OtoType.rowSub,color=Color.White.copy(alpha=.6f),maxLines=1)
+                }
+            }
             if(qualityLabel != null) Text(qualityLabel,Modifier.align(Alignment.CenterHorizontally),style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1)
-            Box(Modifier.fillMaxWidth(),contentAlignment=Alignment.Center){Transport()}
+            Box(Modifier.fillMaxWidth(),contentAlignment=Alignment.Center){Transport(modes=true)}
             Box(Modifier.fillMaxWidth().height(34.dp),contentAlignment=Alignment.Center){Modules()}
             Spacer(Modifier.weight(1f))
         }
@@ -246,8 +311,10 @@ private fun ProgressTimes(position:Long,duration:Long,remaining:Boolean,modifier
 internal fun HoverAction(icon:androidx.compose.ui.graphics.vector.ImageVector,label:String,enabled:Boolean=true,onClick:()->Unit,modifier:Modifier=Modifier,tint:Color=Color.White.copy(alpha=.7f),size:Dp=36.dp) {
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val scale by animateFloatAsState(if(hovered && enabled) 1.22f else 1f,tween(160),label="hover")
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if(hovered && enabled) 1.22f else 1f,Motion.hover(),label="hover")
+    val press by animateFloatAsState(if(pressed && enabled) .82f else 1f,if(pressed) Motion.press() else Motion.release(),label="press")
     Box(modifier.size(size).hoverable(interaction,enabled).clickable(interactionSource=interaction,indication=null,enabled=enabled,onClick=onClick),contentAlignment=Alignment.Center) {
-        Icon(icon,label,Modifier.size(18.dp * scale),tint=tint)
+        Icon(icon,label,Modifier.size(18.dp).graphicsLayer { scaleX=scale*press;scaleY=scale*press },tint=tint)
     }
 }
