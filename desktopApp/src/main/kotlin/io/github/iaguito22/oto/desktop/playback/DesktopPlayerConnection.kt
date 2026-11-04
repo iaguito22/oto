@@ -172,7 +172,7 @@ class DesktopPlayerConnection(
 
     init {
         engine=decks.first()
-        engine.setGain(_volume.value)
+        engine.setGain(volumeGain())
         scope.launch {
             activeDeck.filterNotNull().collectLatest { active -> active.state.collect { es ->
                 _positionMs.value = es.positionMs
@@ -216,8 +216,8 @@ class DesktopPlayerConnection(
 
     /** Mantiene el volumen del usuario y la normalización separados de la curva del fundido. */
     private fun applyDeckGains() {
-        engine.setGain((_volume.value * currentLoudnessGain * fadeIn).coerceIn(0f,2f))
-        outgoing?.setGain((_volume.value * outgoingGain * fadeOut).coerceIn(0f,2f))
+        engine.setGain((volumeGain() * currentLoudnessGain * fadeIn).coerceIn(0f,2f))
+        outgoing?.setGain((volumeGain() * outgoingGain * fadeOut).coerceIn(0f,2f))
     }
 
     private fun cancelCrossfade() {
@@ -536,6 +536,9 @@ class DesktopPlayerConnection(
         syncQueueFlow()
     }
 
+    /** El oído percibe la intensidad en escala logarítmica: con el control lineal, 1 % (−40 dB) aún sonaba claro. Potencia 1,5: 50 % ≈ −9 dB, 10 % ≈ −30 dB, 1 % ≈ −60 dB. */
+    private fun volumeGain(): Float = _volume.value.let { it * kotlin.math.sqrt(it) }
+
     fun setVolume(vol: Float) {
         val clamped = vol.coerceIn(0f, 1f)
         _volume.value = clamped
@@ -828,7 +831,7 @@ class DesktopPlayerConnection(
                     _currentQuality.value = quality
                 }
                 currentLoudnessGain = 1f
-                engine.setGain(_volume.value)
+                engine.setGain(volumeGain())
                 resolvingTrack = false
                 engine.loadLocalFile(local, durGuess, playWhenReady, initialPositionMs)
                 return@launch
@@ -843,7 +846,7 @@ class DesktopPlayerConnection(
                 // Normalización igual que PlaybackService: solo atenúa picos fuertes (loudnessDb > 0)
                 val gain = stream.loudnessDb?.let { min(1f, 10f.pow(-it.toFloat() / 20f)) } ?: 1f
                 currentLoudnessGain = gain
-                engine.setGain(gain * _volume.value)
+                engine.setGain(gain * volumeGain())
                 resolvingTrack = false
                 engine.loadAndPlay(
                     cacheKey = tier.key(song.id),
