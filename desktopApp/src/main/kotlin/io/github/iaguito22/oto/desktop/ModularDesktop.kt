@@ -147,7 +147,9 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     val nowPlaying by player.state.collectAsState()
     val queue by player.queue.collectAsState()
     val ramSaver by prefs.ramSaver.collectAsState(initial = false)
-    LaunchedEffect(ramSaver) { ArtworkLoader.setRamSaver(ramSaver) }
+    LaunchedEffect(ramSaver) { RamSaver.apply(ramSaver) }
+    val nothingShown = windowsHidden || (!playerOpen && !menuOpen && !lyricsOpen && !queueOpen && !devicesOpen && savingTrack == null)
+    LaunchedEffect(ramSaver, nothingShown) { if (ramSaver && nothingShown) RamSaver.whileHidden() }
     val nextArtwork = if(ramSaver) emptyList() else queue.filter { it.index > nowPlaying.index }.take(2).mapNotNull { it.artwork }
     LaunchedEffect(nextArtwork) {
         nextArtwork.forEach { ArtworkLoader.load(it) }
@@ -431,6 +433,7 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
     key(dockId ?: title) {
     Window(onCloseRequest = close, state = windowState, visible = true, title = "Oto · $title", undecorated = true, transparent = true, alwaysOnTop = pinned,
         icon = painterResource("oto-icon.png"), onKeyEvent = { if (keys(it)) true else if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { close(); true } else false }) {
+        SmoothWheel.Driver(window)
         val reveal = remember { Animatable(0f) }
         var warming by remember { mutableStateOf(visible) }
         val warmAlpha=remember { mutableFloatStateOf(.01f) }

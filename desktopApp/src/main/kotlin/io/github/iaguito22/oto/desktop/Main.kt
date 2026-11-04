@@ -87,6 +87,7 @@ fun main() {
 }
 
 private fun prepareDesktopWindows() {
+    SmoothWheel.install()
     if (System.getenv("HYPRLAND_INSTANCE_SIGNATURE") != null) {
         runCatching { ProcessBuilder("hyprctl", "eval", "hl.window_rule({ name = \"oto-modular\", match = { class = \"io-github-iaguito22-oto-desktop-MainKt\" }, float = true })").start().waitFor() }
     }
