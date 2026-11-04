@@ -1,5 +1,6 @@
 package io.github.iaguito22.oto.desktop.ui
 
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -136,7 +137,7 @@ internal fun RecentSearches(list: List<Recent>?, onPick: (Recent) -> Unit, onFor
         else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             item(key = "title") { Text("RECIENTES", style = OtoType.label, color = Color.White.copy(alpha = .5f), modifier = Modifier.padding(start = 8.dp, bottom = 6.dp)) }
             items(list, key = { it.key }) { r ->
-                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onPick(r) }.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).focusProperties { canFocus = false }.clickable { onPick(r) }.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     if (r.kind == Recent.Kind.Query) Box(Modifier.size(44.dp).clip(CircleShape).background(Color.White.copy(alpha = .06f)), contentAlignment = Alignment.Center) {
                         Icon(MobileIcons.history, null, Modifier.size(22.dp), tint = Color.White.copy(alpha = .5f))
                     } else Box(Modifier.size(44.dp).clip(if (r.kind == Recent.Kind.Artist) CircleShape else RoundedCornerShape(10.dp))) { LibraryArt(r.art, Modifier.fillMaxSize()) }

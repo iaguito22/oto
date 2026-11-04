@@ -109,7 +109,8 @@ internal object SmoothWheel {
                 var last = System.nanoTime() - 12_000_000L
                 while (motion.remaining != 0.0) {
                     val now = System.nanoTime()
-                    step(motion, (now - last) / 1_000_000.0)
+                    // Un fallo al repartir un paso no debe tumbar el bucle ni la composición.
+                    runCatching { step(motion, (now - last) / 1_000_000.0) }.onFailure { motion.remaining = 0.0 }
                     last = now
                     if (motion.remaining != 0.0) withFrameNanos { }
                 }

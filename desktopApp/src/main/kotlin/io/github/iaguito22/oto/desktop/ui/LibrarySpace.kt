@@ -135,6 +135,9 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     val memory=remember { MenuMemory.of() }
     val recents by memory.recents.collectAsState(initial=null)
     var recentsOpen by remember {mutableStateOf(false)}
+    // Pulsar una fila del historial quita el foco al buscador: no cerrar la lista hasta soltar, o el clic se pierde.
+    var pressingRecents by remember {mutableStateOf(false)}
+    var searchHasFocus by remember {mutableStateOf(false)}
     val focusManager=androidx.compose.ui.platform.LocalFocusManager.current
     fun rememberSearch(item:YTItem?) { val q=menu.state.value.query; scope.launch { if(q.trim().length>=2)memory.remember(Recent.query(q)); item?.let(Recent::of)?.let{memory.remember(it)} } }
     // «Hecho con lo tuyo»: se rehacen con tus listas, Me gusta y lo oído, sin esperar a YouTube.
@@ -255,7 +258,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                 Row(Modifier.weight(1f).height(48.dp).clip(CircleShape).background(Color.White.copy(alpha=.045f)).padding(start=16.dp,end=6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                     Icon(MobileIcons.search,null,Modifier.size(18.dp),tint=Color.White.copy(alpha=.35f))
-                    BasicTextField(state.query,{menu.onQuery(it);local=null;smartOpen=null},Modifier.weight(1f).onFocusChanged { onSearchFocus(it.isFocused);if(!it.isFocused)recentsOpen=false }.focusRequester(searchFocus).onPointerEvent(PointerEventType.Press){recentsOpen=true}.onPreviewKeyEvent { e -> if(e.type==KeyEventType.KeyDown && e.key==Key.Escape && recentsOpen){recentsOpen=false;true} else false },textStyle=OtoType.body.copy(color=Color.White),cursorBrush=SolidColor(Color.White),singleLine=true,decorationBox={field -> if(state.query.isBlank())Text("Buscar canciones, artistas o listas",style=OtoType.body,color=Color.White.copy(alpha=.36f));field()})
+                    BasicTextField(state.query,{menu.onQuery(it);local=null;smartOpen=null},Modifier.weight(1f).onFocusChanged { onSearchFocus(it.isFocused);searchHasFocus=it.isFocused;if(!it.isFocused && !pressingRecents)recentsOpen=false }.focusRequester(searchFocus).onPointerEvent(PointerEventType.Press){recentsOpen=true}.onPreviewKeyEvent { e -> if(e.type==KeyEventType.KeyDown && e.key==Key.Escape && recentsOpen){recentsOpen=false;true} else false },textStyle=OtoType.body.copy(color=Color.White),cursorBrush=SolidColor(Color.White),singleLine=true,decorationBox={field -> if(state.query.isBlank())Text("Buscar canciones, artistas o listas",style=OtoType.body,color=Color.White.copy(alpha=.36f));field()})
                     if(state.query.isNotBlank())IconButton(onClick={menu.onQuery("")}){Icon(MobileIcons.close,"Limpiar búsqueda",Modifier.size(17.dp))}
                 }
                 Box(Modifier.size(48.dp).clip(CircleShape).background(Color.White.copy(alpha=.045f)),contentAlignment=Alignment.Center) {
@@ -296,12 +299,12 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     }, label="librarySection") { animatedSection ->
                     CascadeScope(listOf(animatedSection,showRecents,state.query.isNotBlank(),smartOpen,selected?.id,page?.item,folder)) {
                     when {
-                        showRecents -> RecentSearches(recents,onPick={ r ->
+                        showRecents -> Box(Modifier.fillMaxSize().onPointerEvent(PointerEventType.Press,pass=androidx.compose.ui.input.pointer.PointerEventPass.Initial){pressingRecents=true}.onPointerEvent(PointerEventType.Release,pass=androidx.compose.ui.input.pointer.PointerEventPass.Final){scope.launch{kotlinx.coroutines.delay(80);pressingRecents=false;if(!searchHasFocus)recentsOpen=false}}) { RecentSearches(recents,onPick={ r ->
                             scope.launch { memory.remember(r) }
                             val item=r.item()
                             recentsOpen=false
                             if(item==null) menu.onQuery(r.title) else { focusManager.clearFocus();openItem(item) }
-                        },onForget={ r -> scope.launch { memory.forget(r) } })
+                        },onForget={ r -> scope.launch { memory.forget(r) } }) }
                         state.query.isNotBlank() -> SearchSpace(state,lists,np.id,player,menu,prefs,palette,onSave,onOpen=::openItem,onLocal={local=it;menu.onQuery("")},onArtist=::openArtist,onRemember=::rememberSearch)
                         smartOpen!=null -> SmartSpace(smartOpen!!,np.id,player,prefs,palette,onSave,::openArtist,onBack={smartOpen=null})
                         selected!=null -> LocalPlaylistView(selected,np.id,player,prefs,downloads,palette,onSave,

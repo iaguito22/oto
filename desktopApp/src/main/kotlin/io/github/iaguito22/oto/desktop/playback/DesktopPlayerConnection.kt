@@ -863,10 +863,31 @@ class DesktopPlayerConnection(
         }
     }
 
+    private var lyricsPrefetchJob: Job? = null
+
+    /** Busca ya la letra (y su romanización) de las dos siguientes, para que salga al instante al cambiar. */
+    private fun prefetchNextLyrics(current: SongItem) {
+        lyricsPrefetchJob?.cancel()
+        val upcoming = songQueue.indexOfFirst { it.id == current.id }.takeIf { it >= 0 }
+            ?.let { songQueue.drop(it + 1).take(2) }.orEmpty()
+        if (upcoming.isEmpty()) return
+        lyricsPrefetchJob = scope.launch(Dispatchers.IO) {
+            for (next in upcoming) {
+                val durMs = (next.duration ?: 0).takeIf { it > 0 }?.times(1000L) ?: continue
+                runCatching {
+                    val fetched = lyricsStore.get(LyricsQuery(next.id, next.title, next.artists.joinToString { it.name }, next.album?.name, durMs))
+                    (fetched.lyrics as? Lyrics.Synced)?.takeIf { it.language != null }?.let { lyricsStore.romanized(next.id, it) }
+                }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+            }
+        }
+    }
+
     private fun fetchLyrics(song: SongItem) {
         lyricsJob?.cancel()
-        _lyrics.value = null
-        _lyricsLoading.value = true
+        // Si ya estaba precargada, aparece en el mismo instante: sin hueco ni «cargando».
+        val ready = lyricsStore.peek(song.id)
+        _lyrics.value = ready
+        _lyricsLoading.value = ready == null
         lyricsJob = scope.launch(Dispatchers.IO) {
             val artist = song.artists.joinToString { it.name }
             if ((song.duration ?: 0) <= 0) {
@@ -885,6 +906,7 @@ class DesktopPlayerConnection(
             try {
                 var fetched = lyricsStore.get(query)
                 if (_state.value.id == song.id) { _lyrics.value = fetched.lyrics; _lyricsLoading.value = false }
+                prefetchNextLyrics(song)
                 for (wait in listOf(20_000L, 90_000L)) {
                     if (fetched.final) break
                     kotlinx.coroutines.delay(wait)

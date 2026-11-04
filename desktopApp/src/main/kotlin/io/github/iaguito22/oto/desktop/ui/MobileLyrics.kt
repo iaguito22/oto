@@ -194,7 +194,7 @@ private fun SungLine(line: Line, dist: Int, order: Int?, rom: String?, showRom: 
     }
     val alpha by animateFloatAsState(alphaTarget, tween(if (dist == 0) dur / 2 else if (dist < 0) (dur * 1.4f).toInt() else dur, easing = EaseOutQuart), label = "lineAlpha")
     val scale by animateFloatAsState(if (dist == 0) 1.03f else 1f, tween(if (dist == 0) dur else (dur * 1.2f).toInt(), easing = EaseOutQuart), label = "lineScale")
-    val blur = if (browsing) 0.dp else when (abs(dist)) { 0 -> 0.dp; 1 -> .4.dp; 2 -> 1.2.dp; else -> 2.dp }
+    val blur = if (browsing) 0.dp else when (abs(dist)) { 0, 1 -> 0.dp; 2 -> 1.2.dp; else -> 2.dp }
     val lyricStyle = LYRIC.copy(fontSize=LYRIC.fontSize*fontScale,lineHeight=LYRIC.lineHeight*fontScale)
     val backgroundStyle = BG.copy(fontSize=BG.fontSize*fontScale,lineHeight=BG.lineHeight*fontScale)
     val romanStyle = ROM.copy(fontSize=ROM.fontSize*fontScale,lineHeight=ROM.lineHeight*fontScale)
@@ -205,7 +205,11 @@ private fun SungLine(line: Line, dist: Int, order: Int?, rom: String?, showRom: 
         delay(30L + 70L * order.coerceIn(0, 6))
         enter.animateTo(1f, tween(820, easing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)))
     }
-    val lit = dist == 0 || dist == -1
+    val active = dist == 0 || dist == -1
+    // Las dos siguientes ya se componen (y miden) encendidas pero pintadas como apagadas: así el cambio de línea no
+    // tiene que medir letras en el mismo fotograma en que empieza a animarse.
+    val preview = !browsing && (dist == 1 || dist == 2)
+    val lit = active || preview
     val align = if (line.duet) Alignment.End else Alignment.Start
     val arrangement = if (line.duet) Arrangement.End else Arrangement.Start
     val bgOnly = line.words.isEmpty()
@@ -231,7 +235,7 @@ private fun SungLine(line: Line, dist: Int, order: Int?, rom: String?, showRom: 
             .padding(horizontal = EDGE, vertical = 9.dp),
         horizontalAlignment = align,
     ) {
-        if (!bgOnly) Words(line.words, lyricStyle, lit, clock, arrangement, Color.White, letters = line.real)
+        if (!bgOnly) Words(line.words, lyricStyle, lit, clock, arrangement, Color.White, letters = line.real, preview = preview)
         if (rom != null && !bgOnly) {
             // Se despliega (o se pliega) bajo su línea, en vez de aparecer de golpe.
             AnimatedVisibility(
@@ -240,12 +244,12 @@ private fun SungLine(line: Line, dist: Int, order: Int?, rom: String?, showRom: 
                 exit = shrinkVertically(tween(ROM_MS, easing = EaseOutQuart), shrinkTowards = Alignment.Top) + fadeOut(tween(ROM_MS / 2)),
             ) {
                 val romWords = remember(rom, line) { spread(rom, line.words.first().start, line.words.last().end) }
-                Words(romWords, romanStyle, lit, clock, arrangement, Color.White.copy(alpha = 0.72f), rise = false, modifier = Modifier.padding(top = 2.dp))
+                Words(romWords, romanStyle, lit, clock, arrangement, Color.White.copy(alpha = 0.72f), rise = false, preview = preview, modifier = Modifier.padding(top = 2.dp))
             }
         }
         if (line.bg.isNotEmpty()) {
             Words(line.bg, if (bgOnly) lyricStyle.copy(fontSize = lyricStyle.fontSize * 0.8f, lineHeight = lyricStyle.lineHeight * 0.8f) else backgroundStyle, lit, clock, arrangement,
-                Color.White.copy(alpha = if (bgOnly) 0.9f else 0.78f), letters = line.real, modifier = Modifier.padding(top = if (bgOnly) 0.dp else 4.dp))
+                Color.White.copy(alpha = if (bgOnly) 0.9f else 0.78f), letters = line.real, preview = preview, modifier = Modifier.padding(top = if (bgOnly) 0.dp else 4.dp))
         }
     }
 }
@@ -266,6 +270,7 @@ private fun Words(
     color: Color,
     rise: Boolean = true,
     letters: Boolean = false,
+    preview: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val groups = remember(words) { groupsOf(words) }
@@ -274,7 +279,7 @@ private fun Words(
         groups.forEach { g ->
             val gap = if (g.last().space) Modifier.padding(end = space) else Modifier
             if (!lit) BasicText(g.joinToString("") { it.text }, gap, style = style.copy(color = color))
-            else LitWord(g, style, color, clock, rise, letters, gap)
+            else LitWord(g, style, color, clock, rise, letters, gap, preview)
         }
     }
 }
@@ -362,7 +367,7 @@ private fun graphemes(text: String): IntArray {
  * reloj al dibujar.
  */
 @Composable
-private fun LitWord(g: List<Word>, style: TextStyle, color: Color, clock: LyricsClock, rise: Boolean, letters: Boolean, modifier: Modifier) {
+private fun LitWord(g: List<Word>, style: TextStyle, color: Color, clock: LyricsClock, rise: Boolean, letters: Boolean, modifier: Modifier, preview: Boolean = false) {
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val text = remember(g) { g.joinToString("") { it.text } }
     val pieces = remember(g, letters) { piecesOf(g, letters) }
@@ -401,7 +406,7 @@ private fun LitWord(g: List<Word>, style: TextStyle, color: Color, clock: Lyrics
                 val vibratoX = vibrato * .35.dp.toPx()
                 val vibratoY = vibrato * .7.dp.toPx()
                 val brush = when {
-                    f <= 0f -> dim
+                    f <= 0f -> if (preview) full else dim
                     f >= 1f -> full
                     else -> {
                         // Como el CSS del PC: el borde del relleno es un degradado del 12 % del trozo.

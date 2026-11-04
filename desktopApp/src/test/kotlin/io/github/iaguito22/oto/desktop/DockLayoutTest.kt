@@ -18,6 +18,24 @@ class DockLayoutTest {
             assertEquals(left.height,right.height)
         }
     }
+    @Test fun reopeningInAnyOrderRestoresThreeWindowOrder() {
+        val area = DockRect(0, 0, 2400, 1000)
+        val orders = listOf(
+            listOf(DockId.Player, DockId.Lyrics), listOf(DockId.Lyrics, DockId.Player),
+            listOf(DockId.Player, DockId.Library), listOf(DockId.Library, DockId.Lyrics))
+        for (closing in orders) {
+            val l = DockLayout()
+            l.create(DockId.Lyrics, DockRect(20, 20, 480, 640))
+            l.create(DockId.Player, DockRect(600, 20, 360, 640))
+            l.create(DockId.Library, DockRect(1000, 20, 960, 640))
+            assertTrue(l.dock(DockId.Player, DockId.Lyrics, false))
+            assertTrue(l.dock(DockId.Library, DockId.Player, false))
+            val expected = l.group(DockId.Lyrics).members.toList()
+            closing.forEach { l.close(it) }
+            closing.forEach { assertTrue(l.open(it, null, area)) }
+            assertEquals("cerrando $closing", expected, l.group(DockId.Library).members.toList())
+        }
+    }
     @Test fun dockUsesPriorityHeightAndMovesTogether() {
         val l=layout()
         assertEquals(740,l.bounds.getValue(DockId.Player).height)

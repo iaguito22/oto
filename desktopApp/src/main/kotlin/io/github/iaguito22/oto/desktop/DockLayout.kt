@@ -22,6 +22,17 @@ internal class DockLayout {
     val bounds = mutableMapOf<DockId, DockRect>()
     val groups = mutableListOf<DockGroup>()
     val homes = mutableMapOf<DockId, DockHome>()
+    /** Orden relativo recordado de todas las ventanas, también las cerradas, para reabrirlas en su sitio. */
+    val memory = mutableListOf<DockId>()
+    internal fun rememberOrder(members: List<DockId>) {
+        val slots = memory.indices.filter { memory[it] in members }
+        slots.zip(members.filter { it in memory }).forEach { (slot, id) -> memory[slot] = id }
+        members.forEachIndexed { i, id ->
+            if (id in memory) return@forEachIndexed
+            if (i > 0) memory.add(memory.indexOf(members[i - 1]) + 1, id)
+            else memory.add(members.getOrNull(1)?.let { memory.indexOf(it) }?.takeIf { it >= 0 } ?: 0, id)
+        }
+    }
     val minimums = mutableMapOf<DockId, Pair<Int, Int>>()
     val defaults = mutableMapOf<DockId, Int>()
     private fun minWidth(id: DockId) = minimums[id]?.first ?: id.minWidth
@@ -163,6 +174,7 @@ internal class DockLayout {
             b.beforeAttach[it] = oldMembers.associateWith { member -> oldBounds.getValue(member).width }
         }
         groups.remove(a)
+        rememberOrder(b.members)
         changed(); return true
     }
     /** Margen generoso para acoplar sin tener que afinar al píxel; gana el borde más cercano en total. */
@@ -205,6 +217,7 @@ internal class DockLayout {
     fun close(id: DockId) {
         val g = group(id)
         val previousWidths = g.beforeAttach.remove(id)
+        rememberOrder(g.members)
         homes[id] = DockHome(g.restored[id] ?: bounds.getValue(id), g.members.toList(), g.members.indexOf(id))
         g.members.remove(id); bounds.remove(id); g.restored.remove(id)
         if (g.members.isEmpty()) groups.remove(g) else {
@@ -230,11 +243,18 @@ internal class DockLayout {
             height = rect.height.coerceIn(minHeight(id), max(area.height,minHeight(id)))))
         val siblings = home?.siblings
         var before = false
-        val target = if (siblings != null) {
-            siblings.filter { it != id && it in bounds }.minByOrNull { kotlin.math.abs(siblings.indexOf(it) - home.index) }?.also {
-                before = home.index < siblings.indexOf(it)
-            }
-        } else origin?.takeIf { it in bounds }?.let {
+        val joined = siblings?.let { s -> groups.firstOrNull { gr -> gr.members.any { it != id && it in s } } }
+        val target = if (siblings != null && joined != null) {
+            // Orden recordado: detrás de la ventana que le precedía, o delante de la que le seguía.
+            val mine = memory.indexOf(id)
+            val others = joined.members.filter { it != id && it in bounds }
+            val order = { m: DockId -> memory.indexOf(m) }
+            val prev = if (mine < 0) null else others.filter { order(it) in 0 until mine }.maxByOrNull(order)
+            val next = if (mine < 0) null else others.filter { order(it) > mine }.minByOrNull(order)
+            if (prev != null) prev.also { before = false }
+            else if (next != null) next.also { before = true }
+            else others.minByOrNull { kotlin.math.abs(siblings.indexOf(it) - home.index) }?.also { before = home.index < siblings.indexOf(it) }
+        } else if (siblings != null) null else origin?.takeIf { it in bounds }?.let {
             val g = group(it)
             val chief = g.members.indexOf(g.leader)
             val left = g.members.take(chief).sumOf { member -> bounds.getValue(member).width }
@@ -253,6 +273,7 @@ internal class DockLayout {
         val from = g.members.indexOf(id); val to = g.members.indexOf(target)
         val left = bounds.getValue(g.members.first()).x
         g.members[from] = target; g.members[to] = id
+        rememberOrder(g.members)
         if (g.maximized) fit(g) else {
             val chief = bounds.getValue(g.leader)
             flow(g, left, chief.y, chief.height)

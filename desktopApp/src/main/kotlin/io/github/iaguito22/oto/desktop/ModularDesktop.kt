@@ -411,7 +411,7 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
     if (!visible && !mounted) return
     val registered = dock == null || dockId == null || dockId in dock.layout.bounds
     dock?.revision
-    val group = if(registered && dock != null && dockId != null) dock.layout.group(dockId) else null
+    val group = if(registered && dock != null && dockId != null) dock.layout.groups.firstOrNull { dockId in it.members } else null
     val groupIndex = group?.members?.indexOf(dockId) ?: 0
     val revealSide = remember { mutableIntStateOf(0) }
     if (group != null && group.members.size > 1) {
@@ -423,8 +423,9 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
     val leftEdge = groupIndex == 0
     val rightEdge = group == null || groupIndex == group.members.lastIndex
     val groupBounds = group?.let { g ->
-        val first = dock!!.layout.bounds.getValue(g.members.first())
-        DockRect(first.x, first.y, g.members.sumOf { dock.layout.bounds.getValue(it).width }, first.height)
+        val first = dock!!.layout.bounds[g.members.first()]
+        if(first == null || g.members.any { it !in dock.layout.bounds }) null
+        else DockRect(first.x, first.y, g.members.sumOf { dock.layout.bounds[it]?.width ?: 0 }, first.height)
     }
     val ownBounds = dockId?.let { dock?.layout?.bounds?.get(it) }
     val shape = RoundedCornerShape(22.dp)
@@ -597,7 +598,11 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
                                 if(chrome && registered && !narrowHeader && dock != null && dockId != null) {
                                     if(dock.layout.group(dockId).leader == dockId) key(tooltipEpoch) { androidx.compose.foundation.TooltipArea(tooltip = {
                                         Surface(color = Color(0xFF30362F), shape = RoundedCornerShape(8.dp)) {
-                                            Text("Ventana principal. Arrastra la barra de otra ventana sobre esta para intercambiarlas.", Modifier.widthIn(max=250.dp).padding(8.dp), style = OtoType.rowSub)
+                                            Column(Modifier.widthIn(max=260.dp).padding(horizontal=12.dp, vertical=10.dp), verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                                                Text("Ventana principal del conjunto", style = OtoType.rowTitle, color = accent)
+                                                Text("Es la que aparece en la barra de tareas y arrastra a las demás. " +
+                                                    "Para cambiar el orden, arrastra la barra de otra ventana hasta esta.", style = OtoType.rowSub, color = Color.White.copy(alpha=.75f))
+                                            }
                                         }
                                     }) { Text("·",color=accent,modifier=Modifier.padding(horizontal=4.dp)) } }
                                     if(dock.supportsMaximize) SmallAction(if(dock.layout.group(dockId).maximized) Icons.Rounded.FilterNone else Icons.Rounded.CropSquare,
@@ -609,7 +614,7 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
                         }
                     }
                     Box(Modifier.align(Alignment.BottomEnd).size(16.dp).graphicsLayer{alpha=if(immersive)chromeAlpha else .5f}.pointerInput(minimum) {
-                        detectDragGestures {change,delta -> change.consume();if(registered && dock != null && dockId != null) { val r=dock.layout.bounds.getValue(dockId); with(density) { dock.layout.resize(dockId, r.width+delta.x.toDp().value.toInt(), r.height+delta.y.toDp().value.toInt()) } } else if(dock == null) with(density){windowState.size=DpSize((windowState.size.width+delta.x.toDp()).coerceIn(if(title=="Tu música")640.dp else minimum.width,2400.dp),(windowState.size.height+delta.y.toDp()).coerceIn(if(title=="Tu música")480.dp else minimum.height,1600.dp))}}
+                        detectDragGestures {change,delta -> change.consume();if(dock != null && dockId != null) { val r=dock.layout.bounds[dockId]; if(r != null) with(density) { dock.layout.resize(dockId, r.width+delta.x.toDp().value.toInt(), r.height+delta.y.toDp().value.toInt()) } } else if(dock == null) with(density){windowState.size=DpSize((windowState.size.width+delta.x.toDp()).coerceIn(if(title=="Tu música")640.dp else minimum.width,2400.dp),(windowState.size.height+delta.y.toDp()).coerceIn(if(title=="Tu música")480.dp else minimum.height,1600.dp))}}
                     }) {Text("⌟",color=Color.White.copy(alpha=.25f))}
                     if (registered && group != null && dock != null && dockId != null && group.members.size > 1) {
                         @Composable fun DividerHandle(left: DockId, align: Alignment) {

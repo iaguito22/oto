@@ -392,18 +392,20 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
             val down = awaitFirstDown(requireUnconsumed = false)
             session.trace("down $id consumed=${down.isConsumed}")
             if(down.isConsumed) return@awaitEachGesture
-            val original = session.layout.bounds.getValue(id)
+            // La ventana puede estar cerrándose (fuera del modelo) mientras aún recibe clics.
+            val original = session.layout.bounds[id] ?: return@awaitEachGesture
             val origin = Point(original.x + (down.position.x / density).roundToInt(), original.y + (down.position.y / density).roundToInt())
             var previous = origin
             var active = false
-            val originalGroup = session.layout.group(id)
-            val groupLeft = session.layout.bounds.getValue(originalGroup.members.first()).x
-            val groupRight = session.layout.bounds.getValue(originalGroup.members.last()).let { it.x + it.width }
+            val originalGroup = session.layout.groups.firstOrNull { id in it.members } ?: return@awaitEachGesture
+            val groupLeft = (session.layout.bounds[originalGroup.members.first()] ?: return@awaitEachGesture).x
+            val groupRight = (session.layout.bounds[originalGroup.members.last()] ?: return@awaitEachGesture).let { it.x + it.width }
             val secondary = originalGroup.leader != id
             try {
                 while (true) {
                     val event = awaitPointerEvent()
                     val change = event.changes.first()
+                    if (id !in session.layout.bounds) break
                     val point = MouseInfo.getPointerInfo().location
                     if (!change.pressed) {
                         if (!active && change.changedToUpIgnoreConsumed()) {
@@ -436,12 +438,12 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
                         val insideLane = secondary && point.y in (original.y - 24)..(original.y + 68) && point.x in (groupLeft - 24)..(groupRight + 24)
                         if (insideLane && origin.distance(point) >= threshold) {
                             val target = group.members.filter { it != id }.firstOrNull { candidate ->
-                                val r = session.layout.bounds.getValue(candidate)
+                                val r = session.layout.bounds[candidate] ?: return@firstOrNull false
                                 point.x in r.x until r.x + r.width
                             }
                             session.trace("reorder candidate $id -> $target")
                             session.reorderPreview = target?.let {
-                                Triple(id,it,point.x < session.layout.bounds.getValue(it).let { r -> r.x + r.width / 2 })
+                                session.layout.bounds[it]?.let { r -> Triple(id,it,point.x < r.x + r.width / 2) }
                             }
                             change.consume()
                         } else if (!insideLane && origin.distance(point) >= threshold) {
@@ -449,7 +451,7 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
                             val wasMaximized = group.maximized
                             if (group.leader != id) session.layout.detach(id)
                             else if (wasMaximized) session.maximize(id)
-                            val current = session.layout.bounds.getValue(id)
+                            val current = session.layout.bounds[id] ?: break
                             val x = point.x - ((origin.x - original.x).toDouble() / original.width * current.width).roundToInt()
                             val y = point.y - (origin.y - original.y).coerceIn(0, 44)
                             session.layout.move(id, x - current.x, y - current.y)
