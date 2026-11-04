@@ -316,11 +316,10 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     }
     ModuleWindow("Tu música", libraryWindow, menuOpen && !windowsHidden, {closePrimary(DockId.Library)}, dock=docking, dockId=DockId.Library, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity,
         extra={
-            SmallAction(Icons.Rounded.PlayArrow,"Reproductor") { docking.toggle(DockId.Player,DockId.Library) }
-            SmallAction(MobileIcons.lyrics,"Letra") { docking.toggle(DockId.Lyrics,DockId.Library) }
-            SmallAction(MobileIcons.queueMusic,"Cola") { docking.toggle(DockId.Queue,DockId.Library) }
-        }, keys={event -> if(librarySearchFocused && event.key==Key.Spacebar) false else shortcuts(event)}) {
-        LibrarySpace(player,prefs,menu,importer,account,cloud,login,downloads,palette,{openSave(it, "biblioteca")},{devicesOpen=true},libraryRequest,jump,artworkBackground,{ artworkBackground=it;kv.putString("artwork_background",it.toString()) },{librarySearchFocused=it},{ devices.requestAccount(); devicesOpen=true }, backdrop != null, backdropOpacity,{backdropOpacity=it;kv.putString("artwork_opacity",it.toString())}, { val src=source; if(src?.item != null || src?.local != null) jump=LibraryJump(jump.version+1,src?.item,src?.local) else if(src?.kind != "DJ") queueOpen=true }, shortcut,shortcutIssue,{shortcut=it;kv.putString("shortcut",it)})
+            SmallAction(Icons.Rounded.PlayArrow,if(playerOpen) "Cerrar reproductor" else "Abrir reproductor",active=playerOpen) { docking.toggle(DockId.Player,DockId.Library) }
+            SmallAction(MobileIcons.lyrics,if(lyricsOpen) "Cerrar letra" else "Abrir letra",active=lyricsOpen) { docking.toggle(DockId.Lyrics,DockId.Library) }
+            SmallAction(MobileIcons.queueMusic,if(queueOpen) "Cerrar cola" else "Abrir cola",active=queueOpen) { docking.toggle(DockId.Queue,DockId.Library) }        },keys={event -> if(librarySearchFocused && event.key==Key.Spacebar) false else shortcuts(event)}) {
+        LibrarySpace(player,prefs,menu,importer,account,cloud,login,downloads,palette,{openSave(it, "biblioteca")},{devicesOpen=true},libraryRequest,jump,artworkBackground,{ artworkBackground=it;kv.putString("artwork_background",it.toString()) },{librarySearchFocused=it},{ devices.requestAccount(); devicesOpen=true }, backdrop != null, backdropOpacity,{backdropOpacity=it;kv.putString("artwork_opacity",it.toString())}, { val src=source; if(src?.item != null || src?.local != null) jump=LibraryJump(jump.version+1,src?.item,src?.local) else if(src?.kind != "DJ") queueOpen=true }, shortcut,shortcutIssue,{shortcut=it;kv.putString("shortcut",it)},playerVisible=playerOpen)
     }
     ModuleWindow("Guardar",rememberModuleState("save",380,540),savingTrack!=null && !windowsHidden,{savingTrack=null}) {
         savingTrack?.let { SaveSpace(it,prefs,palette) }
@@ -386,7 +385,9 @@ internal val LocalWindowTooltipEpoch = staticCompositionLocalOf { 0 }
 private fun SmallAction(icon: ImageVector, label: String, active:Boolean=false, onClick: () -> Unit) {
     key(LocalWindowTooltipEpoch.current) {
         TooltipArea(tooltip = { Surface(color = Color(0xFF30362F), shape = RoundedCornerShape(8.dp)) { Text(label, Modifier.padding(8.dp), style = OtoType.rowSub) } }) {
-            HoverAction(icon,label,onClick=onClick,size=LocalWindowActionSize.current,tint=if(active) MaterialTheme.colorScheme.primary else Color.White.copy(alpha=.45f),modifier=if(active) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha=.25f),RoundedCornerShape(9.dp)) else Modifier)
+            // Abierto: el icono se ve más claro, sin recuadro.
+            val on by animateFloatAsState(if(active) 1f else 0f, tween(180), label="activo")
+            HoverAction(icon,label,onClick=onClick,size=LocalWindowActionSize.current,tint=Color.White.copy(alpha=.45f+.47f*on))
         }
     }
 }

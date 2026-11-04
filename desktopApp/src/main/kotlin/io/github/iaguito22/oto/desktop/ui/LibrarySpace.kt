@@ -91,7 +91,7 @@ private data class LibraryEdit(val kind:String,val id:String="",val value:String
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuController,importer:Importer,
-    account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={}) {
+    account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={},playerVisible:Boolean=false) {
     val lists by prefs.playlists.collectAsState(initial=emptyList())
     val liked by prefs.likedList.collectAsState(initial=LocalPlaylist(LIKED_ID,"Me gusta",emptyList()))
     val history by prefs.history.collectAsState(initial=emptyList())
@@ -175,7 +175,10 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     LibraryNavigation(name,icon,wide,section==name) { home(name) }
                 }
                 Spacer(Modifier.weight(1f))
-                if(np.id!=null) {
+                // Con la ventana del reproductor abierta, el mini reproductor sobraría.
+                androidx.compose.animation.AnimatedVisibility(np.id!=null && !playerVisible,
+                    enter=fadeIn(tween(220))+androidx.compose.animation.expandVertically(spring(dampingRatio=.8f,stiffness=380f),expandFrom=Alignment.Bottom),
+                    exit=fadeOut(tween(160))+androidx.compose.animation.shrinkVertically(tween(220),shrinkTowards=Alignment.Bottom)) {
                     if(wide) {
                         Column(Modifier.fillMaxWidth().padding(horizontal=6.dp,vertical=8.dp),verticalArrangement=Arrangement.spacedBy(5.dp)) {
                             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick=onSource),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(9.dp)) {
@@ -185,7 +188,12 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                     Text(np.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)
                                 }
                             }
-                            Text(qualityPlaying?.let { q -> listOfNotNull(q.codec.uppercase(),q.bitrate?.let { "${(it+500)/1000} kbps" },q.sampleRate?.let { if(it%1000==0) "${it/1000} kHz" else "${it/1000f} kHz" }).joinToString(" · ") } ?: if(np.buffering) "Preparando audio…" else "Calidad no disponible",style=OtoType.rowSub,color=Color.White.copy(alpha=.38f),maxLines=2)
+                            val qualityText=qualityPlaying?.let { q -> listOfNotNull(q.codec.uppercase(),q.bitrate?.let { "${(it+500)/1000} kbps" },q.sampleRate?.let { if(it%1000==0) "${it/1000} kHz" else "${it/1000f} kHz" }).joinToString(" · ") } ?: if(np.buffering) "Preparando audio…" else "Calidad no disponible"
+                            // Siempre en una línea: si no cabe, la letra se reduce un poco hasta caber.
+                            var qualitySize by remember(qualityText) { mutableStateOf(11.5f) }
+                            Text(qualityText,style=OtoType.rowSub.copy(fontSize=androidx.compose.ui.unit.TextUnit(qualitySize,androidx.compose.ui.unit.TextUnitType.Sp),lineHeight=androidx.compose.ui.unit.TextUnit(qualitySize+4f,androidx.compose.ui.unit.TextUnitType.Sp)),
+                                color=Color.White.copy(alpha=.38f),maxLines=1,softWrap=false,
+                                onTextLayout={ if(it.hasVisualOverflow && qualitySize>8.5f) qualitySize-=.5f })
                             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.Center) {
                                 HoverAction(MobileIcons.skipPrevious,"Anterior",onClick=player::previous,size=32.dp)
                                 MinimalPlayback(np.playing,player::toggle,controlSize=36.dp)
@@ -217,11 +225,16 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 LibraryNavigation("Ajustes",MobileIcons.settings,wide,section=="Ajustes") { home("Ajustes") }
             }
             Column(Modifier.weight(1f).fillMaxHeight().padding(start=16.dp,end=28.dp,top=18.dp,bottom=12.dp),verticalArrangement=Arrangement.spacedBy(20.dp)) {
-                Row(Modifier.fillMaxWidth().height(48.dp).clip(CircleShape).background(Color.White.copy(alpha=.045f)).padding(start=16.dp,end=6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                // Dispositivos junto al buscador, pero fuera de él.
+                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                Row(Modifier.weight(1f).height(48.dp).clip(CircleShape).background(Color.White.copy(alpha=.045f)).padding(start=16.dp,end=6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                     Icon(MobileIcons.search,null,Modifier.size(18.dp),tint=Color.White.copy(alpha=.35f))
                     BasicTextField(state.query,{menu.onQuery(it);local=null;smartOpen=null},Modifier.weight(1f).onFocusChanged { onSearchFocus(it.isFocused);if(!it.isFocused)recentsOpen=false }.focusRequester(searchFocus).onPointerEvent(PointerEventType.Press){recentsOpen=true}.onPreviewKeyEvent { e -> if(e.type==KeyEventType.KeyDown && e.key==Key.Escape && recentsOpen){recentsOpen=false;true} else false },textStyle=OtoType.body.copy(color=Color.White),cursorBrush=SolidColor(Color.White),singleLine=true,decorationBox={field -> if(state.query.isBlank())Text("Buscar canciones, artistas o listas",style=OtoType.body,color=Color.White.copy(alpha=.36f));field()})
                     if(state.query.isNotBlank())IconButton(onClick={menu.onQuery("")}){Icon(MobileIcons.close,"Limpiar búsqueda",Modifier.size(17.dp))}
+                }
+                Box(Modifier.size(48.dp).clip(CircleShape).background(Color.White.copy(alpha=.045f)),contentAlignment=Alignment.Center) {
                     HoverAction(Icons.Rounded.Devices,"Dispositivos",onClick=onDevices,tint=Color.White.copy(alpha=.55f))
+                }
                 }
                 val panelModifier = if(floatingPanel) Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFF171A18).copy(alpha=.35f)).padding(16.dp) else Modifier
                 Column(Modifier.weight(1f).fillMaxWidth().then(panelModifier),verticalArrangement=Arrangement.spacedBy(20.dp)) {
@@ -309,8 +322,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                             LaunchedEffect(top){topOrder=top}
                             var gridOrder by remember{mutableStateOf(gridEntries)}
                             LaunchedEffect(gridEntries){gridOrder=gridEntries}
+                            // Todas las tarjetas con el ancho de «Tus listas», arriba y en la cuadrícula.
                             val featuredWidth=when(cardSize){0->112.dp;2->184.dp;else->144.dp}
-                            val maxCardWidth=when(cardSize){0->150.dp;2->240.dp;else->190.dp}
                             val grid=rememberLazyGridState()
                             val moveIn:(List<Shelved>,Any,Any)->List<Shelved>? = { order,from,to ->
                                 val a=order.indexOfFirst{it.key==from};val b=order.indexOfFirst{it.key==to}
@@ -342,7 +355,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                     } }
                                 }
                             }
-                            LazyVerticalGrid(columns=GridCells.Adaptive(when(cardSize){0->130.dp;2->220.dp;else->170.dp}),state=grid,verticalArrangement=Arrangement.spacedBy(18.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(bottom=28.dp)) {
+                            LazyVerticalGrid(columns=GridCells.FixedSize(featuredWidth),state=grid,verticalArrangement=Arrangement.spacedBy(18.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(bottom=28.dp)) {
                                 if(inFolder==null) item(key="featured",span={GridItemSpan(maxLineSpan)}) {
                                     Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
                                         Text("Tus listas",style=OtoType.section)
@@ -375,7 +388,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                 items(gridOrder,key={it.key}) { e ->
                                     Box(Modifier.fillMaxWidth()) {
                                         ReorderableItem(reorder,e.key) { dragging ->
-                                            ShelvedCard(e,Modifier.widthIn(max=maxCardWidth).fillMaxWidth().longPressDraggableHandle(enabled=e.movable,onDragStopped={saveGrid()}),dragging)
+                                            ShelvedCard(e,Modifier.width(featuredWidth).longPressDraggableHandle(enabled=e.movable,onDragStopped={saveGrid()}),dragging)
                                         }
                                     }
                                 }
