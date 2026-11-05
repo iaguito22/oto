@@ -5,8 +5,12 @@
 ## Estado
 
 - Publicada: **v2.0.0** (Latest), etiqueta → `2c64f3c`. Instalada en el PC (04/11) y en el móvil habitual.
-- Después de la 2.0.0 hay commits locales sin push (`061d1d5` y la división de AGENTS.md; `origin/main` está en `f8665ef`) y un cambio de volumen sin commit. Lo instalado en el PC los incluye.
+- Después de la 2.0.0, `main` tiene más commits (ventanas, volumen, iconos 2K, varias pantallas, bandeja), ya subidos. Lo instalado en el PC los incluye.
 - MSI y lanzador sin firma Authenticode: no prometer ausencia de avisos SmartScreen ni tocar protecciones. Defender analizó el MSI de la 1.2.3 sin amenazas.
+
+## MSI de la 2.0.0 sustituido — 05/11/2026
+
+- Por petición de Iago, `Oto-2.0.0-windows-x64.msi` se reemplazó (`--clobber`) por un build con iconos nítidos en 2K, arreglos de varias pantallas y la canción en el menú de la bandeja. SHA-256 `54442ec0b924c03dbfc2b4d8a539db9570c9a826f7fbb0dbbc6c1c93914be34e`; `SHA256SUMS.txt` actualizado. El MSI ya no corresponde a la etiqueta `v2.0.0`: su código está en `main`, después de la etiqueta. Instalado en el PC el 05/11 a las 23:38.
 
 ## Release 2.0.0 — 04/11/2026
 

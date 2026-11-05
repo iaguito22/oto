@@ -318,6 +318,20 @@ class DockLayoutTest {
         }
     }
 
+    @Test fun mixedScaleMonitorGapPicksNearestScreen() {
+        // 2K al 125 % (2048 lógicos) y a su derecha 1080p al 100 %, que AWT empieza en x=2560.
+        val left=DockRect(0,0,2048,1112); val right=DockRect(2560,0,1920,1040)
+        assertEquals(left,nearestArea(listOf(left,right),2100,300))
+        assertEquals(right,nearestArea(listOf(left,right),2500,300))
+        assertEquals(right,nearestArea(listOf(left,right),3000,300))
+        val l=layout()
+        l.move(DockId.Library,2400-20,0)
+        l.recover(listOf(left,right))
+        val first=l.bounds.getValue(l.group(DockId.Library).members.first())
+        assertTrue(first.x>=2560)
+        assertJoined(l,DockId.Library)
+    }
+
     @Test fun detachingAndClosingOnLeftKeepChiefAnchored() {
         val l=layout();l.create(DockId.Queue,DockRect(0,0,420,740));l.dock(DockId.Queue,DockId.Library,true)
         val chief=l.bounds.getValue(DockId.Library)

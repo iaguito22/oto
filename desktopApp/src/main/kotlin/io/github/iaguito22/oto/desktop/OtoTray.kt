@@ -27,7 +27,9 @@ import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import io.github.iaguito22.oto.desktop.ui.FineSlider
+import io.github.iaguito22.oto.desktop.ui.LibraryArt
 import io.github.iaguito22.oto.desktop.ui.MobileIcons
 import io.github.iaguito22.oto.desktop.ui.OtoType
 import java.awt.EventQueue
@@ -44,14 +46,23 @@ import javax.imageio.ImageIO
 @Composable
 internal fun OtoTray(toggle: () -> Unit, player: () -> Unit, library: () -> Unit, lyrics: () -> Unit, queue: () -> Unit, quit: () -> Unit,
     playing: Boolean, hasSong: Boolean, previous: () -> Unit, playPause: () -> Unit, next: () -> Unit,
-    volume: Float, setVolume: (Float) -> Unit) {
+    volume: Float, setVolume: (Float) -> Unit, title: String = "", artist: String = "", artwork: String? = null) {
     var menuOpen by remember { mutableStateOf(false) }
+    // Con canción, el menú lleva arriba su tarjeta: la altura debe saberse al colocarlo.
+    val menuHeight = if (hasSong && title.isNotBlank()) 385 else 329
+    val currentHeight by rememberUpdatedState(menuHeight)
+    var trayIcon by remember { mutableStateOf<TrayIcon?>(null) }
+    LaunchedEffect(trayIcon, hasSong, title, artist) {
+        // Windows corta el tooltip de la bandeja a 127 caracteres.
+        trayIcon?.toolTip = (if (hasSong && title.isNotBlank()) "Oto · $title" + (if (artist.isNotBlank()) " — $artist" else "") else "Oto").take(127)
+    }
     var position by remember { mutableStateOf(WindowPosition(0.dp,0.dp)) }
     val currentToggle by rememberUpdatedState(toggle)
     DisposableEffect(Unit) {
         val tray = if (SystemTray.isSupported()) SystemTray.getSystemTray() else null
         val icon = runCatching {
-            val image = requireNotNull(Thread.currentThread().contextClassLoader.getResourceAsStream("oto-icon.png")).use(ImageIO::read)
+            // Ya al tamaño exacto de la bandeja: AWT reduce sin suavizado y el icono salía dentado.
+            val image = AppIcon.tray() ?: requireNotNull(Thread.currentThread().contextClassLoader.getResourceAsStream("oto-icon.png")).use(ImageIO::read)
             TrayIcon(image,"Oto").apply {
                 isImageAutoSize = true
                 addMouseListener(object : MouseAdapter() {
@@ -60,7 +71,8 @@ internal fun OtoTray(toggle: () -> Unit, player: () -> Unit, library: () -> Unit
                             val point = MouseInfo.getPointerInfo().location
                             val area = desktopArea(point)
                             val x = (point.x-210).coerceIn(area.x,(area.x+area.width-220).coerceAtLeast(area.x))
-                            val y = (point.y-329).coerceIn(area.y,(area.y+area.height-329).coerceAtLeast(area.y))
+                            val h = currentHeight
+                            val y = (point.y-h).coerceIn(area.y,(area.y+area.height-h).coerceAtLeast(area.y))
                             EventQueue.invokeLater { position=WindowPosition(x.dp,y.dp);menuOpen=true }
                         } else if (e.button == MouseEvent.BUTTON1) EventQueue.invokeLater { currentToggle() }
                     }
@@ -68,11 +80,13 @@ internal fun OtoTray(toggle: () -> Unit, player: () -> Unit, library: () -> Unit
                 tray?.add(this)
             }
         }.getOrNull()
-        onDispose { if(icon != null) tray?.remove(icon) }
+        trayIcon = icon
+        onDispose { trayIcon = null; if(icon != null) tray?.remove(icon) }
     }
     if (menuOpen) {
-        val state = rememberWindowState(position=position,width=220.dp,height=329.dp)
+        val state = rememberWindowState(position=position,width=220.dp,height=menuHeight.dp)
         LaunchedEffect(position) { state.position=position }
+        LaunchedEffect(menuHeight) { state.size=androidx.compose.ui.unit.DpSize(220.dp,menuHeight.dp) }
         Window(onCloseRequest={menuOpen=false},state=state,title="Oto · Menú",undecorated=true,transparent=true,alwaysOnTop=true,
             onKeyEvent={ if(it.type==KeyEventType.KeyDown && it.key==Key.Escape) {menuOpen=false;true} else false }) {
             DisposableEffect(window) {
@@ -83,6 +97,21 @@ internal fun OtoTray(toggle: () -> Unit, player: () -> Unit, library: () -> Unit
             Surface(Modifier.fillMaxSize().border(1.dp,Color.White.copy(alpha=.10f),RoundedCornerShape(16.dp)),shape=RoundedCornerShape(16.dp),color=Color(0xFF202520)) {
                 Column(Modifier.padding(8.dp),verticalArrangement=Arrangement.spacedBy(1.dp)) {
                     Text("Oto",Modifier.padding(start=10.dp,top=4.dp,bottom=5.dp),style=OtoType.rowTitle,color=Color.White)
+                    if (hasSong && title.isNotBlank()) {
+                        // Lo que suena, como en el reproductor: un clic lo abre.
+                        val interaction=remember { MutableInteractionSource() }
+                        val hovered by interaction.collectIsHoveredAsState()
+                        Row(Modifier.fillMaxWidth().height(54.dp).clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha=if(hovered) .09f else .05f)).hoverable(interaction)
+                            .clickable(interactionSource=interaction,indication=null,onClickLabel="Abrir reproductor") { menuOpen=false; player() }
+                            .padding(horizontal=7.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                            LibraryArt(artwork,Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)))
+                            Column(Modifier.weight(1f)) {
+                                Text(title,style=OtoType.rowTitle,color=Color.White,maxLines=1,overflow=TextOverflow.Ellipsis)
+                                if (artist.isNotBlank()) Text(artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.55f),maxLines=1,overflow=TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
                     Row(Modifier.fillMaxWidth().height(38.dp),horizontalArrangement=Arrangement.Center,verticalAlignment=Alignment.CenterVertically) {
                         @Composable fun PlaybackButton(icon: ImageVector, label: String, action: () -> Unit) {
                             val interaction=remember { MutableInteractionSource() }

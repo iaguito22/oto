@@ -6,8 +6,12 @@ Actualizado: 05/11/2026. Actualizar tras cambios importantes. Distinguir impleme
 
 - Repo: https://github.com/iaguito22/oto, rama `main`. Clon: `C:\Users\iago\Documents\Codex\2026-11-02\files-pasted-by-the-user-encargo\work\oto`.
 - Release publicada: 2.0.0 (v2.0.0). Instalada en el PC y en el móvil habitual.
-- Sin push (`origin/main` está en `f8665ef`): `061d1d5` (ventanas, letra, búsqueda) y el commit que divide este archivo. Instalado en el PC: ese código más la curva de volumen.
-- **Sin commit:** curva de volumen `volumeGain()` = volumen^1,5 en `DesktopPlayerConnection.kt`. Pendiente de que Iago la pruebe (si <10 % sigue muy bajo, probar 1,25).
+- Todo subido a `origin/main` (05/11), incluida la curva de volumen ^1,5 (`aa72934`, pendiente de que Iago la pruebe; si <10 % sigue bajo, probar 1,25).
+- **Commit «iconos 2K, varias pantallas y bandeja» (05/11), subido e INSTALADO en el PC (23:38, JAR igual al compilado).** Su MSI sustituyó al `Oto-2.0.0-windows-x64.msi` de la release v2.0.0 (SHA-256 `54442ec0…be34e`, SHA256SUMS actualizado). Ojo: ese MSI ya no coincide con la etiqueta `v2.0.0` (está en `main`, posterior a la etiqueta); DEB, Arch y APK siguen siendo los del 04/11.
+  - Iconos nítidos en 2K: `AppIcon.kt` da a la ventana todos los tamaños (16–256) y a la bandeja el tamaño exacto (16 × escala), reducidos con suavizado. Antes AWT reducía 256 px sin interpolar.
+  - Varias pantallas (sin probar: Iago solo tiene un monitor; lo reportó un amigo): el arrastre ya no se reinicia al cambiar la densidad a mitad de gesto (`DockDragArea` ya no usa la densidad como clave); `screenSignature()` + `DockSession.screensChanged()` detectan cambios de monitores/escala, ignoran los movimientos sueltos de Windows y recolocan los conjuntos con `recover`; `nearestArea()` evita caer a la primera pantalla en los huecos entre monitores de escala distinta.
+  - Bandeja: el menú del clic derecho muestra la canción actual (carátula, título, artista; clic abre el reproductor) y el tooltip lleva «Oto · título — artista».
+  - Iconos obsoletos pasados a AutoMirrored.
 - Sin resolver: congelación breve antes de la animación al abrir ventanas. Medir antes de tocar (`docs/agents/rendimiento.md`).
 - Sin confirmar por Iago: clics en el historial de búsqueda, y el crash «Key Library is missing» (endurecido, no reproducido).
 - Empezar con `git status --short --branch` y conservar cambios ajenos.

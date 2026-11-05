@@ -63,11 +63,31 @@ internal fun desktopArea(point: Point = MouseInfo.getPointerInfo()?.location ?: 
         if (native != null) return native
     }
     val configs = GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map { it.defaultConfiguration }
-    val config = configs.firstOrNull { it.bounds.contains(point) } ?: configs.first()
+    val rects = configs.map { val b = it.bounds; DockRect(b.x, b.y, b.width, b.height) }
+    val config = configs[rects.indexOf(nearestArea(rects, point.x, point.y))]
     val r = config.bounds; val insets = Toolkit.getDefaultToolkit().getScreenInsets(config)
     return DockRect(r.x + insets.left, r.y + insets.top,
         r.width - insets.left - insets.right, r.height - insets.top - insets.bottom)
 }
+
+/** Las zonas útiles (sin barra de tareas) de todas las pantallas. */
+internal fun desktopAreas(): List<DockRect> =
+    GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map { device ->
+        val b = device.defaultConfiguration.bounds
+        desktopArea(Point(b.x + b.width / 2, b.y + b.height / 2))
+    }
+
+/**
+ * Huella de la disposición de pantallas: posición, tamaño, barra de tareas y escala. Si cambia
+ * (conectar o quitar un monitor, cambiar la principal o la escala), Windows recoloca las ventanas.
+ */
+internal fun screenSignature(): String = runCatching {
+    val toolkit = Toolkit.getDefaultToolkit()
+    GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.joinToString("|") { device ->
+        val c = device.defaultConfiguration; val b = c.bounds; val i = toolkit.getScreenInsets(c)
+        "${b.x},${b.y},${b.width},${b.height};${i.left},${i.top},${i.right},${i.bottom};${c.defaultTransform.scaleX}"
+    }
+}.getOrDefault("")
 
 internal class DockSession(val layout: DockLayout, val supportsMaximize: Boolean = System.getenv("HYPRLAND_INSTANCE_SIGNATURE") == null, areas: List<DockRect>? = null) {
     var revision by mutableIntStateOf(0)
@@ -83,12 +103,44 @@ internal class DockSession(val layout: DockLayout, val supportsMaximize: Boolean
         if(!supportsMaximize) layout.groups.filter { it.maximized }.toList().forEach { g ->
             layout.maximize(g.leader,g.area ?: desktopArea())
         }
-        val screens = areas ?: GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map { config ->
-            val b=config.defaultConfiguration.bounds
-            desktopArea(Point(b.x+b.width/2,b.y+b.height/2))
-        }
+        val screens = areas ?: desktopAreas()
         layout.recover(screens)
         layout.changed = { revision++ }
+        // Solo con pantallas reales (las pruebas pasan sus propias zonas).
+        if (areas == null) javax.swing.Timer(2000) { screensChanged() }.apply { isCoalesce = true; start() }
+    }
+
+    private var screens = if (areas == null) screenSignature() else ""
+    private var displayTimer: javax.swing.Timer? = null
+    /**
+     * Al cambiar las pantallas, Windows mueve cada ventana por su cuenta y en momentos distintos.
+     * Si se reconciliasen una a una, las secundarias se separarían del conjunto (o volverían a una
+     * posición que ya no existe). Se ignoran esos movimientos y, cuando paran, se recoloca el
+     * conjunto entero en la pantalla donde quedó su ventana principal.
+     */
+    fun screensChanged(): Boolean {
+        if (screens.isEmpty()) return false
+        val now = screenSignature()
+        if (now.isEmpty() || now == screens) return false
+        screens = now
+        trace("screens changed: $now")
+        geometrySettlesAt = maxOf(geometrySettlesAt, System.nanoTime() + 1_600_000_000L)
+        displayTimer?.stop()
+        displayTimer = javax.swing.Timer(1200) { recoverScreens() }.apply { isRepeats = false; start() }
+        return true
+    }
+    private fun recoverScreens() {
+        if (draggingGroup) { displayTimer?.restart(); return }
+        val areas = runCatching { desktopAreas() }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return
+        // Lo que Windows dejó en las ventanas principales es la posición que el usuario espera.
+        for (g in layout.groups.toList()) {
+            val window = windows[g.leader] ?: continue
+            val r = layout.bounds[g.leader] ?: continue
+            if (window.isShowing && !window.iconified() && !g.maximized) layout.move(g.leader, window.x - r.x, window.y - r.y)
+        }
+        layout.recover(areas)
+        for (g in layout.groups.toList()) syncGroupLocations(g.leader)
+        geometrySettlesAt = System.nanoTime() + 400_000_000L
     }
     fun trace(message: String) { if(System.getenv("OTO_DOCK_TRACE") == "1") println("Dock: $message") }
     /**
@@ -311,6 +363,8 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
                 bridge.job?.cancel()
                 bridge.job = scope.launch {
                     delay(16)
+                    // Un cambio de pantallas llega como movimientos sueltos: que lo resuelva la sesión.
+                    session.screensChanged()
                     while(bridge.applying || session.draggingGroup || System.nanoTime() < session.geometrySettlesAt) delay(16)
                     val expected = session.layout.bounds[id] ?: return@launch
                     if(!window.isShowing || state.placement != WindowPlacement.Floating) return@launch
@@ -384,8 +438,10 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
         WindowDraggableArea(modifier) { content() }
         return
     }
-    val density = LocalDensity.current.density
-    Box(modifier.pointerInput(session, id, density) {
+    // Sin la densidad como clave: al cruzar a una pantalla con otra escala cambia a mitad del
+    // arrastre, y reiniciar el gesto soltaba las ventanas sin acoplarlas ni colocarlas.
+    val currentDensity by rememberUpdatedState(LocalDensity.current.density)
+    Box(modifier.pointerInput(session, id) {
         var lastTap = 0L
         var lastTapPoint = Point()
         awaitEachGesture {
@@ -394,6 +450,7 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
             if(down.isConsumed) return@awaitEachGesture
             // La ventana puede estar cerrándose (fuera del modelo) mientras aún recibe clics.
             val original = session.layout.bounds[id] ?: return@awaitEachGesture
+            val density = currentDensity
             val origin = Point(original.x + (down.position.x / density).roundToInt(), original.y + (down.position.y / density).roundToInt())
             var previous = origin
             var active = false

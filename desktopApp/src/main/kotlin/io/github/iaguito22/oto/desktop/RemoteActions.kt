@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
@@ -84,7 +85,7 @@ internal fun RemoteActions(link: LocalLink) {
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(Icons.Rounded.VolumeUp, "Volumen del dispositivo", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface.copy(alpha = .5f))
+            Icon(Icons.AutoMirrored.Rounded.VolumeUp, "Volumen del dispositivo", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface.copy(alpha = .5f))
             var volume by remember { mutableStateOf<Float?>(null) }
             val level = volume ?: remote.optDouble("volume", .5).toFloat().coerceIn(0f, 1f)
             Box(Modifier.weight(1f)) { RemoteSlider(level, { volume = it }, { volume?.let { v -> send("volume") { it.put("value", v) } }; volume = null }, "Volumen del dispositivo") }

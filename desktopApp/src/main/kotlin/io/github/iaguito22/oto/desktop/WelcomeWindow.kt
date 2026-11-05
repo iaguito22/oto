@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
+import androidx.compose.material.icons.automirrored.rounded.ViewQuilt
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -72,7 +73,7 @@ private fun WelcomeContent(close: () -> Unit) {
                 TextButton(onClick = close) { Text("Omitir") }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilterChip(selected = section == 0, onClick = { section = 0 }, label = { Text("Combina ventanas") }, leadingIcon = { Icon(Icons.Rounded.ViewQuilt, null, Modifier.size(18.dp)) })
+                FilterChip(selected = section == 0, onClick = { section = 0 }, label = { Text("Combina ventanas") }, leadingIcon = { Icon(Icons.AutoMirrored.Rounded.ViewQuilt, null, Modifier.size(18.dp)) })
                 FilterChip(selected = section == 1, onClick = { section = 1 }, label = { Text("Cambia el orden") }, leadingIcon = { Icon(Icons.Rounded.SwapHoriz, null, Modifier.size(18.dp)) })
                 FilterChip(selected = section == 2, onClick = { section = 2 }, label = { Text("Reproductor") }, leadingIcon = { Icon(Icons.Rounded.PushPin, null, Modifier.size(18.dp)) })
             }

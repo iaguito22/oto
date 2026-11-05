@@ -257,7 +257,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         lyrics={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; lyricsOpen=true},
         queue={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; queueOpen=true}, quit=quit,
         playing=nowPlaying.playing, hasSong=nowPlaying.id != null, previous=player::previous, playPause=player::toggle, next=player::next,
-        volume=volume, setVolume=player::setVolume)
+        volume=volume, setVolume=player::setVolume, title=nowPlaying.title, artist=nowPlaying.artist, artwork=nowPlaying.artwork)
     ModuleWindow("Reproductor", playerWindow, playerOpen && !windowsHidden, { closePrimary(DockId.Player) }, pinned && playerSolo, accent = palette.primary, dock=docking, dockId=DockId.Player,
         keys = ::shortcuts, onWindow = { playerFrame = it }, immersive = true, chrome = chrome,
         minimum = if(form == PlayerForm.Vertical) DpSize(96.dp,240.dp) else if(form == PlayerForm.Horizontal) DpSize(280.dp,108.dp) else DpSize(260.dp,370.dp),
@@ -435,6 +435,8 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
     Window(onCloseRequest = close, state = windowState, visible = true, title = "Oto · $title", undecorated = true, transparent = true, alwaysOnTop = pinned,
         icon = painterResource("oto-icon.png"), onKeyEvent = { if (keys(it)) true else if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { close(); true } else false }) {
         SmoothWheel.Driver(window)
+        // Compose fija un único icono de 192 px y Windows lo reduce mal: darle todos los tamaños.
+        DisposableEffect(window) { if (AppIcon.windowImages.isNotEmpty()) window.iconImages = AppIcon.windowImages; onDispose { } }
         val reveal = remember { Animatable(0f) }
         var warming by remember { mutableStateOf(visible) }
         val warmAlpha=remember { mutableFloatStateOf(.01f) }

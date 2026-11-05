@@ -7,7 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Devices
-import androidx.compose.material.icons.rounded.HelpOutline
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -67,7 +67,7 @@ internal fun optionsPosition(parent: Rectangle?, area: Rectangle, width:Int=270,
                 HorizontalDivider(color=Color.White.copy(alpha=.07f))
                 OptionLine(Icons.Rounded.Devices,"Dispositivos",devices)
                 OptionLine(MobileIcons.libraryMusic,"Organizar ventanas",arrange)
-                OptionLine(Icons.Rounded.HelpOutline,"Ver bienvenida",welcome)
+                OptionLine(Icons.AutoMirrored.Rounded.HelpOutline,"Ver bienvenida",welcome)
                 OptionLine(MobileIcons.close,"Salir de Oto",quit)
             }
         }

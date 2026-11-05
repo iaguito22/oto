@@ -17,6 +17,21 @@ internal data class DockGroup(
 internal data class DockHome(val rect: DockRect, val siblings: List<DockId>, val index: Int)
 internal data class DockCandidate(val moving: DockId, val target: DockId, val before: Boolean)
 
+/**
+ * La pantalla que contiene el punto o, si cae fuera de todas, la más cercana. Con escalas distintas
+ * (2K al 125 % junto a 1080p al 100 %) AWT deja huecos entre pantallas; antes se caía a la primera
+ * y el conjunto saltaba de monitor.
+ */
+internal fun nearestArea(areas: List<DockRect>, x: Int, y: Int): DockRect {
+    require(areas.isNotEmpty())
+    fun distance(r: DockRect): Long {
+        val dx = (if (x < r.x) r.x - x else if (x >= r.x + r.width) x - (r.x + r.width - 1) else 0).toLong()
+        val dy = (if (y < r.y) r.y - y else if (y >= r.y + r.height) y - (r.y + r.height - 1) else 0).toLong()
+        return dx * dx + dy * dy
+    }
+    return areas.minBy(::distance)
+}
+
 /** No conoce Compose ni AWT: cada operación deja una distribución completa y consistente. */
 internal class DockLayout {
     val bounds = mutableMapOf<DockId, DockRect>()
@@ -286,7 +301,8 @@ internal class DockLayout {
         while(pending.isNotEmpty()) {
             val g = pending.removeAt(0)
             val leader = bounds.getValue(g.leader)
-            val area = areas.firstOrNull { leader.x in it.x until it.x+it.width && leader.y in it.y until it.y+it.height } ?: areas.first()
+            // Por el centro de la barra superior: es lo que el usuario ve y agarra.
+            val area = nearestArea(areas, leader.x + leader.width / 2, leader.y + 20)
             val first = bounds.getValue(g.members.first())
             if(g.maximized || g.members.sumOf { bounds.getValue(it).width } > area.width) {
                 g.area = area

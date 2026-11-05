@@ -38,7 +38,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Devices
-import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -240,13 +240,13 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     Column(verticalArrangement=Arrangement.spacedBy((-7).dp)) {
                     FineSlider(volume,player::setVolume,Modifier.padding(horizontal=8.dp),label="Volumen")
                     Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.VolumeUp,"Volumen",Modifier.size(18.dp),tint=Color.White.copy(alpha=.55f))
+                        Icon(Icons.AutoMirrored.Rounded.VolumeUp,"Volumen",Modifier.size(18.dp),tint=Color.White.copy(alpha=.55f))
                         Spacer(Modifier.weight(1f))
                         Text("${(volume*100).toInt()} %",style=OtoType.rowSub,color=Color.White.copy(alpha=.4f))
                     }
                     }
                 } else Box {
-                    HoverAction(Icons.Rounded.VolumeUp,"Volumen",onClick={volumeMenu=true})
+                    HoverAction(Icons.AutoMirrored.Rounded.VolumeUp,"Volumen",onClick={volumeMenu=true})
                     LibraryDropdownMenu(volumeMenu,{volumeMenu=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(190.dp)) {
                         Column(Modifier.padding(horizontal=16.dp,vertical=8.dp)) {Text("Volumen · ${(volume*100).toInt()} %",style=OtoType.rowSub);FineSlider(volume,player::setVolume,label="Volumen")}
                     }
