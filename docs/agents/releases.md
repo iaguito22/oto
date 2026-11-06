@@ -2,6 +2,14 @@
 
 Índice en `AGENTS.md`. Estados de 03–05/11/2026; contrastar con `git log` y GitHub.
 
+## Release 2.1.0 — 06/11/2026
+
+- **Publicada (Latest)**: https://github.com/iaguito22/oto/releases/tag/v2.1.0. Actions sobre el borrador correctas: «Comprobar paquete Arch» 42229570179 y «Comprobar paquetes Linux» 42229565220. NO instalada todavía en el PC ni en el móvil.
+- Commit `2176563` en `main` (subido), etiqueta `v2.1.0`. Release con MSI (con CDS), DEB, Arch, APK pública (4043c8…), phone (717d8f…), **Android 12** y SHA256SUMS; versionCode 15. Copias y notas: `C:\Users\iago\Documents\Codex\2026-11-06\release-2.1.0`.
+- **Android 12**: worktree `work/oto-android12`, rama LOCAL `android12` (`112ed06`, no subida): `applicationId io.github.iaguito22.oto.android12`, minSdk 31, gota sin RuntimeShader (unión de tres círculos). Firmada con la clave pública. Sin probar en un Android 12 real (no hay emulador ni imagen API 31 en el SDK). Para la próxima versión: `git -C ../oto-android12 rebase main` y recompilar.
+- Pruebas antes del commit: 151, 0 fallos, 11 omitidas.
+- 06/11: Iago instaló el phone en su móvil y pidió quitarlo de la release. Borrado el asset `Oto-2.1.0-android-phone.apk` (SHA-256 `42c007a2…`); `SHA256SUMS.txt` y notas actualizados en GitHub y en la carpeta local (el APK sigue allí). Quedan MSI, DEB, Arch, APK pública, Android 12 y SHA256SUMS.
+
 ## Estado
 
 - Publicada: **v2.0.0** (Latest), etiqueta → `2c64f3c`. Instalada en el PC (04/11) y en el móvil habitual.

@@ -26,6 +26,7 @@ Actualizado: 05/11/2026. Actualizar tras cambios importantes. Distinguir impleme
   - «Tu resumen» (Wrapped sencillo): `core/.../dj/Recap.kt` (+`RecapTest`) desde `Plays` de ESTE aparato (no se comparten; últimas 6000 escuchas). Tarjeta arriba de Explorar en PC (`RecapSpace.kt`, `LibrarySpace`) y móvil (`MenuSheet.RecapCard/RecapView`, `Page.Recap`). Sin revisar visualmente.
   - Gustos: en `Profile`, estar en una lista pesa 1,5 por canción y Me gusta 0,5 (antes 1 y 2); Me gusta como escena vale la mitad (`ProfileWeightTest`). Afecta al DJ y a las listas de Explorar.
   - Bienvenida del PC: a Iago no le convence (clips WebP de baja calidad, explica poco). Pendiente de rediseño.
+- **06/11: release v2.1.0 PUBLICADA** (commit `2176563`, todo lo anterior de este día incluido). Iago la instaló él mismo en el móvil (phone) con el APK; el PC, pendiente de que lo confirme. El APK phone se quitó después de la release. Variante Android 12 en `../oto-android12` (rama local `android12`). Ver `docs/agents/releases.md`.
 - Sin resolver: congelación breve antes de la animación al abrir ventanas. Medir antes de tocar (`docs/agents/rendimiento.md`).
 - Sin confirmar por Iago: clics en el historial de búsqueda, y el crash «Key Library is missing» (endurecido, no reproducido).
 - Empezar con `git status --short --branch` y conservar cambios ajenos.

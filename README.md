@@ -22,10 +22,9 @@ Descargas de [Oto 2.1.0](https://github.com/iaguito22/oto/releases/tag/v2.1.0):
 | Ubuntu/Debian amd64 | DEB; instalar con `sudo apt install ./oto_2.1.0_amd64.deb` |
 | Arch Linux x86_64 | Paquete nativo; instalar con `sudo pacman -U ./oto-2.1.0-1-x86_64.pkg.tar.zst` |
 | Android 13 o superior | `Oto-2.1.0-android.apk`, paquete público `io.github.iaguito22.oto` |
-| Android, variante personal | `Oto-2.1.0-android-phone.apk`, paquete `io.github.iaguito22.oto.debug` |
 | Android 12 | `Oto-2.1.0-android12.apk`, paquete aparte `io.github.iaguito22.oto.android12`, para móviles con Android 12 o 12L |
 
-El APK público actualiza las versiones públicas anteriores. El APK `phone` es una app distinta, con otra firma, para las instalaciones personales de esa variante: no desinstales una para sortear diferencias de firma. No está en Play Store.
+El APK público actualiza las versiones públicas anteriores. No está en Play Store.
 
 Los paquetes Linux incluyen Java y dependen de FFmpeg. El MSI de Windows todavía no está firmado con Authenticode, así que SmartScreen puede mostrar un aviso de reputación. Los hashes van adjuntos a cada release.
 
