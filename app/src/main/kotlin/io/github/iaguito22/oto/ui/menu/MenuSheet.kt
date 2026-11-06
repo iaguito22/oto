@@ -1075,15 +1075,16 @@ fun ShuffleButton(listId: String? = null) {
 
 /** Bucle apagado, toda la lista o una canción. Tocarlo pasa al siguiente estado. */
 @Composable
-fun LoopButton() {
+fun LoopButton(radio: Boolean = false) {
     val connection = (LocalContext.current.applicationContext as OtoApp).player
     val loop by connection.loopMode.collectAsStateWithLifecycle()
-    val icon = when (loop) {
-        LoopMode.One -> R.drawable.ic_repeat_one
+    // En la radio solo tiene sentido repetir la que suena: el icono ya lo dice desde apagado.
+    val icon = when {
+        loop == LoopMode.One || radio -> R.drawable.ic_repeat_one
         else -> R.drawable.ic_repeat
     }
     val desc = when (loop) {
-        LoopMode.Off -> "Repetir lista"
+        LoopMode.Off -> if (radio) "Repetir esta canción" else "Repetir lista"
         LoopMode.All -> "Repetir en bucle"
         LoopMode.One -> "Repetir esta canción"
     }

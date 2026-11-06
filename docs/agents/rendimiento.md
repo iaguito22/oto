@@ -15,7 +15,7 @@
 
 - **Progreso aislado** (`PlayerProgress`): la posición ya no recompone PlayerSurface/PlayerContents. Contadores por segundos, slider con precisión.
 - **Carátulas:** miniaturas según píxeles físicos (64/128/256/544). `ArtworkLoader` con caché LRU por memoria estimada (48 MiB; 8 MiB con ahorro RAM; máx. 96 entradas), ocho cerrojos que comparten cargas iguales, timeouts y cancelación. `ArtworkLoader.cached(url,size)` consulta sin red. `LibraryArt` espera su tamaño físico, dibuja en un **Canvas permanente** (recorte centrado tipo Crop) y funde 220 ms los bitmaps nuevos. Tests: `ArtworkCacheTest`, `ArtworkLoaderTest`, `MemCacheTest` (`MemCache.resize` desaloja LRU de inmediato).
-- **Latido y letra:** el State se lee dentro de `graphicsLayer`; 10 ms entre solicitudes de frame; reloj de letra detenido sin letra sincronizada; tiempo por palabra limitado al intervalo con cambios visuales. Vibrato solo letra a letra.
+- **Latido y letra:** el State se lee dentro de `graphicsLayer`; el latido espera 10 ms entre solicitudes de frame (la letra ya no, ver «Reloj de la letra»); reloj de letra detenido sin letra sincronizada; tiempo por palabra limitado al intervalo con cambios visuales. Vibrato solo letra a letra.
 - **Apertura de ventanas:** sin Offscreen forzado; tras el primer dibujo de ESA ventana se espera a tres intervalos <20 ms (mín. 150 ms, máx. 1200 ms) mientras la preparación alterna alfa `.01f`/`.015f` y una traslación de .25 px con escala 1→.9999. El cierre desmonta al terminar la animación. Spring y dirección intactos.
 - **Ahorro RAM** (`Prefs.ramSaver`, false por defecto): caché de carátulas 3 MiB/32 entradas, Skia 4 MiB de recursos y 0,5 MiB de fuentes, Min/MaxHeapFreeRatio 5/15, G1PeriodicGCInterval 20 s; cancela precarga de portadas y audio y desactiva el fundido. Con todo oculto limpia carátulas y Skia, `System.gc` y `EmptyWorkingSet` cada 2 min (`RamSaver.kt`; requiere `jdk.management` en el runtime). Ajustes muestra CPU/GPU/RAM de forma cualitativa.
 - **Rueda suave** (`SmoothWheel.kt`): EventQueue propia que reparte las muescas en pasos fraccionarios por fotograma (τ 62 ms); touchpad, páginas y Ctrl/Alt pasan intactos; un Driver por ModuleWindow, la bandeja no se registra. Endurecido el 05/11: un fallo en un paso anula el movimiento restante en vez de matar la corrutina.
@@ -30,6 +30,24 @@
 | A/B ahorro RAM (perfiles aislados, sin reproducción) | visible: residente 427 → 371 MB, privada 527 → 482; oculto: residente 384 → 62 MB, privada 421 → 360 (las páginas vuelven al usarse). Sin probar con 3 ventanas y audio |
 
 No usar ensayos con Downloads o JVM fría como A/B. Script: `ram-ab.ps1`; lanzarlo en un `powershell` nuevo porque modifica APPDATA/LOCALAPPDATA.
+
+## Reloj de la letra (06/11)
+
+Monitor del portátil a 120 Hz. `OTO_MOTION_TRACE=1` escribe `lyrics-frames.jsonl` (intervalos entre callbacks del reloj por tandas de 5 s). Arnés: `run-lyrics-probe.ps1 <nombre-nuevo> -DelayMs <n>` (en `q-x20/work`): perfil aislado con `lyrics-probe.marker`, copia la letra y el audio en caché de `qbxHTDUl7XI` (Apple Music, palabra a palabra), abre la letra, suena 40 s y sale. `OTO_LYRICS_FRAME_DELAY_MS` solo existe para este A/B. Suena por los altavoces.
+
+| Variante (3 tandas c/u, intercaladas) | fps | p50 | p95 | >12 ms por 5 s | CPU JVM (% de un núcleo) |
+|---|---:|---:|---:|---:|---:|
+| `delay(10)` tras cada fotograma (antes) | 69–87 | 11,2–12,2 ms | 12,6–23,6 ms | 33–171 | 58,6 / 57,5 |
+| Cada fotograma (ahora) | 114–120 | 8,2 ms | 9,0–10,9 ms | 0–16 | 60,7 / 65,1 |
+
+- Con la espera no salía 60 fps regular, sino una mezcla irregular de 8,3 y 16,7 ms: eso es lo que se veía a tirones. Cuesta ~+5 puntos de un núcleo.
+- **Parón de ~250 ms cada 10–20 s: causa encontrada (06/11); solución OPCIONAL en Ajustes.** Es la GPU integrada AMD con ventanas transparentes, no código de Oto.
+  - `lyrics-frames.jsonl` apunta cada hueco ≥100 ms con su hora (`stallMs`). Sin pausas de GC a esa hora; JFR: ningún código Java corre, el hilo de UI espera eventos y los hilos de Skiko están en `Direct3DContextHandler.flush` (entrega a la GPU). `window-work.jsonl` no tiene nada a esa hora. Con OpenGL (`-Dskiko.renderApi=OPENGL`) pasa igual.
+  - Reproducido sin Oto con `q-x20/work/skiko-probe/SkikoProbe.java` (una `SkiaLayer` que anima y apunta huecos; args: segundos, ventanas, `t` transparente): 1 o 3 ventanas transparentes → parones de 230–330 ms cada 10–19 s; 3 opacas → ninguno.
+  - Skiko elige por defecto la AMD Radeon (driver 31.0.21925.1001). Con `-Dskiko.gpu.priority=discrete` (RTX 3050): 0 parones en 90 s (Skiko mínimo) y en 70 s (Oto real, `run-lyrics-probe.ps1 -Gpu discrete`); con `auto`, 4 parones en el mismo tiempo.
+  - Decidido con Iago: Ajustes › «Gráfica dedicada» (solo Windows, apagada por defecto por batería). `DesktopGraphics.kt` la guarda en `desktop_graphics.json` (`{"gpu":"discrete"}`, lectura síncrona) y `main()` fija `skiko.gpu.priority=discrete` antes de crear ventanas; un `-D` explícito manda. Se aplica al volver a abrir Oto. Probado de punta a punta en perfil aislado (`run-lyrics-probe.ps1 -GpuSetting`): 0 parones en 70 s, 120 fps. Interfaz del ajuste sin revisar visualmente.
+  - Otras vías no probadas: otro driver AMD; ventanas opacas (cambio visual grande).
+- El latido de la carátula (`rememberCoverPulse`) mantiene su `delay(10)`: en 120 Hz tendrá la misma cadencia irregular.
 
 ## Tirón al abrir ventanas — SIN RESOLVER
 

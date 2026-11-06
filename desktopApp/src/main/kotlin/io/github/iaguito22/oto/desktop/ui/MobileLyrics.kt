@@ -49,15 +49,19 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
         }
         var anchorPos = position().toDouble()
         var anchorTime = -1L
+        val trace = io.github.iaguito22.oto.desktop.LyricsFrameTrace.start()
+        // Un paso por fotograma, como en el móvil. Antes había 10 ms de espera entre uno y otro: a 120 Hz (8,3 ms)
+        // la letra avanzaba solo en uno de cada dos fotogramas.
         while (true) {
             withFrameNanos { now ->
+                trace?.frame(now)
                 if (anchorTime < 0) anchorTime = now
                 val estimate = anchorPos + (now-anchorTime)/1e6
                 val difference = position().toDouble()-estimate
-                if (abs(difference)>180) { anchorPos=position().toDouble();anchorTime=now } else anchorPos+=difference*.08
+                if (abs(difference)>180) { anchorPos=position().toDouble();anchorTime=now; trace?.let { it.resyncs++ } } else anchorPos+=difference*.08
                 clock.ms=(anchorPos+(now-anchorTime)/1e6).toLong()+leadMs
             }
-            delay(10)
+            if (io.github.iaguito22.oto.desktop.LYRICS_FRAME_GAP_MS > 0) delay(io.github.iaguito22.oto.desktop.LYRICS_FRAME_GAP_MS)
         }
     }
     when {

@@ -25,3 +25,47 @@ internal object WindowWorkTrace {
         writer.launch { File(OtoDirs.filesDir,"window-work.jsonl").appendText(entry) }
     }
 }
+
+/**
+ * Diagnóstico optativo de la letra: intervalos entre fotogramas del reloj y cuántas veces se reancló. Cada 5 s
+ * escribe una línea en `lyrics-frames.jsonl`. Son callbacks de Compose, no presentación en pantalla.
+ */
+internal class LyricsFrameTrace private constructor() {
+    private val gaps=ArrayList<Double>(700)
+    private var last=-1L
+    private var windowStart=-1L
+    var resyncs=0
+    fun frame(now:Long) {
+        if(last>=0) {
+            val gap=(now-last)/1e6
+            gaps+=gap
+            // Los parones, con su hora, para cruzarlos con JFR o window-work.jsonl.
+            if(gap>=100) {
+                val entry=JSONObject().put("stallMs",gap).put("endedAtMs",System.currentTimeMillis()).toString()+"\n"
+                writer.launch { File(OtoDirs.filesDir,"lyrics-frames.jsonl").appendText(entry) }
+            }
+        }
+        last=now
+        if(windowStart<0) windowStart=now
+        if(now-windowStart>=5_000_000_000L) flush(now)
+    }
+    private fun flush(now:Long) {
+        val sorted=gaps.sorted()
+        if(sorted.isNotEmpty()) {
+            fun pct(p:Double)=sorted[((sorted.size-1)*p).toInt()]
+            val entry=JSONObject().put("atMs",System.currentTimeMillis()).put("frameGapSetting",LYRICS_FRAME_GAP_MS)
+                .put("frames",sorted.size).put("fps",sorted.size/((now-windowStart)/1e9))
+                .put("avgMs",sorted.average()).put("p50Ms",pct(.5)).put("p95Ms",pct(.95)).put("maxMs",sorted.last())
+                .put("over12Ms",sorted.count{it>12.5}).put("over20Ms",sorted.count{it>20.0}).put("resyncs",resyncs).toString()+"\n"
+            writer.launch { File(OtoDirs.filesDir,"lyrics-frames.jsonl").appendText(entry) }
+        }
+        gaps.clear(); resyncs=0; windowStart=now
+    }
+    companion object {
+        private val writer by lazy { CoroutineScope(SupervisorJob()+Dispatchers.IO.limitedParallelism(1)) }
+        fun start():LyricsFrameTrace? = if(WindowWorkTrace.enabled) LyricsFrameTrace() else null
+    }
+}
+
+/** Solo para medir (A/B): espera entre fotogramas del reloj de la letra. 0 = cada fotograma. */
+internal val LYRICS_FRAME_GAP_MS:Long = System.getenv("OTO_LYRICS_FRAME_DELAY_MS")?.toLongOrNull()?.coerceIn(0,50) ?: 0L

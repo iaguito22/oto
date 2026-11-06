@@ -26,6 +26,7 @@ import java.util.Locale
 
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
+    DesktopGraphics.apply()
     if (System.getenv("OTO_WELCOME_PREVIEW") == "1") {
         Timber.plant(Timber.DebugTree())
         application { WelcomeWindow(::exitApplication) }

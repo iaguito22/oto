@@ -97,11 +97,12 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
             Box(Modifier.weight(1f)) {
                 Header("A continuación", if (queue.isEmpty()) null else if (queue.size == 1) "1 canción" else "${queue.size} canciones")
             }
-            // Una lista se puede barajar o volver a su orden, y poner en bucle; la radio ya va a su aire.
-            val list = source != null && source?.kind != "Radio"
-            if (list) Row(Modifier.padding(end = Space.lg, top = Space.sm), horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
-                if (source?.kind != "DJ") LoopButton()
-                ShuffleButton()
+            // Una lista se puede barajar o volver a su orden, y poner en bucle. La radio va a su aire, pero la canción
+            // que suena se puede repetir.
+            val radio = source?.kind == "Radio"
+            if (source != null) Row(Modifier.padding(end = Space.lg, top = Space.sm), horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
+                if (source?.kind != "DJ") LoopButton(radio)
+                if (!radio) ShuffleButton()
             }
         }
         Row(Modifier.padding(start = Space.lg, end = Space.lg, bottom = Space.sm), verticalAlignment = Alignment.CenterVertically) {

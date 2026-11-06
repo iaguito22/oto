@@ -379,6 +379,8 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     fun cycleLoop() {
         // El ordenador solo tiene bucle de lista: se enciende o se apaga.
         if (mirror != null) return setLoop(if (_shownLoop.value == LoopMode.Off) LoopMode.All else LoopMode.Off)
+        // La radio no tiene lista que repetir: solo la canción que suena.
+        if (isRadio()) return setLoop(if (_loopMode.value == LoopMode.Off) LoopMode.One else LoopMode.Off)
         val next = when (_loopMode.value) {
             LoopMode.Off -> LoopMode.All
             LoopMode.All -> LoopMode.One
@@ -397,8 +399,10 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
             val shuffle = _modes.value[id]?.shuffle ?: _shuffle.value
             saveMode(id, PlaylistMode(shuffle, mode))
         }
-        if (original != null) withController { it.repeatMode = repeatModeOf(mode) }
+        if (original != null || isRadio()) withController { it.repeatMode = repeatModeOf(mode) }
     }
+
+    private fun isRadio() = original == null && _source.value?.kind == "Radio"
 
     private fun defaultLoopMode() = if (_defaultLoop.value) LoopMode.All else LoopMode.Off
 

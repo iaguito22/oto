@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Devices
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
@@ -39,6 +40,7 @@ import io.github.iaguito22.oto.account.Session
 import io.github.iaguito22.oto.desktop.playback.DesktopPlayerConnection
 import io.github.iaguito22.oto.desktop.supportsDesktopShortcut
 import io.github.iaguito22.oto.desktop.isWindowsDesktop
+import io.github.iaguito22.oto.desktop.DesktopGraphics
 import io.github.iaguito22.oto.importer.ImportState
 import io.github.iaguito22.oto.playback.Tier
 import kotlinx.coroutines.Dispatchers
@@ -101,6 +103,7 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
         item {SettingsToggle(MobileIcons.libraryMusic,"Fondo con la carátula","La carátula de lo que suena, de fondo. Usa GPU al dibujarlo y algo de CPU y RAM al cambiar de canción.",artworkBackground,accent){onArtworkBackground(!artworkBackground)}}
         if(artworkBackground) item {SettingFrame(MobileIcons.libraryMusic,accent) { Text("Intensidad del fondo · ${(backdropOpacity*100).toInt()} %",style=OtoType.rowTitle); Slider(backdropOpacity,onBackdropOpacity,colors=SliderDefaults.colors(thumbColor=accent,activeTrackColor=accent)) }}
         item {SettingsToggle(MobileIcons.hardDrive,"Ahorro de RAM","Modo agresivo: casi sin caché de carátulas ni de dibujo, devuelve al sistema la memoria que no usa y, con las ventanas ocultas, suelta todo lo posible. No prepara la siguiente canción y quita el fundido. Las portadas y el cambio de canción pueden tardar un poco más.",ramSaver,accent){scope.launch{prefs.setRamSaver(!ramSaver)}}}
+        if(isWindowsDesktop) item { DedicatedGpuSetting(accent) }
         if(supportsDesktopShortcut) item { ShortcutSetting(shortcut,shortcutIssue,accent,onShortcut) }
         item { SpaceRow(nowId,accent) }
         item {SettingFrame(MobileIcons.settings,accent){Text("Atajos de teclado",style=OtoType.rowTitle);Text("Espacio: reproducir o pausar · Ctrl + ← / →: canción anterior o siguiente · Ctrl + ↑ / ↓: volumen · Ctrl + Mayús + M: cambiar reproductor · Ctrl + B: guardar",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))}}
@@ -239,6 +242,20 @@ private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).t
 @Composable private fun SettingsLink(icon:ImageVector,title:String,subtitle:String,accent:Color,onClick:()->Unit) {
     HoverRow(onClick) {
         SettingIcon(icon,accent);Column(Modifier.weight(1f)){Text(title,style=OtoType.rowTitle);Text(subtitle,style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),maxLines=2,overflow=TextOverflow.Ellipsis)};Icon(MobileIcons.chevronRight,null,Modifier.size(18.dp),tint=Color.White.copy(alpha=.4f))
+    }
+}
+
+/** La gráfica dedicada: se elige al arrancar, así que el cambio vale al volver a abrir Oto. */
+@Composable private fun DedicatedGpuSetting(accent:Color) {
+    var on by remember { mutableStateOf(runCatching { DesktopGraphics.dedicated }.getOrDefault(false)) }
+    val subtitle = when {
+        on != DesktopGraphics.activeDedicated -> "Se aplica al volver a abrir Oto (Salir de Oto desde la bandeja)."
+        on -> "Dibuja con la gráfica dedicada: sin los parones que tienen algunos portátiles con dos gráficas. Gasta más batería y calienta más."
+        else -> "Dibuja con la gráfica que elige Windows, normalmente la integrada, que gasta menos. En algunos portátiles con dos gráficas, la letra y las animaciones se paran un instante cada pocos segundos: actívalo si te pasa."
+    }
+    SettingsToggle(Icons.Rounded.Tune,"Gráfica dedicada",subtitle,on,accent) {
+        on = !on
+        DesktopGraphics.dedicated = on
     }
 }
 

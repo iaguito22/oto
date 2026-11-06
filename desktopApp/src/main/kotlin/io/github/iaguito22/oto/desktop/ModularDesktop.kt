@@ -103,6 +103,17 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     val devices = remember(deviceRevision) { DeviceConnection(player, prefs, account, connectionScope) }
     DisposableEffect(devices) { onDispose { devices.close() } }
     var lyricsOpen by remember { DockVisibility(docking,DockId.Lyrics) }
+    // Solo en perfiles de prueba aislados (marcador + variable): pone una canción con la letra abierta, deja que
+    // suene y sale, para medir el reloj de la letra con OTO_MOTION_TRACE.
+    LaunchedEffect(Unit) {
+        val song = System.getenv("OTO_LYRICS_PROBE_SONG")
+        if(song.isNullOrBlank() || System.getenv("OTO_LYRICS_PROBE")!="1" || !java.io.File(OtoDirs.filesDir,"lyrics-probe.marker").isFile) return@LaunchedEffect
+        kotlinx.coroutines.delay(3000)
+        lyricsOpen=true
+        player.play(com.metrolist.innertube.models.SongItem(song,"Prueba",listOf(com.metrolist.innertube.models.Artist("Prueba",null)),thumbnail=""))
+        kotlinx.coroutines.delay((System.getenv("OTO_LYRICS_PROBE_SECONDS")?.toLongOrNull() ?: 40L)*1000)
+        quit()
+    }
     var lyricsHover by remember { mutableStateOf(false) }
     var lyricsScale by remember {
         if (kv.getString("lyrics_scale_default_v2") != "true") {
