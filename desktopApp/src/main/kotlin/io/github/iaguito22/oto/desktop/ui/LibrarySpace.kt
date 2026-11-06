@@ -93,7 +93,7 @@ private data class LibraryEdit(val kind:String,val id:String="",val value:String
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuController,importer:Importer,
-    account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={},playerVisible:Boolean=false,remoteLink:io.github.iaguito22.oto.remote.LocalLink?=null) {
+    account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={},playerVisible:Boolean=false,remoteLink:io.github.iaguito22.oto.remote.LocalLink?=null,following:io.github.iaguito22.oto.playback.NowPlaying?=null) {
     val lists by prefs.playlists.collectAsState(initial=emptyList())
     val liked by prefs.likedList.collectAsState(initial=LocalPlaylist(LIKED_ID,"Me gusta",emptyList()))
     val history by prefs.history.collectAsState(initial=emptyList())
@@ -143,12 +143,16 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     // «Hecho con lo tuyo»: se rehacen con tus listas, Me gusta y lo oído, sin esperar a YouTube.
     var smart by remember {mutableStateOf<List<LocalPlaylist>>(emptyList())}
     var smartOpen by remember {mutableStateOf<LocalPlaylist?>(null)}
+    // «Tu resumen»: lo escuchado en este ordenador (ver Recap).
+    var recap by remember {mutableStateOf<io.github.iaguito22.oto.dj.Recap?>(null)}
+    var recapOpen by remember {mutableStateOf(false)}
     LaunchedEffect(lists,liked,history) {
         kotlinx.coroutines.delay(400)
         val plays=player.allPlays()
         smart=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { io.github.iaguito22.oto.dj.Smart.lists(lists,liked.songs,history,plays,System.currentTimeMillis()) }.getOrDefault(emptyList()) }
+        recap=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { io.github.iaguito22.oto.dj.Recap.of(plays) }.getOrNull() }
     }
-    fun home(name:String) { section=name;local=null;folder=null;smartOpen=null;recentsOpen=false;menu.onQuery("");while(menu.state.value.pages.isNotEmpty())menu.closeDetail() }
+    fun home(name:String) { section=name;local=null;folder=null;smartOpen=null;recapOpen=false;recentsOpen=false;menu.onQuery("");while(menu.state.value.pages.isNotEmpty())menu.closeDetail() }
     LaunchedEffect(navigation.first) {if(navigation.first>0)home(if(navigation.second==1)"Explorar" else "Tu música")}
     LaunchedEffect(jump.version) { if(jump.version>0) { home("Tu música"); when { jump.item!=null -> menu.open(jump.item); jump.local==DOWNLOADS_ID -> home("Descargas"); jump.local?.startsWith(FOLDER_PREFIX)==true -> folder=jump.local.removePrefix(FOLDER_PREFIX); jump.local!=null -> local=jump.local; jump.artistId!=null -> menu.openArtist(jump.artistId,jump.artistName) } } }
     fun openItem(item:YTItem) {if(item is SongItem)player.play(item) else {local=null;menu.onQuery("");menu.open(item)}}
@@ -185,9 +189,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 var miniStamp by remember { mutableIntStateOf(0) }
                 LaunchedEffect(miniStamp) { kotlinx.coroutines.delay(1500); miniDirection=1 }
                 // Lo que suena en el móvil conectado: solo cambia con la canción o la pausa, no con cada posición.
-                val remoteNow by remember(remoteLink) { remoteLink?.remote?.map(io.github.iaguito22.oto.remote.RemoteNow::of)?.distinctUntilChanged() ?: kotlinx.coroutines.flow.flowOf(null) }.collectAsState(null)
-                val followMemory=remember { booleanArrayOf(false) }
-                val rn=io.github.iaguito22.oto.remote.RemoteNow.follow(followMemory[0],np.id!=null,np.playing,remoteNow).also { followMemory[0]=it }.let { if(it) remoteNow else null }
+                // Se decide en RemoteMirror, igual que para la ventana del reproductor y la bandeja.
+                val rn=following
                 fun remoteAction(action:String) { val link=remoteLink ?: return; scope.launch {
                     runCatching { link.command(org.json.JSONObject().put("action",action)) }.onFailure { snackbar.showSnackbar("No se pudo controlar el móvil") }
                 } }
@@ -196,8 +199,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 val miniToggle={ if(rn!=null) remoteAction("toggle") else player.toggle() }
                 val miniOpen={ if(rn!=null) onDevices() else onSource() }
                 fun skipMini(d:Int) { miniDirection=d; miniStamp++; if(rn!=null) remoteAction(if(d<0) "previous" else "next") else if(d<0) player.previous() else player.next() }
-                // Con la ventana del reproductor abierta, el mini reproductor sobraría, salvo para lo del móvil.
-                androidx.compose.animation.AnimatedVisibility(rn!=null || (np.id!=null && !playerVisible),
+                // Con la ventana del reproductor abierta, el mini reproductor sobraría (también muestra lo del móvil).
+                androidx.compose.animation.AnimatedVisibility((rn!=null || np.id!=null) && !playerVisible,
                     enter=fadeIn(tween(220))+androidx.compose.animation.expandVertically(spring(dampingRatio=.8f,stiffness=380f),expandFrom=Alignment.Bottom),
                     exit=fadeOut(tween(160))+androidx.compose.animation.shrinkVertically(tween(220),shrinkTowards=Alignment.Bottom)) {
                     if(wide) {
@@ -272,7 +275,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 val selected=(if(local==LIKED_ID)liked else lists.firstOrNull{it.id==local})
                 val title=when {state.query.isNotBlank()->"Resultados";page!=null->page.item.title;selected!=null->selected.name;folder!=null->folder!!;else->section}
                 val showRecents=recentsOpen && state.query.isBlank()
-                if(selected==null && smartOpen==null && !showRecents && page?.item !is ArtistItem && page?.item !is AlbumItem && page?.item !is PlaylistItem) Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                if(selected==null && smartOpen==null && !recapOpen && !showRecents && page?.item !is ArtistItem && page?.item !is AlbumItem && page?.item !is PlaylistItem) Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                     if(local!=null||page!=null||folder!=null)IconButton(onClick={local=null;folder=null;if(page!=null)menu.closeDetail()}){Icon(MobileIcons.arrowBack,"Volver",Modifier.size(20.dp))}
                     Text(title,style=OtoType.display,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f))
                     if(section=="Tu música"&&selected==null&&page==null&&state.query.isBlank()){
@@ -297,7 +300,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         (fadeIn(tween(260)) + slideInVertically(spring(dampingRatio=.8f,stiffness=280f)) { direction * it / 5 }) togetherWith
                             (fadeOut(tween(160)) + slideOutVertically(tween(200)) { -direction * it / 8 })
                     }, label="librarySection") { animatedSection ->
-                    CascadeScope(listOf(animatedSection,showRecents,state.query.isNotBlank(),smartOpen,selected?.id,page?.item,folder)) {
+                    CascadeScope(listOf(animatedSection,showRecents,state.query.isNotBlank(),smartOpen,recapOpen,selected?.id,page?.item,folder)) {
                     when {
                         showRecents -> Box(Modifier.fillMaxSize().onPointerEvent(PointerEventType.Press,pass=androidx.compose.ui.input.pointer.PointerEventPass.Initial){pressingRecents=true}.onPointerEvent(PointerEventType.Release,pass=androidx.compose.ui.input.pointer.PointerEventPass.Final){scope.launch{kotlinx.coroutines.delay(80);pressingRecents=false;if(!searchHasFocus)recentsOpen=false}}) { RecentSearches(recents,onPick={ r ->
                             scope.launch { memory.remember(r) }
@@ -306,6 +309,10 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                             if(item==null) menu.onQuery(r.title) else { focusManager.clearFocus();openItem(item) }
                         },onForget={ r -> scope.launch { memory.forget(r) } }) }
                         state.query.isNotBlank() -> SearchSpace(state,lists,np.id,player,menu,prefs,palette,onSave,onOpen=::openItem,onLocal={local=it;menu.onQuery("")},onArtist=::openArtist,onRemember=::rememberSearch)
+                        recapOpen && recap!=null -> {
+                            val art=remember(lists,liked,history) { (history+liked.songs+lists.flatMap{it.songs}).filter{it.artwork!=null}.associate{it.id to it.artwork} }
+                            RecapSpace(recap!!,palette,{ art[it] },onPlay={ s -> player.play(Heard(s.id,s.title,s.artist,art[s.id],s.artistId).toSong()) },onArtist={id,name->recapOpen=false;openArtist(id,name)},onBack={recapOpen=false})
+                        }
                         smartOpen!=null -> SmartSpace(smartOpen!!,np.id,player,prefs,palette,onSave,::openArtist,onBack={smartOpen=null})
                         selected!=null -> LocalPlaylistView(selected,np.id,player,prefs,downloads,palette,onSave,
                             onBack={local=null},onFind={home("Tu música");searchFocus.requestFocus()},
@@ -330,6 +337,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         animatedSection=="Recientes" -> SongList(history,np.id,{i->player.play(history[i].toSong())},onSave,player,prefs,onArtist=::openArtist)
                         animatedSection=="Explorar" -> LazyColumn(verticalArrangement=Arrangement.spacedBy(24.dp)) {
                             item {Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){state.chips.forEach{chip->FilterChip(selected=state.chip==chip.title,onClick={menu.onChip(chip.title)},label={Text(chip.title)})}}}
+                            recap?.takeIf { !it.empty && state.chip==null }?.let { r -> item(key="recap") { RecapCard(r,palette) { recapOpen=true } } }
                             if(smart.isNotEmpty() && state.chip==null) item(key="smart") { SmartRow(smart,palette) { smartOpen=it } }
                             if(state.homeError!=null)item{TextButton(onClick=menu::loadHome){Text("Volver a cargar Explorar")}}
                             if(state.shelves==null)item{LinearProgressIndicator(Modifier.fillMaxWidth())}

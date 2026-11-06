@@ -155,13 +155,16 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         timber.log.Timber.i("Abrir Guardar: %s", origin)
         savingTrack = track
     }
-    val nowPlaying by player.state.collectAsState()
+    val localNow by player.state.collectAsState()
+    // Lo del móvil, si el ordenador lo está siguiendo: el reproductor y la bandeja lo muestran y lo controlan.
+    val mirrored by devices.mirror.state.collectAsState()
+    val nowPlaying = mirrored?.now ?: localNow
     val queue by player.queue.collectAsState()
     val ramSaver by prefs.ramSaver.collectAsState(initial = false)
     LaunchedEffect(ramSaver) { RamSaver.apply(ramSaver) }
     val nothingShown = windowsHidden || (!playerOpen && !menuOpen && !lyricsOpen && !queueOpen && !devicesOpen && savingTrack == null)
     LaunchedEffect(ramSaver, nothingShown) { if (ramSaver && nothingShown) RamSaver.whileHidden() }
-    val nextArtwork = if(ramSaver) emptyList() else queue.filter { it.index > nowPlaying.index }.take(2).mapNotNull { it.artwork }
+    val nextArtwork = if(ramSaver) emptyList() else queue.filter { it.index > localNow.index }.take(2).mapNotNull { it.artwork }
     LaunchedEffect(nextArtwork) {
         nextArtwork.forEach { ArtworkLoader.load(it) }
     }
@@ -176,6 +179,15 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     val playlists by prefs.playlists.collectAsState(initial = emptyList())
     val isLiked = nowPlaying.id != null && nowPlaying.id in likedIds
     val uiScope = rememberCoroutineScope()
+    // Con el móvil a la vista, las órdenes van al móvil; si no, a este reproductor.
+    fun toMobile(action: String, fill: (org.json.JSONObject) -> Unit = {}) = uiScope.launch {
+        runCatching { devices.link.command(org.json.JSONObject().put("action", action).also(fill)) }
+            .onFailure { timber.log.Timber.w(it, "No se pudo enviar %s al móvil", action) }
+    }
+    fun playPause() { if (mirrored != null) toMobile("toggle") else player.toggle() }
+    fun skipNext() { if (mirrored != null) toMobile("next") else player.next() }
+    fun skipPrevious() { if (mirrored != null) toMobile("previous") else player.previous() }
+    fun seek(ms: Long) { if (mirrored != null) { devices.mirror.jump(ms); toMobile("seek") { it.put("position", ms) } } else player.seekTo(ms) }
     var artwork by remember { mutableStateOf<ImageBitmap?>(null) }
     var palette by remember { mutableStateOf(ArtworkPalette()) }
     LaunchedEffect(nowPlaying.artwork) { val (bmp, pal) = ArtworkLoader.load(nowPlaying.artwork); artwork = bmp; palette = pal }
@@ -243,9 +255,9 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             event.isCtrlPressed && event.key == Key.B -> { nowPlaying.id?.let{openSave(Heard(it,nowPlaying.title,nowPlaying.artist,nowPlaying.artwork), "atajo Ctrl+B")};true }
             event.key == Key.F1 -> { libraryRequest=(libraryRequest.first+1) to 0;menuOpen=true;true }
             event.key == Key.F2 -> { libraryRequest=(libraryRequest.first+1) to 1;menuOpen=true;true }
-            event.key == Key.Spacebar || event.key == Key.MediaPlayPause -> { player.toggle();true }
-            event.isCtrlPressed && event.key == Key.DirectionRight -> { player.next();true }
-            event.isCtrlPressed && event.key == Key.DirectionLeft -> { player.previous();true }
+            event.key == Key.Spacebar || event.key == Key.MediaPlayPause -> { playPause();true }
+            event.isCtrlPressed && event.key == Key.DirectionRight -> { skipNext();true }
+            event.isCtrlPressed && event.key == Key.DirectionLeft -> { skipPrevious();true }
             event.isCtrlPressed && event.key == Key.DirectionUp -> { player.adjustVolume(.04f);true }
             event.isCtrlPressed && event.key == Key.DirectionDown -> { player.adjustVolume(-.04f);true }
             else -> false
@@ -267,7 +279,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     OtoTray(toggle={showOrHide()}, player={windowsHidden=false; playerOpen=true}, library={windowsHidden=false; menuOpen=true},
         lyrics={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; lyricsOpen=true},
         queue={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; queueOpen=true}, quit=quit,
-        playing=nowPlaying.playing, hasSong=nowPlaying.id != null, previous=player::previous, playPause=player::toggle, next=player::next,
+        playing=nowPlaying.playing, hasSong=nowPlaying.id != null, previous=::skipPrevious, playPause=::playPause, next=::skipNext,
         volume=volume, setVolume=player::setVolume, title=nowPlaying.title, artist=nowPlaying.artist, artwork=nowPlaying.artwork)
     ModuleWindow("Reproductor", playerWindow, playerOpen && !windowsHidden, { closePrimary(DockId.Player) }, pinned && playerSolo, accent = palette.primary, dock=docking, dockId=DockId.Player,
         keys = ::shortcuts, onWindow = { playerFrame = it }, immersive = true, chrome = chrome,
@@ -279,15 +291,19 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         @Composable fun PlayerContents() {
         val quality by player.currentQuality.collectAsState()
         val qualityLabel = quality?.let { q -> listOfNotNull(q.codec.uppercase(),q.bitrate?.let { "${(it+500)/1000} kbps" },q.sampleRate?.let { if(it%1000==0) "${it/1000} kHz" else "${it/1000f} kHz" }).joinToString(" · ") }
-        PlayerSurface(nowPlaying,player.positionMs,artwork,form,chrome,player::beat,coverBeat,isLiked,showRemaining,
-            player::toggle,player::previous,player::next,player::seekTo,menuOpen,lyricsOpen,queueOpen,
+        val m = mirrored
+        PlayerSurface(nowPlaying,if(m != null) devices.mirror.position else player.positionMs,artwork,form,chrome,player::beat,coverBeat && m == null,isLiked,showRemaining,
+            ::playPause,::skipPrevious,::skipNext,::seek,menuOpen,lyricsOpen,queueOpen,
             {menuOpen=!menuOpen},{lyricsOpen=!lyricsOpen},{queueOpen=!queueOpen},::like,
-            {nowPlaying.id?.let{openSave(Heard(it,nowPlaying.title,nowPlaying.artist,nowPlaying.artwork), "reproductor")}}, source, {
-                val src=source; if(src?.item != null || src?.local != null) { jump=LibraryJump(jump.version+1,src?.item,src?.local);menuOpen=true } else if(src?.kind != "DJ") queueOpen=true
+            {nowPlaying.id?.let{openSave(Heard(it,nowPlaying.title,nowPlaying.artist,nowPlaying.artwork), "reproductor")}}, if(m != null) m.source else source, {
+                val src=source; if(m != null) devicesOpen=true
+                else if(src?.item != null || src?.local != null) { jump=LibraryJump(jump.version+1,src?.item,src?.local);menuOpen=true } else if(src?.kind != "DJ") queueOpen=true
             }, {id,name -> jump=LibraryJump(jump.version+1,artistId=id,artistName=name);menuOpen=true},
-            qualityLabel = qualityLabel,
-            shuffle = shuffle, loopMode = loopMode, onShuffle = { player.setShuffle(!shuffle) },
-            onLoop = { player.setLoop(when(loopMode) { io.github.iaguito22.oto.LoopMode.Off -> io.github.iaguito22.oto.LoopMode.All
+            qualityLabel = if(m != null) (if(m.now.buffering) "En el móvil · preparando…" else "Sonando en el móvil") else qualityLabel,
+            shuffle = m?.shuffle ?: shuffle, loopMode = if(m != null) (if(m.loop) io.github.iaguito22.oto.LoopMode.All else io.github.iaguito22.oto.LoopMode.Off) else loopMode,
+            onShuffle = { if(m != null) toMobile("shuffle") { it.put("value", !m.shuffle) } else player.setShuffle(!shuffle) },
+            // El móvil solo recibe bucle encendido o apagado por el enlace.
+            onLoop = { if(m != null) toMobile("loop") { it.put("value", !m.loop) } else player.setLoop(when(loopMode) { io.github.iaguito22.oto.LoopMode.Off -> io.github.iaguito22.oto.LoopMode.All
                 io.github.iaguito22.oto.LoopMode.All -> io.github.iaguito22.oto.LoopMode.One
                 io.github.iaguito22.oto.LoopMode.One -> io.github.iaguito22.oto.LoopMode.Off }) },
             verticalPin =if(playerSolo && form==PlayerForm.Vertical) ({
@@ -307,10 +323,10 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     }) {
         Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
             Row(Modifier.fillMaxWidth().padding(bottom=12.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                LibraryArt(nowPlaying.artwork,Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)))
+                LibraryArt(localNow.artwork,Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)))
                 Column(Modifier.weight(1f)) {
-                    Text(nowPlaying.title, style = OtoType.rowTitle, maxLines = 1)
-                    Text(nowPlaying.artist, style = OtoType.rowSub, color = Color.White.copy(alpha = .5f),maxLines=1)
+                    Text(localNow.title, style = OtoType.rowTitle, maxLines = 1)
+                    Text(localNow.artist, style = OtoType.rowSub, color = Color.White.copy(alpha = .5f),maxLines=1)
                 }
             }
             val romanize by prefs.romanize.collectAsState(initial=true)
@@ -320,19 +336,19 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
                 ContextMenuItem("Letra más pequeña") { changeLyricsScale(-.1f) },
                 ContextMenuItem("Restablecer tamaño") { lyricsScale=1.2f; kv.putString("lyrics_scale","1.2") },
             )) {
-                MobileLyrics(nowPlaying.id, lyrics, lyricsLoading, nowPlaying.playing && !nowPlaying.buffering, player::position, player::seekTo, lyricsStore, prefs, lyricsScale)
+                MobileLyrics(localNow.id, lyrics, lyricsLoading, localNow.playing && !localNow.buffering, player::position, player::seekTo, lyricsStore, prefs, lyricsScale)
             }
         }
     }
     ModuleWindow("Cola", queueWindow, queueOpen && !windowsHidden, { queueOpen = false }, dock=docking, dockId=DockId.Queue, keys = ::shortcuts, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity) {
-        Box(Modifier.fillMaxSize().padding(start=20.dp,end=20.dp,bottom=20.dp,top=4.dp)) { QueuePane(queue, nowPlaying.id, shuffle, loop, palette, { player.setShuffle(!shuffle) }, { player.cycleLoop() }, player::move, player::remove, player::clearQueue, player::skipTo, currentIndex = nowPlaying.index, loopMode = loopMode) }
+        Box(Modifier.fillMaxSize().padding(start=20.dp,end=20.dp,bottom=20.dp,top=4.dp)) { QueuePane(queue, localNow.id, shuffle, loop, palette, { player.setShuffle(!shuffle) }, { player.cycleLoop() }, player::move, player::remove, player::clearQueue, player::skipTo, currentIndex = localNow.index, loopMode = loopMode) }
     }
     ModuleWindow("Tu música", libraryWindow, menuOpen && !windowsHidden, {closePrimary(DockId.Library)}, dock=docking, dockId=DockId.Library, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity,
         extra={
             SmallAction(Icons.Rounded.PlayArrow,if(playerOpen) "Cerrar reproductor" else "Abrir reproductor",active=playerOpen) { docking.toggle(DockId.Player,DockId.Library) }
             SmallAction(MobileIcons.lyrics,if(lyricsOpen) "Cerrar letra" else "Abrir letra",active=lyricsOpen) { docking.toggle(DockId.Lyrics,DockId.Library) }
             SmallAction(MobileIcons.queueMusic,if(queueOpen) "Cerrar cola" else "Abrir cola",active=queueOpen) { docking.toggle(DockId.Queue,DockId.Library) }        },keys={event -> if(librarySearchFocused && event.key==Key.Spacebar) false else shortcuts(event)}) {
-        LibrarySpace(player,prefs,menu,importer,account,cloud,login,downloads,palette,{openSave(it, "biblioteca")},{devicesOpen=true},libraryRequest,jump,artworkBackground,{ artworkBackground=it;kv.putString("artwork_background",it.toString()) },{librarySearchFocused=it},{ devices.requestAccount(); devicesOpen=true }, backdrop != null, backdropOpacity,{backdropOpacity=it;kv.putString("artwork_opacity",it.toString())}, { val src=source; if(src?.item != null || src?.local != null) jump=LibraryJump(jump.version+1,src?.item,src?.local) else if(src?.kind != "DJ") queueOpen=true }, shortcut,shortcutIssue,{shortcut=it;kv.putString("shortcut",it)},playerVisible=playerOpen,remoteLink=devices.link)
+        LibrarySpace(player,prefs,menu,importer,account,cloud,login,downloads,palette,{openSave(it, "biblioteca")},{devicesOpen=true},libraryRequest,jump,artworkBackground,{ artworkBackground=it;kv.putString("artwork_background",it.toString()) },{librarySearchFocused=it},{ devices.requestAccount(); devicesOpen=true }, backdrop != null, backdropOpacity,{backdropOpacity=it;kv.putString("artwork_opacity",it.toString())}, { val src=source; if(src?.item != null || src?.local != null) jump=LibraryJump(jump.version+1,src?.item,src?.local) else if(src?.kind != "DJ") queueOpen=true }, shortcut,shortcutIssue,{shortcut=it;kv.putString("shortcut",it)},playerVisible=playerOpen,remoteLink=devices.link,following=mirrored?.now)
     }
     ModuleWindow("Guardar",rememberModuleState("save",380,540),savingTrack!=null && !windowsHidden,{savingTrack=null}) {
         savingTrack?.let { SaveSpace(it,prefs,palette) }
@@ -629,6 +645,7 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
                     Box(Modifier.align(Alignment.BottomEnd).size(16.dp).graphicsLayer{alpha=if(immersive)chromeAlpha else .5f}.pointerInput(minimum) {
                         detectDragGestures {change,delta -> change.consume();if(dock != null && dockId != null) { val r=dock.layout.bounds[dockId]; if(r != null) with(density) { dock.layout.resize(dockId, r.width+delta.x.toDp().value.toInt(), r.height+delta.y.toDp().value.toInt()) } } else if(dock == null) with(density){windowState.size=DpSize((windowState.size.width+delta.x.toDp()).coerceIn(if(title=="Tu música")640.dp else minimum.width,2400.dp),(windowState.size.height+delta.y.toDp()).coerceIn(if(title=="Tu música")480.dp else minimum.height,1600.dp))}}
                     }) {Text("⌟",color=Color.White.copy(alpha=.25f))}
+                    if (registered && dock != null && dockId != null) DockEdges(dock, dockId, leftEdge, rightEdge)
                     if (registered && group != null && dock != null && dockId != null && group.members.size > 1) {
                         @Composable fun DividerHandle(left: DockId, align: Alignment) {
                             val interaction=remember(left,align) { androidx.compose.foundation.interaction.MutableInteractionSource() }

@@ -22,6 +22,44 @@ import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
+/**
+ * Qué estado periódico enviar. Antes iba entero cada 500 ms, con la cola completa (miles de canciones): el otro
+ * aparato lo descifraba, parseaba y redibujaba dos veces por segundo aunque nada cambiase, y gastaba batería.
+ * Ahora: al cambiar algo, al momento; sonando, una vez por segundo (la posición la extrapola quien recibe);
+ * en pausa, cada 10 s para mantener la conexión. La cola solo viaja cuando cambia (`queueSame` si no).
+ * Los adaptadores reutilizan el mismo JSONArray mientras la cola no cambia: se compara por identidad.
+ */
+internal class StateOutbox {
+    private var lastKey: String? = null
+    private var lastQueue: Any? = null
+    private var lastAt = Long.MIN_VALUE / 2
+
+    fun next(state: JSONObject, nowMs: Long): JSONObject? {
+        val queue = state.opt("queue")
+        // Sonando, la posición avanza sola y no cuenta como cambio; en pausa, moverla sí.
+        val position = if (state.optBoolean("playing")) state.remove("position") else null
+        state.remove("queue")
+        val key = state.toString()
+        val sameQueue = queue != null && queue === lastQueue
+        val changed = key != lastKey || !sameQueue
+        val every = if (state.optBoolean("playing")) 1_000L else 10_000L
+        if (!changed && nowMs - lastAt < every) return null
+        lastKey = key; lastQueue = queue; lastAt = nowMs
+        if (position != null) state.put("position", position)
+        if (sameQueue) state.put("queueSame", true) else if (queue != null) state.put("queue", queue)
+        return state
+    }
+
+    companion object {
+        /** Recompone el estado recibido con la cola anterior si no ha cambiado. */
+        fun receive(body: JSONObject, previous: JSONObject?): JSONObject {
+            if (body.optBoolean("queueSame") && !body.has("queue")) previous?.optJSONArray("queue")?.let { body.put("queue", it) }
+            body.remove("queueSame")
+            return body
+        }
+    }
+}
+
 /** Canal local autenticado. El secreto viaja solo en el QR, nunca por la conexión. */
 class LocalLink(
     private val scope: CoroutineScope,
@@ -102,7 +140,11 @@ class LocalLink(
             val active = channel
             val ticker = launch(Dispatchers.IO) {
                 try {
-                    while (isActive) { active.send(JSONObject().put("type", "state").put("body", withContext(Dispatchers.Main) { snapshot() })); delay(500) }
+                    val outbox = StateOutbox()
+                    while (isActive) {
+                        outbox.next(withContext(Dispatchers.Main) { snapshot() }, System.nanoTime() / 1_000_000)?.let { active.send(JSONObject().put("type", "state").put("body", it)) }
+                        delay(500)
+                    }
                 } catch(cancelled: CancellationException) { throw cancelled } catch(error:Exception) { active.close() }
             }
             // El lector nunca escribe respuestas: dos bibliotecas grandes enviadas a la
@@ -129,7 +171,7 @@ class LocalLink(
                 while (isActive) {
                     val msg = active.receive()
                     when (msg.getString("type")) {
-                        "state" -> remoteMutable.value = msg.getJSONObject("body")
+                        "state" -> remoteMutable.value = StateOutbox.receive(msg.getJSONObject("body"), remoteMutable.value)
                         "command" -> check(commands.trySend(msg).isSuccess) { "Demasiadas órdenes pendientes" }
                         "reply" -> requests[msg.getLong("id")]?.complete(msg.getJSONObject("body"))
                     }

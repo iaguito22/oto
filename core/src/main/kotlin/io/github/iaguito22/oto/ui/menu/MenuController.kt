@@ -51,6 +51,9 @@ sealed interface Page {
 
     /** Una lista hecha con lo tuyo ([io.github.iaguito22.oto.dj.Smart]), tal y como estaba al abrirla. */
     data class Smart(val list: LocalPlaylist) : Page
+
+    /** «Tu resumen»: lo escuchado en este aparato, tal y como estaba al abrirlo. */
+    data class Recap(val recap: io.github.iaguito22.oto.dj.Recap) : Page
 }
 
 data class MenuState(
@@ -158,6 +161,7 @@ open class MenuController(protected val scope: CoroutineScope) {
     }
 
     fun openSmart(list: LocalPlaylist) = _state.update { it.copy(pages = it.pages + Page.Smart(list)) }
+    fun openRecap(recap: io.github.iaguito22.oto.dj.Recap) = _state.update { it.copy(pages = it.pages + Page.Recap(recap)) }
 
     fun openFolder(name: String) = _state.update { it.copy(pages = it.pages + Page.Folder(name)) }
 

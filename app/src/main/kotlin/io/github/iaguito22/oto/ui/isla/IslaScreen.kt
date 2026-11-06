@@ -58,6 +58,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -106,6 +107,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -174,6 +176,8 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
 
     var cue by remember { mutableStateOf<CueLabel?>(null) }
     var flash by remember { mutableStateOf<CueLabel?>(null) }
+    // Al subir la gota el dedo tapa lo de arriba: la etiqueta de «Menú» sale debajo.
+    var cueBelow by remember { mutableStateOf(false) }
     LaunchedEffect(flash) { if (flash != null) { delay(FLASH_MS); flash = null } }
     var dropCenter by remember { mutableStateOf(Offset.Zero) }
     // Durante el tutorial la carátula se aparta: solo cuentan la gota y lo que se explica.
@@ -296,6 +300,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
             accent = { c.accent },
             visible = { if (sheet.isOpen) 1f - (sheet.morph.value / 0.06f).coerceIn(0f, 1f) else 1f },
             onCue = { g, hold ->
+                if (g != null) cueBelow = g == Gesture.Menu
                 cue = when (g) {
                     // Con la siguiente o la anterior se dice cuál es, no solo «Siguiente».
                     Gesture.Next -> CueLabel(R.drawable.ic_skip_next, next.firstOrNull()?.title?.ifEmpty { null } ?: "Siguiente")
@@ -313,12 +318,16 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
                 .height(DROP_HOST)
                 .onGloballyPositioned { dropCenter = it.boundsInRoot().center },
         )
+        // Mientras se desvanece se queda donde estaba; un aviso suelto (flash) siempre va arriba.
+        val below = if (cue == null && flash != null) false else cueBelow
+        val cueDrop by animateFloatAsState(if (below) 1f else 0f, spring(dampingRatio = 0.7f, stiffness = 600f), label = "cueSide")
         Cue(
             cue ?: flash,
             Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(bottom = DROP_LIFT + DROP_HOST / 2 + 72.dp),
+                .padding(bottom = CUE_ABOVE)
+                .offset { IntOffset(0, ((CUE_ABOVE - CUE_BELOW) * cueDrop).roundToPx()) },
         )
         Floating(
             saving, onDismiss = { saving = null },
@@ -994,6 +1003,9 @@ private val DROP_HOST = 168.dp
 // La gota no va pegada a la barra de gestos: un poco más arriba queda donde cae el pulgar.
 private val DROP_LIFT = 24.dp
 private val DROP_RADIUS = 43.dp
+/** Distancia del borde inferior de la etiqueta al de la pantalla: encima de la gota o justo debajo de ella. */
+private val CUE_ABOVE = DROP_LIFT + DROP_HOST / 2 + 72.dp
+private val CUE_BELOW = DROP_LIFT + DROP_HOST / 2 - DROP_RADIUS - 8.dp - 36.dp
 private val SOURCE_H = 52.dp
 // El origen no va pegado a la barra de estado: hay sitio de sobra.
 private val SOURCE_TOP = 22.dp

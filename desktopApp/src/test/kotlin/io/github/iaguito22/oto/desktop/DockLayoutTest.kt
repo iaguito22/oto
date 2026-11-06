@@ -36,6 +36,26 @@ class DockLayoutTest {
             assertEquals("cerrando $closing", expected, l.group(DockId.Library).members.toList())
         }
     }
+    @Test fun outerEdgesResizeTheGroupAndReleaseMaximized() {
+        val l = layout()
+        assertTrue(l.maximize(DockId.Library, DockRect(0, 0, 1600, 900)))
+        val right = l.bounds.getValue(DockId.Player).let { it.x + it.width }
+        // El borde izquierdo mueve solo la izquierda; la derecha queda donde estaba.
+        l.resizeEdge(DockId.Player, DockEdge.Left, 100)
+        assertFalse(l.group(DockId.Library).maximized)
+        assertEquals(100, l.bounds.getValue(DockId.Library).x)
+        assertEquals(right, l.bounds.getValue(DockId.Player).let { it.x + it.width })
+        l.resizeEdge(DockId.Library, DockEdge.Right, right - 50)
+        assertEquals(right - 50, l.bounds.getValue(DockId.Player).let { it.x + it.width })
+        l.resizeEdge(DockId.Library, DockEdge.Bottom, 700)
+        l.resizeEdge(DockId.Library, DockEdge.Top, 60)
+        assertEquals(60, l.bounds.getValue(DockId.Player).y)
+        assertEquals(640, l.bounds.getValue(DockId.Library).height)
+        assertJoined(l, DockId.Library)
+        // Nunca por debajo del mínimo.
+        l.resizeEdge(DockId.Library, DockEdge.Right, 0)
+        assertEquals(DockId.Player.minWidth, l.bounds.getValue(DockId.Player).width)
+    }
     @Test fun dockUsesPriorityHeightAndMovesTogether() {
         val l=layout()
         assertEquals(740,l.bounds.getValue(DockId.Player).height)

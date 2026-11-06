@@ -3,6 +3,7 @@ package io.github.iaguito22.oto.desktop
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,21 +35,26 @@ import org.jetbrains.skia.Data
 import org.jetbrains.skia.Image
 import org.jetbrains.skia.Rect
 
-internal data class WelcomeClip(val asset: String, val title: String, val description: String)
+internal data class WelcomeClip(val asset: String, val step: String, val title: String, val description: String)
 
-internal val welcomeCombinations = listOf(
-    WelcomeClip("01-biblioteca-reproductor", "Biblioteca + reproductor", "Elige tu música y ten el reproductor al lado."),
-    WelcomeClip("02-reproductor-letra", "Reproductor + letra", "Deja solo el reproductor y la letra para seguir la canción."),
-    WelcomeClip("03-biblioteca-reproductor-letra", "Biblioteca + reproductor + letra", "Abre la letra sin dejar de explorar tu biblioteca."),
-    WelcomeClip("04-biblioteca-reproductor-cola", "Biblioteca + reproductor + cola", "Cambia la letra por la cola para ver qué viene después."),
+/** Grabados por Iago el 06/11/2026 (Recortes de Windows, 30 fps) y codificados a 1280 px (WebP q82). */
+internal val welcomeSteps = listOf(
+    WelcomeClip("01-unir-ventanas", "Unir", "Une las ventanas",
+        "Oto se reparte en ventanas: reproductor, tu música, letra y cola. Ábrelas con los botones del reproductor y se colocan juntas, como una sola."),
+    WelcomeClip("02-cambiar-orden", "Ordenar", "Cambia el orden",
+        "Arrastra la barra superior de una ventana sobre otra y se intercambian. La del punto (·) es la principal: con ella mueves todo el conjunto."),
+    WelcomeClip("03-redimensionar", "Tamaño", "Ajusta el tamaño",
+        "Arrastra la unión entre dos ventanas para repartir el espacio, o los bordes y las esquinas para cambiar el tamaño del conjunto."),
+    WelcomeClip("04-vistas-reproductor", "Reproductor", "Elige tu reproductor",
+        "En ··· cambia entre carátula, horizontal y vertical. El pequeño se puede fijar encima de todo con la chincheta."),
+    WelcomeClip("05-atajo-global", "Atajo", "Escóndelo y vuelve",
+        "Ctrl + Alt + O oculta o recupera Oto desde cualquier sitio (lo cambias en Ajustes). La X lo deja en la bandeja, junto al reloj."),
 )
-private val welcomeReorder = WelcomeClip("05-intercambiar-ventanas", "Cada ventana en su sitio", "Arrastra la barra superior de una ventana secundaria sobre otra para intercambiar sus posiciones.")
-private val welcomePlayer = WelcomeClip("06-reproductor-horizontal-fijado", "Tu reproductor, siempre a mano", "Elige la vista horizontal, déjala con la altura mínima y muévela a una esquina. La chincheta la mantiene sobre las demás ventanas.")
 
-/** Una sola pantalla: los ejemplos relacionados cambian solos y se pueden elegir directamente. */
+/** Cinco pasos con su demostración: avanzan solos al terminar cada clip y se pueden elegir. */
 @Composable
 internal fun WelcomeWindow(close: () -> Unit) {
-    val state = rememberWindowState(position = WindowPosition(Alignment.Center), width = 1040.dp, height = 760.dp)
+    val state = rememberWindowState(position = WindowPosition(Alignment.Center), width = 1040.dp, height = 780.dp)
     ModuleWindow("Bienvenida", state, true, close, accent = DefaultAccent, minimum = DpSize(780.dp, 620.dp), keys = {
         if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { close(); true } else false
     }) {
@@ -58,45 +64,51 @@ internal fun WelcomeWindow(close: () -> Unit) {
 
 @Composable
 private fun WelcomeContent(close: () -> Unit) {
-    var section by remember { mutableIntStateOf(0) }
-    var selected by remember { mutableIntStateOf(0) }
+    var step by remember { mutableIntStateOf(0) }
     var playing by remember { mutableStateOf(true) }
-    // Updated callbacks let the decoder keep its current frame when pausing or changing controls.
-    val clip = when (section) { 0 -> welcomeCombinations[selected]; 1 -> welcomeReorder; else -> welcomePlayer }
+    var progress by remember { mutableFloatStateOf(0f) }
+    val clip = welcomeSteps[step]
+    val last = step == welcomeSteps.lastIndex
     Surface(Modifier.fillMaxSize(), color = Color(0xFF121715)) {
-        Column(Modifier.padding(horizontal = 28.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.padding(horizontal = 28.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Bienvenido a Oto", style = MaterialTheme.typography.headlineMedium)
-                    Text("Tu música, a tu manera.", color = Color.White.copy(alpha = .55f), style = MaterialTheme.typography.bodyMedium)
+                    Text("Cinco gestos para tenerlo a tu manera.", color = Color.White.copy(alpha = .55f), style = MaterialTheme.typography.bodyMedium)
                 }
                 TextButton(onClick = close) { Text("Omitir") }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilterChip(selected = section == 0, onClick = { section = 0 }, label = { Text("Combina ventanas") }, leadingIcon = { Icon(Icons.AutoMirrored.Rounded.ViewQuilt, null, Modifier.size(18.dp)) })
-                FilterChip(selected = section == 1, onClick = { section = 1 }, label = { Text("Cambia el orden") }, leadingIcon = { Icon(Icons.Rounded.SwapHoriz, null, Modifier.size(18.dp)) })
-                FilterChip(selected = section == 2, onClick = { section = 2 }, label = { Text("Reproductor") }, leadingIcon = { Icon(Icons.Rounded.PushPin, null, Modifier.size(18.dp)) })
+            // Los pasos: el actual lleva debajo cuánto queda de su demostración.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                welcomeSteps.forEachIndexed { i, s ->
+                    val on = i == step
+                    Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable { step = i; playing = true }.padding(horizontal = 4.dp, vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("${i + 1}  ${s.step}", maxLines = 1, style = MaterialTheme.typography.labelLarge,
+                            color = if (on) Color.White else Color.White.copy(alpha = if (i < step) .6f else .4f))
+                        Box(Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = .1f))) {
+                            val filled = if (i < step) 1f else if (on) progress else 0f
+                            Box(Modifier.fillMaxHeight().fillMaxWidth(filled).background(if (on) DefaultAccent else Color.White.copy(alpha = .45f)))
+                        }
+                    }
+                }
             }
             Box(Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color(0xFF0D1210)).border(1.dp, Color.White.copy(alpha = .09f), RoundedCornerShape(18.dp)), contentAlignment = Alignment.Center) {
-                WelcomeAnimation(clip, playing, onEnd = { if (section == 0) selected = (selected + 1) % welcomeCombinations.size })
+                WelcomeAnimation(clip, playing, onProgress = { progress = it }, onEnd = { if (!last) step++ })
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(clip.title, style = MaterialTheme.typography.titleMedium)
-                    Text(clip.description, color = Color.White.copy(alpha = .6f), style = MaterialTheme.typography.bodyMedium)
+                    Text(clip.description, color = Color.White.copy(alpha = .65f), style = MaterialTheme.typography.bodyMedium)
                 }
                 IconButton(onClick = { playing = !playing }) { Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pausar demostración" else "Reproducir demostración") }
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                if (section == 0) Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
-                    welcomeCombinations.forEachIndexed { index, item ->
-                        FilledTonalIconButton(onClick = { selected = index }, modifier = Modifier.size(34.dp), colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = if (selected == index) DefaultAccent else Color.White.copy(alpha = .06f), contentColor = if (selected == index) Color(0xFF101412) else Color.White.copy(alpha = .6f))) {
-                            Text("${index + 1}", modifier = Modifier.semantics { contentDescription = item.title }, style = MaterialTheme.typography.labelMedium)
-                        }
-                    }
-                    Text("${selected + 1} de ${welcomeCombinations.size}", Modifier.padding(start = 6.dp), color = Color.White.copy(alpha = .4f), style = MaterialTheme.typography.labelMedium)
-                } else Text(if (section == 1) "Arrastra desde la barra superior" else "Horizontal · altura mínima · fijado", color = Color.White.copy(alpha = .45f), style = MaterialTheme.typography.labelMedium)
-                Button(onClick = close, contentPadding = PaddingValues(horizontal = 26.dp, vertical = 12.dp)) { Text("Empezar") }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("${step + 1} de ${welcomeSteps.size}", Modifier.weight(1f), color = Color.White.copy(alpha = .4f), style = MaterialTheme.typography.labelMedium)
+                if (step > 0) OutlinedButton(onClick = { step--; playing = true }) { Text("Anterior") }
+                Button(onClick = { if (last) close() else { step++; playing = true } }, contentPadding = PaddingValues(horizontal = 26.dp, vertical = 12.dp)) {
+                    Text(if (last) "Empezar" else "Siguiente")
+                }
             }
         }
     }
@@ -104,9 +116,10 @@ private fun WelcomeContent(close: () -> Unit) {
 
 /** WebP animado local: un decodificador y un bitmap, sin audio, red ni procesos de vídeo. */
 @Composable
-private fun WelcomeAnimation(clip: WelcomeClip, playing: Boolean, onEnd: () -> Unit) {
+private fun WelcomeAnimation(clip: WelcomeClip, playing: Boolean, onProgress: (Float) -> Unit, onEnd: () -> Unit) {
     val shouldPlay by rememberUpdatedState(playing)
     val finished by rememberUpdatedState(onEnd)
+    val progress by rememberUpdatedState(onProgress)
     var bitmap by remember(clip.asset) { mutableStateOf<Bitmap?>(null) }
     var frame by remember(clip.asset) { mutableIntStateOf(0) }
     var failed by remember(clip.asset) { mutableStateOf(false) }
@@ -127,6 +140,7 @@ private fun WelcomeAnimation(clip: WelcomeClip, playing: Boolean, onEnd: () -> U
                                 while (!shouldPlay) delay(80)
                                 codec.readPixels(decoded, index, if (index == 0) -1 else index - 1)
                                 frame++
+                                progress((index + 1f) / codec.frameCount)
                                 // Honour pauses during a frame as well as between frames.
                                 var remaining = timing[index].duration.coerceAtLeast(20)
                                 while (remaining > 0) {
@@ -146,7 +160,7 @@ private fun WelcomeAnimation(clip: WelcomeClip, playing: Boolean, onEnd: () -> U
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { timber.log.Timber.w(error, "No se pudo abrir la bienvenida"); failed = true }
     }
-    if (failed) Text("Puedes combinar las ventanas desde sus iconos y arrastrarlas desde la barra superior.", Modifier.padding(32.dp), color = Color.White.copy(alpha = .7f))
+    if (failed) Text(clip.description, Modifier.padding(32.dp), color = Color.White.copy(alpha = .7f))
     else Canvas(Modifier.fillMaxSize().semantics { contentDescription = clip.title }) {
         frame // Read in the drawing phase so only the canvas invalidates on a frame.
         bitmap?.let { decoded ->
@@ -156,7 +170,11 @@ private fun WelcomeAnimation(clip: WelcomeClip, playing: Boolean, onEnd: () -> U
             val x = (size.width - width) / 2
             val y = (size.height - height) / 2
             drawIntoCanvas { canvas ->
-                Image.makeFromBitmap(decoded).use { image -> canvas.nativeCanvas.drawImageRect(image, Rect.makeXYWH(x, y, width, height)) }
+                // Con filtrado: sin él, al reducir el clip salían bordes dentados (parte de la «baja calidad»).
+                Image.makeFromBitmap(decoded).use { image ->
+                    canvas.nativeCanvas.drawImageRect(image, Rect.makeWH(decoded.width.toFloat(), decoded.height.toFloat()), Rect.makeXYWH(x, y, width, height),
+                        org.jetbrains.skia.CubicResampler(1f / 3, 1f / 3), null, true)
+                }
             }
         }
     }

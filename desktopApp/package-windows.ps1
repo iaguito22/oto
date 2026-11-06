@@ -10,6 +10,8 @@ try {
         & ./gradlew.bat :desktopApp:createDistributable --no-configuration-cache
         if ($LASTEXITCODE) { throw 'No se pudo compilar la imagen de Oto.' }
     }
+    # Arranque rápido: archivos CDS entrenados sobre esta misma imagen (ver prepare-cds.ps1).
+    & "$PSScriptRoot/packaging/windows/prepare-cds.ps1" -App "$PSScriptRoot/build/compose/binaries/main/app/Oto"
     $version=[regex]::Match([IO.File]::ReadAllText("$PSScriptRoot/build.gradle.kts"),'packageVersion = "([^"]+)"').Groups[1].Value
     $resources="$PSScriptRoot/build/installer-resources"
     $dist="$PSScriptRoot/build/dist"

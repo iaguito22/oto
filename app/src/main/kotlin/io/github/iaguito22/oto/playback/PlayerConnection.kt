@@ -208,6 +208,8 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
                 .put("artist", m.artist?.toString().orEmpty()).put("artwork", m.artworkUri?.toString())
         }))
 
+    private var remoteQueue: Pair<JSONArray, List<QueueEntry>>? = null
+
     /** Muestra y controla lo que suena en el ordenador ([state]: su estado periódico). */
     fun showRemote(state: JSONObject, target: Mirror) {
         mirror = target
@@ -216,13 +218,17 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         if (pendingId != null) { if (id != pendingId && now < pendingUntil) return; pendingId = null }
         fun JSONObject.text(key: String) = optString(key).takeUnless { it == "null" }.orEmpty()
         val array = state.optJSONArray("queue")
-        val all = (0 until (array?.length() ?: 0)).map { i -> array!!.getJSONObject(i).let { QueueEntry(i, it.text("id"), it.text("title"), it.text("artist"), it.text("artwork").ifBlank { null }) } }
+        // La cola del ordenador llega una vez y se reutiliza mientras no cambie (ver StateOutbox).
+        val all = remoteQueue?.takeIf { it.first === array }?.second
+            ?: (0 until (array?.length() ?: 0)).map { i -> array!!.getJSONObject(i).let { QueueEntry(i, it.text("id"), it.text("title"), it.text("artist"), it.text("artwork").ifBlank { null }) } }
+                .also { remoteQueue = array?.let { a -> a to it } }
         val index = state.optInt("index").coerceAtLeast(0)
         val loop = state.optBoolean("loop")
         val artist = state.text("artist")
         _state.value = NowPlaying(
             id = id, title = state.text("title"), artist = artist, artists = listOf(artist to null),
-            artwork = state.text("artwork").ifBlank { null }, playing = state.optBoolean("playing"), buffering = state.optBoolean("buffering"),
+            // El ordenador manda la miniatura de su lista (pequeña): aquí se pinta a pantalla completa.
+            artwork = state.text("artwork").ifBlank { null }?.resize(ARTWORK_PX), playing = state.optBoolean("playing"), buffering = state.optBoolean("buffering"),
             durationMs = state.optLong("duration").coerceAtLeast(0), upNext = (all.size - index - 1).coerceAtLeast(0), index = index,
         )
         _queue.value = all.drop(index + 1) + (if (loop) all.take(index) else emptyList())

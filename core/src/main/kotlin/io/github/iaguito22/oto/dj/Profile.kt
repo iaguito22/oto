@@ -22,6 +22,8 @@ class Profile(lists: List<LocalPlaylist>, liked: List<Heard>, history: List<Hear
         /** Las suyas que tienes, por canción ([Track.key]). */
         val songs = LinkedHashMap<String, Track>()
         var liked = 0
+        /** Las suyas que están en alguna lista tuya (no solo en Me gusta). */
+        val listed = HashSet<String>()
         /** Lista → cuánto está en ella. */
         val lists = HashMap<Int, Double>()
         var norm = 0.0
@@ -57,17 +59,19 @@ class Profile(lists: List<LocalPlaylist>, liked: List<Heard>, history: List<Hear
 
     init {
         val all = lists.filter { it.songs.isNotEmpty() } + LocalPlaylist("", "", liked)
+        // Guardar algo en una lista dice más de ti que darle a Me gusta (petición de Iago, 06/11): una canción pesa
+        // 1,5 por cada lista y 0,5 por el Me gusta, y Me gusta, como escena, cuenta la mitad que una lista.
         all.forEachIndexed { l, list ->
-            val w = 1 / ln(E + list.songs.size / 25.0)
+            val isLiked = l == all.lastIndex
+            val w = (if (isLiked) LIKED_SCENE else 1.0) / ln(E + list.songs.size / 25.0)
             for (h in list.songs) {
                 val t = h.toTrack()
                 val a = artist(t.who, t.artist, t.artistId)
                 a.songs.getOrPut(t.key) { t }
                 bases += t.base + "|" + t.who
                 a.lists[l] = (a.lists[l] ?: 0.0) + w
-                val isLiked = l == all.lastIndex
-                if (isLiked) a.liked++
-                weight[t.key] = (weight[t.key] ?: 0.0) + if (isLiked) 2.0 else 1.0
+                if (isLiked) a.liked++ else a.listed += t.key
+                weight[t.key] = (weight[t.key] ?: 0.0) + if (isLiked) LIKED_WEIGHT else LIST_WEIGHT
             }
         }
         // Lo último que sonó, por si el diario de escuchas aún está vacío (recién instalado).
@@ -93,7 +97,9 @@ class Profile(lists: List<LocalPlaylist>, liked: List<Heard>, history: List<Hear
             a.norm = a.lists.values.sumOf { it * it }
             // Cuánto te quedas cuando lo pone el DJ, frente a lo normal (0,6): de ×0,5 a ×1,5, sin sumar volumen.
             val rate = djRate(a)
-            val base = sqrt(a.songs.size + a.liked.toDouble()) + 1.5 * sqrt(a.organic)
+            // Lo tuyo: sus canciones en listas pesan más que las que solo tienen Me gusta.
+            val owned = LIST_WEIGHT * a.listed.size + LIKED_WEIGHT * a.liked
+            val base = sqrt(owned) + 1.5 * sqrt(a.organic)
             // Uno que descubrió el DJ y te gustó entra, poquito, en lo tuyo.
             a.affinity = if (base > 0) base * (0.5 + rate) else if (a.djTimes >= 1 && rate > 0.65) 0.6 else 0.0
         }
@@ -124,5 +130,8 @@ class Profile(lists: List<LocalPlaylist>, liked: List<Heard>, history: List<Hear
     private companion object {
         // Sin esto, dos artistas con una canción cada uno en la misma lista gigante saldrían idénticos.
         const val K = 0.5
+        const val LIST_WEIGHT = 1.5
+        const val LIKED_WEIGHT = 0.5
+        const val LIKED_SCENE = 0.5
     }
 }

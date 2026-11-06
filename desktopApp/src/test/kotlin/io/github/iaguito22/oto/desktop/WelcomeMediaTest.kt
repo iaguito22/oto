@@ -8,16 +8,16 @@ import org.junit.Test
 
 class WelcomeMediaTest {
     @Test fun packagedDemosDecodeEveryFrameAndRestartWithoutKeepingOldPixels() {
-        val assets = welcomeCombinations.map { it.asset } + listOf("05-intercambiar-ventanas", "06-reproductor-horizontal-fijado")
+        val assets = welcomeSteps.map { it.asset }
         for (asset in assets) {
             val bytes = checkNotNull(javaClass.getResourceAsStream("/welcome/$asset.webp")) { asset }.use { it.readBytes() }
-            assertTrue("La bienvenida debe seguir siendo ligera: $asset", bytes.size < 2_000_000)
+            assertTrue("Cada demostración por debajo de 8 MB: $asset", bytes.size < 8_000_000)
             Data.makeFromBytes(bytes).use { data ->
                 Codec.makeFromData(data).use { codec ->
-                    assertEquals(960, codec.width)
-                    assertEquals(510, codec.height)
+                    assertEquals(1280, codec.width)
+                    assertTrue(asset, codec.height in 670..730)
                     assertTrue(asset, codec.frameCount > 15)
-                    assertTrue(asset, codec.framesInfo.sumOf { it.duration } in 3_000..15_000)
+                    assertTrue(asset, codec.framesInfo.sumOf { it.duration } in 3_000..30_000)
                     Bitmap().use { bitmap ->
                         assertTrue(bitmap.allocN32Pixels(codec.width, codec.height))
                         var first: ByteArray? = null

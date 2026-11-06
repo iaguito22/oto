@@ -36,6 +36,9 @@
 
 ## Bienvenida
 
+**06/11: rehecha** (sin instalar). Cinco pasos con los clips grabados por Iago (`Videos\*.mp4`, Recortes de Windows, 30 fps): Unir, Ordenar, Tamaño, Reproductor, Atajo (este con la barra de tareas a propósito, para ver el clic en la bandeja). Codificados con FFmpeg `libwebp_anim` a 1280 px, `-q:v 82` (~20 MB en total). Pasos pulsables con barra de progreso, avance solo al acabar cada clip, Anterior/Siguiente/Empezar. El dibujo usa `CubicResampler` (antes sin filtrado: bordes dentados). Iago la vio y le pareció bien. Lo de abajo describe la versión anterior.
+- Aviso: libwebp con pérdida deja algún resto en fundidos lentos (la letra apagándose); probado Pillow con fotogramas clave cada 6–12 sin mejora medible. Se aceptó tal cual.
+
 - Una pantalla (`WelcomeWindow.kt`) con carrusel de clips sin audio: pestañas «Combina ventanas», «Cambia el orden» y «Reproductor»; avance automático, pausa, Omitir y Empezar. WebP decodificado con Skia; sin red, audio ni FFmpeg.
 - Preferencia independiente `desktop_welcome.json` (seen_version=1 al cerrar u omitir); reabrir desde «Ver bienvenida» en PlayerOptions (diálogo ampliado a 430 px).
 - Seis WebP en `desktopApp/src/main/resources/welcome/` (~1,5 MiB). El intercambio es una animación explicativa y el horizontal un montaje de grabaciones: no presentarlos como una grabación continua. Test: `WelcomeMediaTest`.

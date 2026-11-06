@@ -9,6 +9,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.platform.LocalDensity
 import org.json.JSONArray
@@ -424,6 +427,24 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
             delay(32)
         } finally { bridge.applying=false }
     }
+    // Al abrir una ventana en un conjunto, el solape de 1 px de la unión no siempre llegaba a la ventana
+    // (medido: 1 px de hueco a 125 % hasta mover el conjunto). Cuando todo se asienta, se fija exacto.
+    LaunchedEffect(revision, overlap) {
+        delay(350)
+        while (bridge.applying || session.draggingGroup || session.isShifting(id) || System.nanoTime() < session.geometrySettlesAt) delay(50)
+        val r = session.layout.bounds[id] ?: return@LaunchedEffect
+        if (!window.isShowing || state.placement != WindowPlacement.Floating) return@LaunchedEffect
+        val want = java.awt.Rectangle(r.x, r.y, r.width + seamOverlap(), r.height)
+        if (window.bounds == want) return@LaunchedEffect
+        session.trace("settle $id ${window.bounds} -> $want")
+        bridge.applying = true
+        try {
+            window.bounds = want
+            state.position = WindowPosition(want.x.dp, want.y.dp)
+            state.size = androidx.compose.ui.unit.DpSize(want.width.dp, want.height.dp)
+            delay(32)
+        } finally { bridge.applying = false }
+    }
     LaunchedEffect(state.placement) {
         if(session.supportsMaximize && state.placement == WindowPlacement.Maximized) {
             state.placement = WindowPlacement.Floating
@@ -534,4 +555,57 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
             }
         }
     }) { content() }
+}
+
+/**
+ * Bordes del conjunto para redimensionarlo: las ventanas no tienen marco y antes solo valía el tirador de la
+ * esquina, que no hacía nada con el conjunto maximizado. Se sigue el puntero en coordenadas de pantalla porque
+ * el borde izquierdo y el superior mueven la propia ventana durante el gesto.
+ */
+@Composable
+internal fun androidx.compose.foundation.layout.BoxScope.DockEdges(session: DockSession, id: DockId, first: Boolean, last: Boolean) {
+    @Composable fun Edge(edges: List<DockEdge>, modifier: Modifier, cursor: Int) {
+        Box(modifier.pointerHoverIcon(PointerIcon(Cursor(cursor))).pointerInput(session, id, edges) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                down.consume()
+                val start = MouseInfo.getPointerInfo()?.location ?: return@awaitEachGesture
+                val g = session.layout.groups.firstOrNull { id in it.members } ?: return@awaitEachGesture
+                val a = session.layout.bounds[g.members.first()] ?: return@awaitEachGesture
+                val z = session.layout.bounds[g.members.last()] ?: return@awaitEachGesture
+                // Distancia del puntero al borde al empezar: el borde no salta hasta el puntero.
+                val grab = edges.associateWith { e -> when (e) {
+                    DockEdge.Left -> start.x - a.x; DockEdge.Right -> start.x - (z.x + z.width)
+                    DockEdge.Top -> start.y - a.y; DockEdge.Bottom -> start.y - (a.y + a.height)
+                } }
+                session.draggingGroup = true
+                try {
+                    while (true) {
+                        val change = awaitPointerEvent().changes.first()
+                        if (!change.pressed || id !in session.layout.bounds) break
+                        change.consume()
+                        val p = MouseInfo.getPointerInfo()?.location ?: continue
+                        for (e in edges) session.layout.resizeEdge(id, e, (if (e == DockEdge.Left || e == DockEdge.Right) p.x else p.y) - grab.getValue(e))
+                        session.syncGroupLocations(id)
+                    }
+                } finally {
+                    session.geometrySettlesAt = System.nanoTime() + 250_000_000L
+                    session.draggingGroup = false
+                }
+            }
+        })
+    }
+    val t = 6.dp
+    Edge(listOf(DockEdge.Top), Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 14.dp).height(4.dp), Cursor.N_RESIZE_CURSOR)
+    Edge(listOf(DockEdge.Bottom), Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 14.dp).height(t), Cursor.S_RESIZE_CURSOR)
+    if (first) {
+        Edge(listOf(DockEdge.Left), Modifier.align(Alignment.CenterStart).fillMaxHeight().padding(vertical = 14.dp).width(t), Cursor.W_RESIZE_CURSOR)
+        Edge(listOf(DockEdge.Left, DockEdge.Top), Modifier.align(Alignment.TopStart).size(14.dp), Cursor.NW_RESIZE_CURSOR)
+        Edge(listOf(DockEdge.Left, DockEdge.Bottom), Modifier.align(Alignment.BottomStart).size(14.dp), Cursor.SW_RESIZE_CURSOR)
+    }
+    if (last) {
+        Edge(listOf(DockEdge.Right), Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 14.dp).width(t), Cursor.E_RESIZE_CURSOR)
+        Edge(listOf(DockEdge.Right, DockEdge.Top), Modifier.align(Alignment.TopEnd).size(14.dp), Cursor.NE_RESIZE_CURSOR)
+        Edge(listOf(DockEdge.Right, DockEdge.Bottom), Modifier.align(Alignment.BottomEnd).size(16.dp), Cursor.SE_RESIZE_CURSOR)
+    }
 }

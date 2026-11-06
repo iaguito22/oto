@@ -5,6 +5,7 @@ import kotlin.math.max
 
 /** Coordenadas lógicas de escritorio; las mismas unidades que las ventanas AWT. */
 internal data class DockRect(val x: Int, val y: Int, val width: Int, val height: Int)
+internal enum class DockEdge { Left, Right, Top, Bottom }
 internal enum class DockId(val rank: Int, val defaultWidth: Int, val minWidth: Int, val minHeight: Int) {
     Library(3, 960, 640, 480), Player(2, 320, 260, 370), Lyrics(1, 480, 220, 250), Queue(1, 420, 240, 250)
 }
@@ -93,6 +94,39 @@ internal class DockLayout {
         val newHeight = max(height, g.members.maxOf { minHeight(it) })
         val y = if(top == null) first.y else top + height - newHeight
         flow(g, first.x, y, newHeight)
+        changed()
+    }
+    /** Deja de estar maximizado sin moverse: lo que se ve pasa a ser el tamaño normal. */
+    fun releaseMaximized(id: DockId) {
+        val g = group(id)
+        if (g.maximized) { g.maximized = false; g.area = null; g.restored.clear(); g.beforeAttach.clear(); changed() }
+    }
+    /**
+     * Arrastra un borde exterior del conjunto de [id] hasta [to] (coordenadas de pantalla): izquierdo, derecho,
+     * superior o inferior. Maximizado, deja de estarlo conservando lo que se ve, en vez de bloquear el borde.
+     */
+    fun resizeEdge(id: DockId, edge: DockEdge, to: Int) {
+        val g = group(id)
+        releaseMaximized(id)
+        val first = bounds.getValue(g.members.first())
+        val last = bounds.getValue(g.members.last())
+        val minHeight = g.members.maxOf { minHeight(it) }
+        when (edge) {
+            DockEdge.Left -> {
+                val width = (first.x + first.width - to).coerceAtLeast(minWidth(g.members.first()))
+                bounds[g.members.first()] = first.copy(width = width)
+                flow(g, first.x + first.width - width, first.y, first.height)
+            }
+            DockEdge.Right -> {
+                bounds[g.members.last()] = last.copy(width = (to - last.x).coerceAtLeast(minWidth(g.members.last())))
+                flow(g, first.x, first.y, first.height)
+            }
+            DockEdge.Top -> {
+                val height = (first.y + first.height - to).coerceAtLeast(minHeight)
+                flow(g, first.x, first.y + first.height - height, height)
+            }
+            DockEdge.Bottom -> flow(g, first.x, first.y, (to - first.y).coerceAtLeast(minHeight))
+        }
         changed()
     }
     /** Mueve una unión sin desplazar el conjunto ni cambiar su anchura total. */

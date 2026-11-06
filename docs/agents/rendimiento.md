@@ -49,6 +49,21 @@ Monitor del portátil a 120 Hz. `OTO_MOTION_TRACE=1` escribe `lyrics-frames.json
   - Otras vías no probadas: otro driver AMD; ventanas opacas (cambio visual grande).
 - El latido de la carátula (`rememberCoverPulse`) mantiene su `delay(10)`: en 120 Hz tendrá la misma cadencia irregular.
 
+## Arranque: CDS (06/11)
+
+Medido con la imagen de `createDistributable` copiada al scratchpad, perfil aislado (`APPDATA`/`LOCALAPPDATA` propios, bienvenida marcada como vista), desde lanzar `Oto.exe` hasta ver «Oto · Reproductor» (y hasta `animationStartedMs` de `motion-frames.jsonl`); 5–6 vueltas, cierre por WM_CLOSE a «Oto · Sesión».
+
+| Variante | Ventana | Animación | RAM tras abrir |
+|---|---:|---:|---:|
+| Sin CDS (como estaba) | 2,92–3,20 s | 3,10–3,42 s | 315–397 MB |
+| Solo archivo base del runtime (`-Xshare:dump`) | 2,78–3,12 s | 3,01–3,23 s | 322–385 MB |
+| `-XX:+AutoCreateSharedArchive` | **14,9–15,1 s la primera vez**, luego 1,68–1,81 s | 1,81–1,94 s | 336–352 MB |
+| Archivo de Oto entrenado al empaquetar (`prepare-cds.ps1`) | 1,94 s la primera, luego 1,65–1,70 s | 1,78–2,06 s | 338–349 MB |
+
+- El runtime de jlink no traía `classes.jsa`. La ganancia está en las clases de Oto/Compose (archivo dinámico ~60 MB + base 12 MB en la imagen).
+- `desktopApp/packaging/windows/prepare-cds.ps1` (llamado por `package-windows.ps1` antes de jpackage): genera la base, entrena con un perfil temporal (abre el reproductor y sale) y deja `-XX:SharedArchiveFile=$APPDIR\oto.jsa`. La JVM crea `oto.jsa` de solo lectura: el script lo quita. Si falla, deja el `.cfg` sin opciones CDS.
+- Sin probar aún: MSI instalado con CDS ni arranque con el perfil real (biblioteca grande).
+
 ## Tirón al abrir ventanas — SIN RESOLVER
 
 Iago sigue notando a veces un corte antes de la animación (05/11). Picos entre callbacks al reabrir la biblioteca (cinco reaperturas por tanda, JFR activo, sin reproducción):

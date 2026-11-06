@@ -257,6 +257,7 @@ fun MenuSheet(
     // Con la hoja cerrada no se mira nada (oyendo música con la app delante, cada canción lo rehacía para nadie): la
     // primera vez se hace al abrir la app y luego al abrir la hoja, si algo cambió.
     var smart by remember { mutableStateOf(emptyList<LocalPlaylist>()) }
+    var recap by remember { mutableStateOf<io.github.iaguito22.oto.dj.Recap?>(null) }
     val shown by rememberUpdatedState(open)
     LaunchedEffect(Unit) {
         var done = false
@@ -272,6 +273,7 @@ fun MenuSheet(
                 smart = withContext(Dispatchers.Default) {
                     runCatching { Smart.lists(l, lk?.songs.orEmpty(), h, app.plays.all(), System.currentTimeMillis()) }.getOrDefault(emptyList())
                 }
+                recap = withContext(Dispatchers.Default) { runCatching { io.github.iaguito22.oto.dj.Recap.of(app.plays.all()) }.getOrNull() }
                 done = true
             }
     }
@@ -448,6 +450,7 @@ fun MenuSheet(
                             spots = spots, onDjMenu = { djMenu = true }, onAll = { vm.openLists() }, state = musicList)
                         else Explore(
                             s, smart, currentId, play, onHold = { hold(it, null) }, onOpen = vm::open, onSmart = vm::openSmart, onRetry = vm::loadHome,
+                            recap = recap, onRecap = vm::openRecap,
                             onChip = vm::onChip, state = exploreList,
                         )
                     }
@@ -499,6 +502,14 @@ fun MenuSheet(
                             onAdd = { list, h -> scope.launch { if (list.id == LIKED_ID) prefs.setLiked(h, true) else prefs.addToPlaylist(list.id, h) } },
                             onFind = { searchFocus.requestFocus() },
                         )
+                        is Page.Recap -> {
+                            val known = remember(history, liked, playlists) {
+                                (history.orEmpty() + liked?.songs.orEmpty() + playlists.orEmpty().flatMap { it.songs }).filter { it.artwork != null }.associate { it.id to it.artwork }
+                            }
+                            RecapView(p.recap, currentId, { known[it] }, onBack = vm::closeDetail,
+                                onPlay = { song -> play(Heard(song.id, song.title, song.artist, known[song.id], song.artistId).toSong()) },
+                                onArtist = vm::openArtist)
+                        }
                         is Page.Smart -> SmartView(
                             p.list, currentId, onBack = vm::closeDetail,
                             onPlay = { i -> connection.playLocal(p.list, i, false); onClose() },
@@ -857,6 +868,8 @@ private fun Explore(
     onRetry: () -> Unit,
     onChip: (String) -> Unit,
     state: LazyListState,
+    recap: io.github.iaguito22.oto.dj.Recap? = null,
+    onRecap: (io.github.iaguito22.oto.dj.Recap) -> Unit = {},
 ) {
     val list = s.shelves
     LaunchedEffect(Unit) { if (s.shelves == null) onRetry() }
@@ -870,6 +883,7 @@ private fun Explore(
                 items(s.chips, key = { it.title }) { chip -> Chip(chip.title, chip.title == s.chip) { onChip(chip.title) } }
             }
         }
+        if (recap != null && !recap.empty && s.chip == null) item(key = "recap") { RecapCard(recap) { onRecap(recap) } }
         // Lo hecho con lo tuyo va primero y no espera a YouTube: sale aunque no haya red. Con un ánimo elegido, sobra.
         if (smart.isNotEmpty() && s.chip == null) item(key = "smart") {
             SectionTitle("Hecho con lo tuyo")
@@ -2477,3 +2491,117 @@ private const val UNDO_MS = 4_000L
 
 /** El rojo suave de lo que pide un segundo toque. */
 private val DANGER = Color(0xFFFF8A80)
+
+/** La tarjeta de Explorar que abre «Tu resumen». */
+@Composable
+private fun RecapCard(recap: io.github.iaguito22.oto.dj.Recap, onClick: () -> Unit) {
+    val c = Oto.colors
+    Column(
+        Modifier.padding(horizontal = Space.md, vertical = Space.sm).fillMaxWidth().clip(RoundedCornerShape(Radius.lg))
+            .background(c.accent.copy(alpha = 0.14f))
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
+            .padding(Space.lg),
+    ) {
+        Text("TU RESUMEN", style = OtoType.rowSub.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = c.accent)
+        Text("${recapHours(recap.minutes)} escuchadas", style = OtoType.section, color = c.text)
+        recap.topArtists.firstOrNull()?.let { Text("Lo que más: ${it.name}", style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+    }
+}
+
+private fun recapHours(minutes: Long) = when {
+    minutes < 60 -> "$minutes min"
+    minutes % 60 == 0L -> "${minutes / 60} h"
+    else -> "${minutes / 60} h ${minutes % 60} min"
+}
+
+/** «Tu resumen»: lo escuchado en este móvil ([io.github.iaguito22.oto.dj.Recap]). [artwork]: la carátula entre lo tuyo. */
+@Composable
+private fun RecapView(
+    recap: io.github.iaguito22.oto.dj.Recap,
+    currentId: String?,
+    artwork: (String) -> String?,
+    onBack: () -> Unit,
+    onPlay: (io.github.iaguito22.oto.dj.Recap.Song) -> Unit,
+    onArtist: (String, String) -> Unit,
+) {
+    val c = Oto.colors
+    val es = java.util.Locale.forLanguageTag("es")
+    val since = remember(recap.since) {
+        java.time.Instant.ofEpochMilli(recap.since).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("d 'de' MMMM", es))
+    }
+    // Las barras crecen al entrar, con algo de rebote.
+    val grow = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) { grow.animateTo(1f, spring(dampingRatio = 0.62f, stiffness = 120f)) }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg)) {
+        item(key = "head") {
+            Column(Modifier.padding(bottom = Space.md)) {
+                RoundIcon(R.drawable.ic_arrow_back, onClick = onBack)
+                Column(Modifier.padding(horizontal = Space.sm)) {
+                    Text("Tu resumen", style = OtoType.title, color = c.text)
+                    Text(if (recap.empty) "Aún no hay escuchas en este móvil" else "Desde el $since · en este móvil", style = OtoType.rowSub, color = c.textMuted)
+                }
+            }
+        }
+        if (recap.empty) return@LazyColumn
+        item(key = "numbers") {
+            Row(Modifier.fillMaxWidth().padding(horizontal = Space.sm), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                @Composable fun Stat(value: String, label: String, modifier: Modifier) =
+                    Column(modifier.clip(RoundedCornerShape(Radius.md)).background(c.field).padding(Space.md)) {
+                        Text(value, style = OtoType.rowTitle, color = c.text, maxLines = 1)
+                        Text(label, style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
+                    }
+                Stat(recapHours(recap.minutes), "escuchadas", Modifier.weight(1f))
+                Stat("${recap.songs}", "canciones", Modifier.weight(1f))
+                Stat("${recap.artists}", "artistas", Modifier.weight(1f))
+            }
+        }
+        item(key = "songsTitle") { SectionTitle("Tus canciones") }
+        itemsIndexed(recap.topSongs, key = { i, s -> "song:$i:${s.id}" }) { i, s ->
+            SongRow("${i + 1}. ${s.title}", s.artist, artwork(s.id), s.id == currentId, onClick = { onPlay(s) },
+                trailing = { Text(if (s.times == 1) "1 vez" else "${s.times} veces", style = OtoType.rowSub, color = c.textMuted) })
+        }
+        item(key = "artistsTitle") { SectionTitle("Tus artistas") }
+        item(key = "artists") {
+            val most = recap.topArtists.maxOfOrNull { it.minutes }?.coerceAtLeast(1) ?: 1
+            Column(Modifier.padding(horizontal = Space.sm), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+                recap.topArtists.forEachIndexed { i, a ->
+                    val open = a.id?.let { id -> Modifier.clickable { onArtist(id, a.name) } } ?: Modifier
+                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.sm)).then(open).padding(Space.xs)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("${i + 1}  ${a.name}", style = OtoType.rowTitle, color = c.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(recapHours(a.minutes), style = OtoType.rowSub, color = c.textMuted)
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(c.field)) {
+                            Box(Modifier.fillMaxHeight().fillMaxWidth((a.minutes.toFloat() / most * grow.value).coerceIn(0f, 1f))
+                                .clip(CircleShape).background(if (i == 0) c.accent else c.textMuted))
+                        }
+                    }
+                }
+            }
+        }
+        if (recap.months.size > 1) {
+            item(key = "monthsTitle") { SectionTitle("Mes a mes") }
+            item(key = "months") {
+                val most = recap.months.maxOf { it.minutes }.coerceAtLeast(1)
+                Row(Modifier.fillMaxWidth().height(140.dp).padding(horizontal = Space.sm), horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalAlignment = Alignment.Bottom) {
+                    recap.months.takeLast(6).forEach { m ->
+                        Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Bottom) {
+                            Text(recapHours(m.minutes), style = OtoType.rowSub, color = c.textMuted, maxLines = 1)
+                            Box(Modifier.padding(vertical = 4.dp).fillMaxWidth().fillMaxHeight((0.75f * m.minutes / most * grow.value).coerceIn(0.02f, 0.8f))
+                                .clip(RoundedCornerShape(Radius.sm)).background(if (m.minutes == most) c.accent else c.field))
+                            Text(m.month.month.getDisplayName(java.time.format.TextStyle.SHORT, es), style = OtoType.rowSub, color = c.textMuted)
+                        }
+                    }
+                }
+            }
+        }
+        recap.hour?.let { h -> item(key = "hour") {
+            Text("Tu hora: sobre las %02d:00 es cuando más escuchas.".format(h), style = OtoType.body, color = c.textMuted, modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.md))
+        } }
+        if (recap.djFinds > 0) item(key = "dj") {
+            Text(if (recap.djFinds == 1) "El DJ te descubrió 1 canción que escuchaste entera." else "El DJ te descubrió ${recap.djFinds} canciones que escuchaste enteras.",
+                style = OtoType.body, color = c.textMuted, modifier = Modifier.padding(horizontal = Space.lg))
+        }
+    }
+}

@@ -27,13 +27,18 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
     private val kv = OtoDirs.keyValue("local_link")
     private val identity = kv.getString("identity") ?: java.util.UUID.randomUUID().toString().also { kv.putString("identity", it) }
     private val secret = kv.getString("secret") ?: LocalLink.newSecret().also { kv.putString("secret", it) }
+    // La misma cola, el mismo JSONArray: el enlace solo la reenvía cuando cambia (ver StateOutbox).
+    private var queueCache: Pair<Any, JSONArray>? = null
+    private fun queueJson(queue: List<io.github.iaguito22.oto.playback.QueueEntry>): JSONArray =
+        queueCache?.takeIf { it.first === queue }?.second
+            ?: JSONArray(queue.map { JSONObject().put("id", it.id).put("title", it.title).put("artist", it.artist).put("artwork", it.artwork) }).also { queueCache = queue to it }
     val adapter = object : LinkPlayer {
         override fun snapshot(): JSONObject {
             val s = player.state.value
             return JSONObject().put("name", "Oto Desktop").put("id", s.id).put("title", s.title).put("artist", s.artist).put("artwork", s.artwork)
                 .put("playing", s.playing).put("buffering", s.buffering).put("duration", s.durationMs).put("position", player.position())
                 .put("volume",player.volume.value).put("index", s.index).put("shuffle", player.shuffle.value).put("loop", player.loop.value)
-                .put("queue", JSONArray(player.queue.value.map { JSONObject().put("id", it.id).put("title", it.title).put("artist", it.artist).put("artwork", it.artwork) }))
+                .put("queue", queueJson(player.queue.value))
                 .put("sourceKind", player.source.value?.kind).put("sourceTitle", player.source.value?.title)
         }
         override fun dj() = player.playDj {}
@@ -64,6 +69,7 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
     private val replica = LibraryReplica(prefs, java.io.File(OtoDirs.filesDir, "library-replica.json"))
     val syncNotice = replica.notice
     private val bridge = LinkedPlayback(adapter)
+    val mirror by lazy { RemoteMirror(link.remote, player.state, scope) }
     val link = LocalLink(scope, { adapter.snapshot().put("libraryHash", replica.digest()) }) { command ->
         when (command.optString("action")) {
             "library" -> replica.export()

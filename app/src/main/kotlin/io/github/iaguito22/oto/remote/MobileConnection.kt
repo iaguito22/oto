@@ -18,6 +18,11 @@ class MobileConnection(private val app: OtoApp) {
     var enabled = false
         private set
     private val player get() = app.player
+    // La misma cola, el mismo JSONArray: el enlace solo la reenvía cuando cambia (ver StateOutbox).
+    private var queueCache: Pair<Any, JSONArray>? = null
+    private fun queueJson(queue: List<io.github.iaguito22.oto.playback.QueueEntry>): JSONArray =
+        queueCache?.takeIf { it.first === queue }?.second
+            ?: JSONArray(queue.map { JSONObject().put("id",it.id).put("title",it.title).put("artist",it.artist).put("artwork",it.artwork) }).also { queueCache = queue to it }
     // Siempre lo de este teléfono, aunque la interfaz esté mostrando el ordenador (ver PlayerConnection.Mirror).
     val adapter = object : LinkPlayer {
         override fun snapshot(): JSONObject {
@@ -27,7 +32,7 @@ class MobileConnection(private val app: OtoApp) {
             return JSONObject().put("name", "Oto móvil").put("id", s.id).put("title", s.title).put("artist", s.artist).put("artwork", s.artwork)
                 .put("playing", s.playing).put("buffering", s.buffering).put("duration", s.durationMs).put("position", position)
                 .put("volume",audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()/audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)).put("index", s.index).put("shuffle", player.localShuffle.value).put("loop", player.localLoopMode.value != LoopMode.Off)
-                .put("queue", JSONArray(player.sessionQueue.value.map { JSONObject().put("id",it.id).put("title",it.title).put("artist",it.artist).put("artwork",it.artwork) }))
+                .put("queue", queueJson(player.sessionQueue.value))
                 .put("sourceKind", player.localSource.value?.kind).put("sourceTitle", player.localSource.value?.title)
         }
         override suspend fun like() { val s = player.localState.value; s.id?.let { app.prefs.toggleLike(Heard(it,s.title,s.artist,s.artwork)) } }

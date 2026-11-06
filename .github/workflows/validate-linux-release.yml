@@ -5,7 +5,7 @@ on:
       tag:
         description: Etiqueta de la release con los paquetes
         required: true
-        default: v2.0.0
+        default: v2.1.0
 permissions:
   # GitHub exige acceso de escritura al contenido para ver releases en borrador.
   # El trabajo solo descarga sus paquetes; no publica ni modifica la release.
