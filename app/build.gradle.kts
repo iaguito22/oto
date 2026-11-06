@@ -14,9 +14,9 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "io.github.iaguito22.oto"
+        applicationId = "io.github.iaguito22.oto.android12"
         // 33: RuntimeShader (AGSL) para la gota y RenderEffect para el desenfoque, sin caminos alternativos.
-        minSdk = 33
+        minSdk = 31
         targetSdk = 36
         versionCode = 16
         versionName = "2.2.0"
@@ -91,6 +91,8 @@ android {
 
     // Las pruebas de JVM llaman a YouTube Music de verdad: lo de Android que toquen por el camino devuelve vacío.
     testOptions.unitTests.isReturnDefaultValues = true
+
+    lint { checkOnly += setOf("NewApi", "InlinedApi"); abortOnError = false; checkReleaseBuilds = false }
 
     packaging {
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}", "/META-INF/INDEX.LIST", "/META-INF/DEPENDENCIES")

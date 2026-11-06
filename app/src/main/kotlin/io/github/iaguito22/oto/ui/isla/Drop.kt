@@ -178,8 +178,9 @@ fun Drop(
 
     state.leanPx = with(density) { 96.dp.toPx() }
     // La huella es el contorno de la misma gota: se estira, se parte y late igual, pero solo con un trazo fino.
-    val shader = remember(style) { RuntimeShader(if (style == DropStyle.Ring) RING_AGSL else DROP_AGSL) }
-    val brush = remember(shader) { ShaderBrush(shader) }
+    // Android 12 no tiene RuntimeShader (AGSL, Android 13): allí la gota es la unión de sus tres círculos (ver abajo).
+    val shader = remember(style) { if (android.os.Build.VERSION.SDK_INT >= 33) RuntimeShader(if (style == DropStyle.Ring) RING_AGSL else DROP_AGSL) else null }
+    val brush = remember(shader) { shader?.let { ShaderBrush(it) } }
     val px = remember(density) {
         with(density) { object {
             val body = 43.dp.toPx()
@@ -213,6 +214,28 @@ fun Drop(
 
             val wx = sin(state.phase * 1.6f) * px.wobbleX * state.wobble
             val wy = cos(state.phase * 1.3f) * px.wobbleY * state.wobble
+            if (shader == null || brush == null) {
+                // Sin shader: los mismos tres círculos que el AGSL mezcla, unidos en un solo contorno.
+                val a = accent()
+                fun circle(x: Float, y: Float, r: Float) = androidx.compose.ui.graphics.Path().apply {
+                    addOval(androidx.compose.ui.geometry.Rect(Offset(x, y), r.coerceAtLeast(0.5f)))
+                }
+                val body = circle(cx + state.px * 0.16f, cy + state.py * 0.16f, (px.body + px.bodyBeat * state.pulse) * s)
+                val mid = circle(cx + state.px * 0.52f, cy + state.py * 0.52f, px.mid * s)
+                val core = circle(cx + state.px + wx, cy + state.py + wy, (px.core + px.coreBeat * state.pulse) * s)
+                val shape = androidx.compose.ui.graphics.Path().apply {
+                    op(body, mid, androidx.compose.ui.graphics.PathOperation.Union)
+                    op(this, core, androidx.compose.ui.graphics.PathOperation.Union)
+                }
+                val alpha = (state.alpha * v).coerceIn(0f, 1f)
+                if (style == DropStyle.Ring) {
+                    drawPath(shape, a, alpha, androidx.compose.ui.graphics.drawscope.Stroke(px.ringStroke))
+                } else {
+                    drawPath(shape, lerp(BodyBase, a, 0.26f), alpha)
+                    drawPath(core, lerp(Color.White, a, 0.82f), alpha)
+                }
+                return@drawBehind
+            }
             shader.setFloatUniform("b0", cx + state.px * 0.16f, cy + state.py * 0.16f, (px.body + px.bodyBeat * state.pulse) * s)
             shader.setFloatUniform("b1", cx + state.px * 0.52f, cy + state.py * 0.52f, px.mid * s)
             shader.setFloatUniform("b2", cx + state.px + wx, cy + state.py + wy, (px.core + px.coreBeat * state.pulse) * s)
