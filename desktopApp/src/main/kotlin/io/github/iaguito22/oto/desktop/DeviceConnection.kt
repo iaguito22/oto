@@ -31,18 +31,18 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
     private var queueCache: Pair<Any, JSONArray>? = null
     private fun queueJson(queue: List<io.github.iaguito22.oto.playback.QueueEntry>): JSONArray =
         queueCache?.takeIf { it.first === queue }?.second
-            ?: JSONArray(queue.map { JSONObject().put("id", it.id).put("title", it.title).put("artist", it.artist).put("artwork", it.artwork) }).also { queueCache = queue to it }
+            ?: JSONArray(queue.map { JSONObject().put("id", it.id).put("title", it.title).put("artist", it.artist).put("artwork", it.artwork).put("artistId", it.artistId) }).also { queueCache = queue to it }
     val adapter = object : LinkPlayer {
         override fun snapshot(): JSONObject {
             val s = player.state.value
-            return JSONObject().put("name", "Oto Desktop").put("id", s.id).put("title", s.title).put("artist", s.artist).put("artwork", s.artwork)
+            return JSONObject().put("name", "Oto Desktop").put("id", s.id).put("title", s.title).put("artist", s.artist).put("artwork", s.artwork).put("artistId", s.artists.firstOrNull()?.second)
                 .put("playing", s.playing).put("buffering", s.buffering).put("duration", s.durationMs).put("position", player.position())
                 .put("volume",player.volume.value).put("index", s.index).put("shuffle", player.shuffle.value).put("loop", player.loop.value)
                 .put("queue", queueJson(player.queue.value))
                 .put("sourceKind", player.source.value?.kind).put("sourceTitle", player.source.value?.title)
         }
         override fun dj() = player.playDj {}
-        override suspend fun like() { val s = player.state.value; s.id?.let { prefs.toggleLike(Heard(it,s.title,s.artist,s.artwork)) } }
+        override suspend fun like() { val s = player.state.value; s.id?.let { prefs.toggleLike(Heard(it,s.title,s.artist,s.artwork,s.artists.firstOrNull()?.second)) } }
         override fun toggle() = player.toggle()
         override fun next() = player.next()
         override fun previous() = player.previous()
@@ -53,14 +53,14 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
         override fun move(from: Int, to: Int) = player.move(from, to)
         override fun remove(index: Int) = player.remove(index)
         override fun addToQueue(song: JSONObject, next: Boolean) {
-            val track = Heard(song.getString("id"), song.getString("title"), song.optString("artist"), song.optString("artwork").takeUnless { it.isBlank() || it == "null" }).toSong()
+            val track = Heard(song.getString("id"), song.getString("title"), song.optString("artist"), song.optString("artwork").takeUnless { it.isBlank() || it == "null" }, song.optString("artistId").takeUnless { it.isBlank() || it == "null" }).toSong()
             if (next) player.playNext(track) else player.enqueue(track)
         }
         override fun volume(value: Float) { player.adjustVolume(value - player.volume.value) }
         override fun setPlaying(on: Boolean) { if (player.state.value.playing != on) player.toggle() }
         override fun replace(state: JSONObject) {
             val a = state.getJSONArray("queue")
-            val songs = (0 until a.length()).map { i -> a.getJSONObject(i).let { Heard(it.getString("id"), it.getString("title"), it.getString("artist"), it.optString("artwork").takeUnless { s -> s.isBlank() || s == "null" }).toSong() } }
+            val songs = (0 until a.length()).map { i -> a.getJSONObject(i).let { Heard(it.getString("id"), it.getString("title"), it.getString("artist"), it.optString("artwork").takeUnless { s -> s.isBlank() || s == "null" }, it.optString("artistId").takeUnless { s -> s.isBlank() || s == "null" }).toSong() } }
             player.prepareTransfer(songs, state.optInt("index").coerceIn(songs.indices), state.optLong("position"), state.optBoolean("shuffle"))
         }
     }

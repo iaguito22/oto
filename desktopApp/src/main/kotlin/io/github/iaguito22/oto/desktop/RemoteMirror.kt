@@ -65,7 +65,7 @@ internal class RemoteMirror(remote: StateFlow<JSONObject?>, local: StateFlow<Now
             fun text(key: String) = state.optString(key).takeUnless { it == "null" }.orEmpty()
             val artist = text("artist")
             val now = NowPlaying(
-                id = text("id").ifBlank { null }, title = text("title"), artist = artist, artists = listOf(artist to null),
+                id = text("id").ifBlank { null }, title = text("title"), artist = artist, artists = listOf(artist to text("artistId").ifBlank { null }),
                 artwork = text("artwork").ifBlank { null }, playing = state.optBoolean("playing"), buffering = state.optBoolean("buffering"),
                 durationMs = state.optLong("duration").coerceAtLeast(0), index = state.optInt("index").coerceAtLeast(0),
             )

@@ -12,6 +12,8 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.foundation.window.WindowDraggableArea
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -192,7 +194,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     var palette by remember { mutableStateOf(ArtworkPalette()) }
     LaunchedEffect(nowPlaying.artwork) { val (bmp, pal) = ArtworkLoader.load(nowPlaying.artwork); artwork = bmp; palette = pal }
     val backdrop by produceState<ImageBitmap?>(null, artwork, artworkBackground) { value = if(artworkBackground && artwork != null) blurredBackdrop(artwork!!) else null }
-    fun like() { nowPlaying.id?.let { id -> uiScope.launch { prefs.setLiked(Heard(id, nowPlaying.title, nowPlaying.artist, nowPlaying.artwork), !isLiked) } } }
+    fun like() { nowPlaying.id?.let { id -> uiScope.launch { prefs.setLiked(Heard(id, nowPlaying.title, nowPlaying.artist, nowPlaying.artwork, nowPlaying.artists.firstOrNull()?.second), !isLiked) } } }
     val playerWindow = rememberDockState(docking,DockId.Player)
     val libraryWindow = rememberDockState(docking,DockId.Library)
     val queueWindow = rememberDockState(docking,DockId.Queue)
@@ -252,7 +254,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         return when {
             event.isCtrlPressed && event.isShiftPressed && event.key == Key.M -> {changeForm(PlayerForm.entries[(form.ordinal+1)%PlayerForm.entries.size]);true}
             event.isCtrlPressed && (event.key == Key.K || event.key == Key.F) -> { menuOpen = true;true }
-            event.isCtrlPressed && event.key == Key.B -> { nowPlaying.id?.let{openSave(Heard(it,nowPlaying.title,nowPlaying.artist,nowPlaying.artwork), "atajo Ctrl+B")};true }
+            event.isCtrlPressed && event.key == Key.B -> { nowPlaying.id?.let{openSave(Heard(it,nowPlaying.title,nowPlaying.artist,nowPlaying.artwork,nowPlaying.artists.firstOrNull()?.second), "atajo Ctrl+B")};true }
             event.key == Key.F1 -> { libraryRequest=(libraryRequest.first+1) to 0;menuOpen=true;true }
             event.key == Key.F2 -> { libraryRequest=(libraryRequest.first+1) to 1;menuOpen=true;true }
             event.key == Key.Spacebar || event.key == Key.MediaPlayPause -> { playPause();true }
@@ -295,7 +297,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         PlayerSurface(nowPlaying,if(m != null) devices.mirror.position else player.positionMs,artwork,form,chrome,player::beat,coverBeat && m == null,isLiked,showRemaining,
             ::playPause,::skipPrevious,::skipNext,::seek,menuOpen,lyricsOpen,queueOpen,
             {menuOpen=!menuOpen},{lyricsOpen=!lyricsOpen},{queueOpen=!queueOpen},::like,
-            {nowPlaying.id?.let{openSave(Heard(it,nowPlaying.title,nowPlaying.artist,nowPlaying.artwork), "reproductor")}}, if(m != null) m.source else source, {
+            {nowPlaying.id?.let{openSave(Heard(it,nowPlaying.title,nowPlaying.artist,nowPlaying.artwork,nowPlaying.artists.firstOrNull()?.second), "reproductor")}}, if(m != null) m.source else source, {
                 val src=source; if(m != null) devicesOpen=true
                 else if(src?.item != null || src?.local != null) { jump=LibraryJump(jump.version+1,src?.item,src?.local);menuOpen=true } else if(src?.kind != "DJ") queueOpen=true
             }, {id,name -> jump=LibraryJump(jump.version+1,artistId=id,artistName=name);menuOpen=true},
@@ -348,7 +350,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             SmallAction(Icons.Rounded.PlayArrow,if(playerOpen) "Cerrar reproductor" else "Abrir reproductor",active=playerOpen) { docking.toggle(DockId.Player,DockId.Library) }
             SmallAction(MobileIcons.lyrics,if(lyricsOpen) "Cerrar letra" else "Abrir letra",active=lyricsOpen) { docking.toggle(DockId.Lyrics,DockId.Library) }
             SmallAction(MobileIcons.queueMusic,if(queueOpen) "Cerrar cola" else "Abrir cola",active=queueOpen) { docking.toggle(DockId.Queue,DockId.Library) }        },keys={event -> if(librarySearchFocused && event.key==Key.Spacebar) false else shortcuts(event)}) {
-        LibrarySpace(player,prefs,menu,importer,account,cloud,login,downloads,palette,{openSave(it, "biblioteca")},{devicesOpen=true},libraryRequest,jump,artworkBackground,{ artworkBackground=it;kv.putString("artwork_background",it.toString()) },{librarySearchFocused=it},{ devices.requestAccount(); devicesOpen=true }, backdrop != null, backdropOpacity,{backdropOpacity=it;kv.putString("artwork_opacity",it.toString())}, { val src=source; if(src?.item != null || src?.local != null) jump=LibraryJump(jump.version+1,src?.item,src?.local) else if(src?.kind != "DJ") queueOpen=true }, shortcut,shortcutIssue,{shortcut=it;kv.putString("shortcut",it)},playerVisible=playerOpen,remoteLink=devices.link,following=mirrored?.now)
+        LibrarySpace(player,prefs,menu,importer,account,cloud,login,downloads,palette,{openSave(it, "biblioteca")},{devicesOpen=true},libraryRequest,jump,artworkBackground,{ artworkBackground=it;kv.putString("artwork_background",it.toString()) },{librarySearchFocused=it},{ devices.requestAccount(); devicesOpen=true }, backdrop != null, backdropOpacity,{backdropOpacity=it;kv.putString("artwork_opacity",it.toString())}, { val src=source; if(src?.item != null || src?.local != null) jump=LibraryJump(jump.version+1,src?.item,src?.local) else if(src?.kind != "DJ") queueOpen=true }, shortcut,shortcutIssue,{shortcut=it;kv.putString("shortcut",it)},playerVisible=playerOpen && menuOpen && docking.layout.group(DockId.Library).members.contains(DockId.Player),remoteLink=devices.link,following=mirrored?.now)
     }
     ModuleWindow("Guardar",rememberModuleState("save",380,540),savingTrack!=null && !windowsHidden,{savingTrack=null}) {
         savingTrack?.let { SaveSpace(it,prefs,palette) }
@@ -459,7 +461,10 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
     val highlighted = dockId != null && (dock?.preview?.target == dockId || dock?.reorderPreview?.second == dockId)
     val compactLibrary = title == "Tu música" && windowState.size.width <= 800.dp
     key(dockId ?: title) {
+    // Acopladas: sin el borde de redimensionado invisible de Compose. Se adelantaba a la unión y a DockEdges y
+    // estiraba una sola ventana (medido: maximizado, arrastrar la unión desplazaba el conjunto 480 px).
     Window(onCloseRequest = close, state = windowState, visible = true, title = "Oto · $title", undecorated = true, transparent = true, alwaysOnTop = pinned,
+        resizable = dock == null || dockId == null,
         icon = painterResource("oto-icon.png"), onKeyEvent = { if (keys(it)) true else if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { close(); true } else false }) {
         SmoothWheel.Driver(window)
         // Compose fija un único icono de 192 px y Windows lo reduce mal: darle todos los tamaños.
@@ -652,13 +657,29 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
                             val hovered by interaction.collectIsHoveredAsState()
                             Box(Modifier.align(align).fillMaxHeight().padding(vertical=40.dp).width(14.dp)
                                 .hoverable(interaction).pointerInput(left,dock) {
-                                    var remainder=0f
-                                    fun finish() { dock.geometrySettlesAt=System.nanoTime()+250_000_000L; dock.draggingGroup=false }
-                                    detectDragGestures(onDragStart={ remainder=0f; dock.draggingGroup=true },onDragEnd={ finish() },onDragCancel={ finish() }) { change,delta ->
-                                        change.consume()
-                                        remainder += delta.x / density.density
-                                        val step=remainder.toInt()
-                                        if(step != 0 && left in dock.layout.bounds) { dock.layout.resizeDivider(left,step); remainder-=step }
+                                    // Puntero en pantalla, no el desplazamiento de Compose: este tirador puede estar en la
+                                    // ventana de la derecha, que se mueve con la unión, y los desplazamientos salían falseados.
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(requireUnconsumed = false)
+                                        down.consume()
+                                        val start = java.awt.MouseInfo.getPointerInfo()?.location ?: return@awaitEachGesture
+                                        val seam = dock.layout.bounds[left]?.let { it.x + it.width } ?: return@awaitEachGesture
+                                        dock.draggingGroup = true
+                                        try {
+                                            while (true) {
+                                                val change = awaitPointerEvent().changes.first()
+                                                if (!change.pressed || left !in dock.layout.bounds) break
+                                                change.consume()
+                                                val p = java.awt.MouseInfo.getPointerInfo()?.location ?: continue
+                                                val now = dock.layout.bounds.getValue(left).let { it.x + it.width }
+                                                val step = seam + (p.x - start.x) - now
+                                                if (step != 0) { dock.layout.resizeDivider(left, step); dock.applyGroupBounds(left) }
+                                            }
+                                        } finally {
+                                            dock.geometrySettlesAt = System.nanoTime() + 250_000_000L
+                                            dock.draggingGroup = false
+                                            if (left in dock.layout.bounds) dock.syncGroupBounds(left)
+                                        }
                                     }
                                 },contentAlignment=Alignment.Center) {
                                 if(hovered) Box(Modifier.width(3.dp).height(38.dp).clip(RoundedCornerShape(50)).background(Color.White.copy(alpha=.5f)))

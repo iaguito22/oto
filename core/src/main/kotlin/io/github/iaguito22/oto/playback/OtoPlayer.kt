@@ -29,7 +29,8 @@ data class NowPlaying(
 data class Source(val kind: String, val title: String, val item: YTItem? = null, val local: String? = null)
 
 /** Una canción de la cola; [index] es su posición en la lista del reproductor. */
-data class QueueEntry(val index: Int, val id: String, val title: String, val artist: String, val artwork: String?, val auto: Boolean = false)
+/** [artistId]: del primer artista. Viaja por el enlace con el otro aparato para que su nombre siga siendo un enlace. */
+data class QueueEntry(val index: Int, val id: String, val title: String, val artist: String, val artwork: String?, val auto: Boolean = false, val artistId: String? = null)
 
 /**
  * Contrato común del reproductor para Android (`PlayerConnection` sobre Media3) y Desktop (`DesktopPlayerConnection`).

@@ -19,6 +19,13 @@ internal object DesktopBeat {
             }
         }
     }
+    /** El golpe más fuerte de los [window] trozos (de 512 muestras a 48 kHz) que acaban en [positionMs]. */
+    fun peak(values: FloatArray, positionMs: Long, window: Int): Float {
+        val end = (positionMs.coerceAtLeast(0L) * 48000 / 512000).toInt()
+        var peak = 0f
+        for (i in maxOf(0, end - window + 1)..end) peak = maxOf(peak, values.getOrElse(i) { 0f })
+        return peak
+    }
     fun analyze(file: File, cancelled: () -> Boolean): FloatArray {
         val values=ArrayList<Float>()
         val detector=Detector { values.add(it) }

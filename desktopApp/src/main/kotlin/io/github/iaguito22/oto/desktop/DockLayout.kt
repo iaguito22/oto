@@ -89,6 +89,7 @@ internal class DockLayout {
     fun resize(id: DockId, width: Int, height: Int, top: Int? = null) {
         val g = group(id)
         if (g.maximized) return
+        squeezed.remove(id)
         val first = bounds.getValue(g.members.first())
         bounds[id] = bounds.getValue(id).copy(width = max(minWidth(id), width))
         val newHeight = max(height, g.members.maxOf { minHeight(it) })
@@ -108,17 +109,29 @@ internal class DockLayout {
     fun resizeEdge(id: DockId, edge: DockEdge, to: Int) {
         val g = group(id)
         releaseMaximized(id)
+        g.members.forEach { squeezed.remove(it) }
         val first = bounds.getValue(g.members.first())
         val last = bounds.getValue(g.members.last())
         val minHeight = g.members.maxOf { minHeight(it) }
+        /** Crece la ventana del borde; al encoger, cuando una llega a su mínimo sigue la siguiente hacia dentro. */
+        fun spread(order: List<DockId>, total: Int) {
+            var change = total - g.members.sumOf { bounds.getValue(it).width }
+            if (change > 0) { val id = order.first(); bounds[id] = bounds.getValue(id).let { it.copy(width = it.width + change) }; return }
+            for (id in order) {
+                if (change == 0) break
+                val r = bounds.getValue(id)
+                val cut = (-change).coerceAtMost(r.width - minWidth(id))
+                bounds[id] = r.copy(width = r.width - cut); change += cut
+            }
+        }
         when (edge) {
             DockEdge.Left -> {
-                val width = (first.x + first.width - to).coerceAtLeast(minWidth(g.members.first()))
-                bounds[g.members.first()] = first.copy(width = width)
-                flow(g, first.x + first.width - width, first.y, first.height)
+                val right = last.x + last.width
+                spread(g.members, right - to)
+                flow(g, right - g.members.sumOf { bounds.getValue(it).width }, first.y, first.height)
             }
             DockEdge.Right -> {
-                bounds[g.members.last()] = last.copy(width = (to - last.x).coerceAtLeast(minWidth(g.members.last())))
+                spread(g.members.reversed(), to - first.x)
                 flow(g, first.x, first.y, first.height)
             }
             DockEdge.Top -> {
@@ -138,6 +151,7 @@ internal class DockLayout {
         val right = bounds.getValue(rightId)
         val movement = delta.coerceIn(minWidth(leftId) - left.width, right.width - minWidth(rightId))
         if (movement == 0) return
+        squeezed.remove(leftId); squeezed.remove(rightId)
         g.beforeAttach.clear()
         val first = bounds.getValue(g.members.first())
         bounds[leftId] = left.copy(width = left.width + movement)
@@ -171,7 +185,8 @@ internal class DockLayout {
         }
         changed()
     }
-    private fun fit(g: DockGroup): Boolean {
+    /** [tight]: si no cabe, encoge también las demás hasta su mínimo (al soltar en una pantalla estrecha). */
+    private fun fit(g: DockGroup, tight: Boolean = false): Boolean {
         val area = g.area ?: return true
         if (area.height < g.members.maxOf { minHeight(it) }) return false
         val flexible = if (DockId.Library in g.members) DockId.Library else if (DockId.Lyrics in g.members) DockId.Lyrics else if (DockId.Queue in g.members) DockId.Queue else DockId.Player
@@ -180,6 +195,14 @@ internal class DockLayout {
         g.members.filter { it != flexible }.forEach { id ->
             val reduction = excess.coerceAtLeast(0).coerceAtMost((widths.getValue(id) - (defaults[id] ?: id.defaultWidth)).coerceAtLeast(0))
             widths[id] = widths.getValue(id) - reduction; excess -= reduction
+        }
+        if (tight) {
+            // Lo que aún sobre, tras dejar a la flexible en su mínimo, sale de las demás hasta su mínimo.
+            var still = excess - (widths.getValue(flexible) - minWidth(flexible)).coerceAtLeast(0)
+            g.members.filter { it != flexible }.forEach { id ->
+                val reduction = still.coerceAtLeast(0).coerceAtMost((widths.getValue(id) - minWidth(id)).coerceAtLeast(0))
+                widths[id] = widths.getValue(id) - reduction; still -= reduction; excess -= reduction
+            }
         }
         val others = widths.filterKeys { it != flexible }.values.sum()
         val floor = if(flexible == DockId.Library) minWidth(flexible)
@@ -238,7 +261,7 @@ internal class DockLayout {
             abs(left.y - bounds.getValue(c.target).y) <= 48 && gap(c) <= proximity
         }.minByOrNull { c -> abs(left.y - bounds.getValue(c.target).y) + gap(c) }
     }
-    fun maximize(id: DockId, area: DockRect): Boolean {
+    fun maximize(id: DockId, area: DockRect, tight: Boolean = false): Boolean {
         val g = group(id)
         if (g.maximized) {
             g.members.forEach { g.restored[it]?.let { r -> bounds[it] = r } }
@@ -258,10 +281,27 @@ internal class DockLayout {
         } else {
             g.restored.putAll(g.members.associateWith { bounds.getValue(it) })
             g.area = area
-            if (!fit(g)) { g.area = null; g.restored.clear(); return false }
+            if (!fit(g, tight)) { g.area = null; g.restored.clear(); return false }
             g.maximized = true
         }
         changed(); return true
+    }
+    /**
+     * Ajusta el conjunto a [area] (media pantalla, un cuarto o la pantalla entera), como Snap.
+     * Recuerda el tamaño normal de antes del primer ajuste: pasar de una mitad a otra o a
+     * maximizado y luego restaurar vuelve a él, no a la mitad.
+     */
+    fun snap(id: DockId, area: DockRect): Boolean {
+        val g = group(id)
+        // Como al soltar: antes de rechazarlo, las ventanas encogen hasta su mínimo.
+        if (!g.maximized) return maximize(id, area, tight = true)
+        val previous = g.area
+        val before = bounds.toMap()
+        g.area = area
+        if (fit(g, tight = true)) { changed(); return true }
+        g.area = previous
+        bounds.putAll(before)
+        return false
     }
     fun close(id: DockId) {
         val g = group(id)
@@ -336,22 +376,54 @@ internal class DockLayout {
             val g = pending.removeAt(0)
             val leader = bounds.getValue(g.leader)
             // Por el centro de la barra superior: es lo que el usuario ve y agarra.
-            val area = nearestArea(areas, leader.x + leader.width / 2, leader.y + 20)
-            val first = bounds.getValue(g.members.first())
-            if(g.maximized || g.members.sumOf { bounds.getValue(it).width } > area.width) {
-                g.area = area
-                while(!fit(g) && g.members.size > 1) {
-                    val leaf = listOf(g.members.first(),g.members.last()).filter { it != g.leader }.minBy { it.rank }
-                    detach(leaf)
-                    pending += group(leaf)
-                }
-                if(!g.maximized) { g.area = null; flow(g,first.x,first.y,first.height.coerceAtMost(area.height).coerceAtLeast(g.members.maxOf { minHeight(it) })) }
-            } else {
-                flow(g,first.x,first.y,first.height.coerceAtMost(area.height).coerceAtLeast(g.members.maxOf { minHeight(it) }))
-            }
-            if(!g.maximized) constrain(g.leader,area)
+            settle(g, nearestArea(areas, leader.x + leader.width / 2, leader.y + 20), pending)
         }
         changed()
+    }
+    /**
+     * Mete el conjunto entero en [area] (la pantalla donde se soltó). Si es más ancho, encoge
+     * Tu música/letra/cola hasta su tamaño por defecto y, si aun así no cabe, separa las piezas
+     * de los extremos, que se quedan también dentro. Antes sobresalía hacia la pantalla vecina y,
+     * con escalas distintas, cada ventana quedaba a un tamaño y altura diferentes.
+     */
+    fun settleInto(id: DockId, area: DockRect) {
+        val pending = mutableListOf(group(id))
+        while (pending.isNotEmpty()) settle(pending.removeAt(0), area, pending)
+        changed()
+    }
+    /** Anchos de antes de encoger un conjunto para que cupiese en una pantalla estrecha. */
+    val squeezed = mutableMapOf<DockId, Int>()
+    private fun settle(g: DockGroup, area: DockRect, pending: MutableList<DockGroup>) {
+        if (!g.maximized && g.members.any { it in squeezed }) {
+            // De vuelta en una pantalla con sitio: cada ventana recupera su ancho.
+            val natural = g.members.associateWith { squeezed[it] ?: bounds.getValue(it).width }
+            if (natural.values.sum() <= area.width) {
+                val start = bounds.getValue(g.members.first())
+                natural.forEach { (id, w) -> bounds[id] = bounds.getValue(id).copy(width = w); squeezed.remove(id) }
+                flow(g, start.x, start.y, start.height)
+            }
+        }
+        val before = g.members.associateWith { bounds.getValue(it).width }
+        settleFit(g, area, pending)
+        if (!g.maximized) before.forEach { (id, w) ->
+            if (id in bounds && bounds.getValue(id).width < w && id !in squeezed) squeezed[id] = w
+        }
+    }
+    private fun settleFit(g: DockGroup, area: DockRect, pending: MutableList<DockGroup>) {
+        val first = bounds.getValue(g.members.first())
+        if(g.maximized || g.members.sumOf { bounds.getValue(it).width } > area.width) {
+            g.area = if (g.maximized) area else area.copy(y = first.y.coerceIn(area.y, max(area.y, area.y + area.height - first.height)),
+                height = first.height.coerceAtMost(area.height))
+            while(!fit(g, tight = true) && g.members.size > 1) {
+                val leaf = listOf(g.members.first(),g.members.last()).filter { it != g.leader }.minBy { it.rank }
+                detach(leaf)
+                pending += group(leaf)
+            }
+            if(!g.maximized) { g.area = null; val now = bounds.getValue(g.members.first()); flow(g,now.x,now.y,now.height.coerceAtMost(area.height).coerceAtLeast(g.members.maxOf { minHeight(it) })) }
+        } else {
+            flow(g,first.x,first.y,first.height.coerceAtMost(area.height).coerceAtLeast(g.members.maxOf { minHeight(it) }))
+        }
+        if(!g.maximized) constrain(g.leader,area)
     }
     fun organize(area: DockRect) {
         val ids = bounds.keys.sortedByDescending { it.rank }

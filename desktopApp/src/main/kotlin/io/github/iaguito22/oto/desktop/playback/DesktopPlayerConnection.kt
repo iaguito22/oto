@@ -955,6 +955,7 @@ class DesktopPlayerConnection(
                 title = s.title,
                 artist = s.artists.joinToString { it.name },
                 artwork = s.thumbnail,
+                artistId = s.artists.firstOrNull()?.id,
             )
         }
         _previousEntry.value = if (currentIndex > 0) _queue.value.getOrNull(currentIndex - 1) else null

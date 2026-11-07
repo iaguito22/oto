@@ -22,4 +22,12 @@ class DesktopBeatTest {
         assertTrue(pulses.count{it==0f}>pulses.size/2)
         assertTrue(pulses.all{it in 0f..1f})
     }
+    @Test fun aKickBetweenTwoReadsIsNotLost() {
+        // Un bombo en un solo trozo (el 10, 106,7–117,3 ms); la carátula lee a los 100 y a los 125 ms.
+        val values=FloatArray(40).also{it[10]=1f}
+        assertEquals(0f,DesktopBeat.peak(values,100,1)); assertEquals(0f,DesktopBeat.peak(values,125,1))
+        assertEquals(1f,DesktopBeat.peak(values,125,3))
+        assertEquals(0f,DesktopBeat.peak(values,160,3)) // ya pasó: no se repite
+        assertEquals(0f,DesktopBeat.peak(FloatArray(0),50,3))
+    }
 }

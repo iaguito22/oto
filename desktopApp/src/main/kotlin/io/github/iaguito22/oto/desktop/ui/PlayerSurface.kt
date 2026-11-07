@@ -176,7 +176,8 @@ internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:Imag
                 else { pop.animateTo(.78f, tween(90)); pop.animateTo(1f, Motion.release()) }
             }
         }
-        Box(modifier.size(30.dp).hoverable(interaction).combinedClickable(interactionSource=interaction,indication=null,onClick=onLike,onLongClick=onSave).semantics {contentDescription="Me gusta; mantener para guardar en una lista"},contentAlignment=Alignment.Center) {
+        // Un clic abre «Guardar» (Me gusta va primero ahí); antes había que mantenerlo. Doble clic en la carátula: Me gusta directo.
+        Box(modifier.size(30.dp).hoverable(interaction).clickable(interactionSource=interaction,indication=null,onClick=onSave).semantics {contentDescription="Guardar en Me gusta o en una lista"},contentAlignment=Alignment.Center) {
             Icon(if(liked) MobileIcons.favorite else MobileIcons.favoriteOutline,if(liked)"En Me gusta" else "Me gusta",
                 Modifier.size(16.dp).graphicsLayer { val s=scale*pop.value;scaleX=s;scaleY=s },tint=Color.White.copy(alpha=tint))
         }
@@ -221,7 +222,16 @@ internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:Imag
                     val d=remember { direction }
                     Column {Text(song.title.ifBlank{"Elige tu música"},style=OtoType.title,maxLines=1,overflow=TextOverflow.Ellipsis)
                         // El artista llega un instante después que el título, con el mismo sentido.
-                        Text(buildAnnotatedString { if(song.artists.isEmpty()) append(song.artist) else song.artists.forEachIndexed { i,(name,id) -> if(i>0) append(", "); if(id!=null) pushLink(LinkAnnotation.Clickable(id) { onArtist(id,name) }); append(name); if(id!=null) pop() } },Modifier.animateEnterExit(
+                        // Sin id también se puede clicar: se busca por nombre (onArtist con id vacío).
+                        Text(buildAnnotatedString {
+                            val shown = song.artists.ifEmpty { if(song.artist.isBlank() || song.id == null) emptyList() else listOf(song.artist to null) }
+                            if(shown.isEmpty()) append(song.artist) else shown.forEachIndexed { i,(name,id) ->
+                                if(i>0) append(", ")
+                                val link = name.isNotBlank() && song.id != null
+                                if(link) pushLink(LinkAnnotation.Clickable(id ?: "name:$name") { onArtist(id.orEmpty(),name) })
+                                append(name); if(link) pop()
+                            }
+                        },Modifier.animateEnterExit(
                             enter=slideInHorizontally(tween(420,delayMillis=70,easing=Motion.EmphasizedDecelerate)){d*it/5}+fadeIn(tween(260,delayMillis=90)),
                             exit=ExitTransition.None),style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),maxLines=1)}
                 }

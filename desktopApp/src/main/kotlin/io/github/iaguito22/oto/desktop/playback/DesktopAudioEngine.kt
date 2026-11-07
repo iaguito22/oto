@@ -53,10 +53,23 @@ class DesktopAudioEngine(
     @Volatile private var beatFile: String? = null
     @Volatile private var beatLength = 0L
     private var beatJob: Job? = null
+    /**
+     * Golpe de graves de lo que suena. La carátula lo lee cada ~20 ms y un bombo dura uno o dos trozos de
+     * 10,7 ms: con un solo trozo muchos caían entre dos lecturas. Se da el más fuerte de los últimos ~32 ms.
+     */
     fun beat(positionMs: Long): Float {
         if (!_state.value.playing || _state.value.buffering || activeFile?.absolutePath != beatFile) return 0f
-        val position = if (useFfmpegPcm) currentLine?.let { startOffsetMs + it.longFramePosition * 1000 / 48000 } ?: positionMs else positionMs
-        return beats.getOrElse((position.coerceAtLeast(0L) * 48000 / 512000).toInt()) { 0f }
+        val position = if (useFfmpegPcm) currentLine?.let { startOffsetMs + lineFrames(it) * 1000 / 48000 } ?: positionMs else positionMs
+        return DesktopBeat.peak(beats, position, BEAT_WINDOW)
+    }
+    @Volatile private var clockFrames = -1L
+    @Volatile private var clockNanos = 0L
+    /** La posición de la línea avanza a saltos de 10 ms (medido): entre salto y salto se sigue con el reloj. */
+    private fun lineFrames(line: SourceDataLine): Long {
+        val frames = line.longFramePosition
+        val now = System.nanoTime()
+        if (frames != clockFrames) { clockFrames = frames; clockNanos = now; return frames }
+        return frames + ((now - clockNanos) * 48 / 1_000_000).coerceIn(0L, 480L)
     }
     private fun analyzeBeat(file: File) {
         if (beatFile == file.absolutePath && beatLength == file.length()) return
@@ -450,5 +463,7 @@ class DesktopAudioEngine(
 
     companion object {
         private const val MIN_PLAYABLE_BYTES = 64 * 1024L
+        /** Trozos de 10,7 ms que mira [beat]: ~32 ms, algo más que lo que tarda la carátula entre lecturas. */
+        private const val BEAT_WINDOW = 3
     }
 }

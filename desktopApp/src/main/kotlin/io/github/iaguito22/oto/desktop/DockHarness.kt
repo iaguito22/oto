@@ -11,7 +11,11 @@ import androidx.compose.ui.window.*
 /** Usa ModuleWindow, el mismo marco de la aplicación, sin servicios ni preferencias de usuario. */
 @Composable
 internal fun ApplicationScope.DockHarness() {
-    val session = remember { DockSession(initialDockLayout()) }
+    // Reproductor y Tu música acoplados, como al instalar Oto; OTO_DOCK_HARNESS_LYRICS=1 añade la letra.
+    val session = remember { DockSession(initialDockLayout()).apply {
+        open(DockId.Library, DockId.Player)
+        if (System.getenv("OTO_DOCK_HARNESS_LYRICS") == "1") open(DockId.Lyrics, DockId.Library)
+    } }
     val revision = session.revision
     for (id in DockId.entries) {
         val rect = session.layout.bounds[id] ?: continue
@@ -19,6 +23,8 @@ internal fun ApplicationScope.DockHarness() {
             val state = rememberWindowState(position = WindowPosition(rect.x.dp, rect.y.dp), size = androidx.compose.ui.unit.DpSize(rect.width.dp, rect.height.dp))
             ModuleWindow(when(id) { DockId.Library -> "Tu música"; DockId.Player -> "Reproductor"; DockId.Queue -> "Cola"; DockId.Lyrics -> "Letra" },
                 state, true, { session.layout.close(id); if (session.layout.bounds.isEmpty()) exitApplication() },
+                // Pruebas automáticas: por encima de todo para que los clics simulados lleguen aquí.
+                pinned = System.getenv("OTO_DOCK_HARNESS_TOP") == "1",
                 dock = session, dockId = id,
                 extra = {}) {
                 Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {

@@ -147,8 +147,23 @@ open class MenuController(protected val scope: CoroutineScope) {
         }
     }
 
-    fun openArtist(id: String, name: String) =
-        open(ArtistItem(id = id, title = name, thumbnail = null, shuffleEndpoint = null, radioEndpoint = null))
+    /**
+     * Sin [id] (canciones guardadas sin él, p. ej. algunos Me gusta de Ariana Grande), se busca el
+     * artista por su nombre: antes el nombre no se podía clicar.
+     */
+    fun openArtist(id: String, name: String) {
+        if (id.isNotBlank()) { open(ArtistItem(id = id, title = name, thumbnail = null, shuffleEndpoint = null, radioEndpoint = null)); return }
+        if (name.isBlank()) return
+        scope.launch {
+            val found = withContext(Dispatchers.IO) {
+                val items = YouTube.search(name, YouTube.SearchFilter.FILTER_ARTIST).getOrNull()?.items
+                    ?.filterIsInstance<ArtistItem>()?.filter { !it.isProfile }.orEmpty()
+                val want = io.github.iaguito22.oto.importer.Matcher.norm(name)
+                items.firstOrNull { io.github.iaguito22.oto.importer.Matcher.norm(it.title) == want } ?: items.firstOrNull()
+            }
+            if (found != null) open(found)
+        }
+    }
 
     fun openLocal(id: String) = _state.update { it.copy(pages = it.pages + Page.Local(id)) }
 

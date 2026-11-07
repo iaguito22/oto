@@ -146,6 +146,10 @@ internal class DockSession(val layout: DockLayout, val supportsMaximize: Boolean
         geometrySettlesAt = System.nanoTime() + 400_000_000L
     }
     fun trace(message: String) { if(System.getenv("OTO_DOCK_TRACE") == "1") println("Dock: $message") }
+    /** Windows (pantallas reales): arrastre y Snap del propio Windows. Las pruebas pasan sus zonas y no lo usan. */
+    val nativeMoves = areas == null && System.getProperty("os.name").startsWith("Windows")
+    /** Durante el arrastre las ventanas las mueve Windows ([startNativeDrag]); Compose no debe moverlas. */
+    var nativeDrag = false
     /**
      * Mueve ya, en el mismo evento, todas las ventanas del conjunto de [id] a su posición
      * del modelo. Si cada ventana esperase a su propio fotograma de Compose, se moverían en
@@ -160,6 +164,155 @@ internal class DockSession(val layout: DockLayout, val supportsMaximize: Boolean
         }
     }
     private fun Window.iconified() = this is Frame && extendedState and Frame.ICONIFIED != 0
+    private var dragTimer: javax.swing.Timer? = null
+    /**
+     * Arrastre del conjunto de [id] con el bucle de mover de Windows ([beginSystemMove]): Windows mueve la
+     * ventana agarrada, hace su propio Snap (mitades, cuartos, maximizar, diseños de Windows 11) y el cambio
+     * de escala entre pantallas. Las demás del conjunto la siguen en píxeles físicos. Al soltar, si Windows
+     * la dejó en un hueco suyo, el conjunto entero se ajusta a ese hueco; si no, se acopla o se recoloca
+     * dentro de la pantalla que más tapa.
+     */
+    fun startNativeDrag(id: DockId, grab: Point, screens: List<SnapScreen>) {
+        val dragged = windows[id] ?: return
+        dragTimer?.stop()
+        draggingGroup = true; nativeDrag = true
+        // El tamaño de ahora (p. ej. el restaurado al sacarlo de maximizado) antes de que Windows lo coja.
+        applyGroupBounds(id)
+        if (!beginSystemMove(dragged)) { draggingGroup = false; nativeDrag = false; return }
+        trace("system move $id")
+        var releasedAt = 0L
+        var lastRect: DockRect? = null
+        var stable = 0
+        fun finish() {
+            dragTimer?.stop(); dragTimer = null
+            val candidate = preview
+            preview = null
+            if (id in layout.bounds && dragged.isShowing) {
+                val zoomed = isZoomed(dragged)
+                val actual = dragged.bounds
+                val overlap = if (layout.group(id).members.last() != id) 1 else 0
+                val center = Point(actual.x + actual.width / 2, actual.y + actual.height / 2)
+                val placed = DockRect(actual.x, actual.y, actual.width - overlap, actual.height)
+                // Lo pregunta a Windows: un cambio de tamaño también puede ser el de escala al cambiar de pantalla.
+                // Cualquier hueco suyo vale (mitades, cuartos, tercios y demás diseños de Windows 11).
+                // Windows conserva «ajustada» al sacarla de un Snap anterior: solo cuenta si además le cambió el tamaño.
+                // El maximizado de arriba llega después del bucle: lo recoge el efecto de `placement` de [BindDock].
+                val model = layout.bounds.getValue(id)
+                val arranged = !zoomed && isArranged(dragged) && (abs(placed.width - model.width) > 2 || abs(placed.height - model.height) > 2)
+                trace("system move end $id zoomed=$zoomed arranged=$arranged $actual")
+                val snapped = if (!arranged) null else matchSnap(snapScreens(), placed, tolerance = 2)?.rect ?: placed
+                setSnappable(dragged, false)
+                when {
+                    zoomed -> {
+                        // Arriba del todo: Windows la maximiza; se maximiza el conjunto entero en esa pantalla.
+                        trace("system maximize $id $actual")
+                        (dragged as? Frame)?.extendedState = Frame.NORMAL
+                        val area = desktopArea(center)
+                        if (layout.group(id).maximized) layout.snap(id, area)
+                        else if (!layout.maximize(id, area)) { message = "El conjunto no cabe en esta pantalla."; layout.settleInto(id, area) }
+                    }
+                    snapped != null -> {
+                        trace("system snap $id $snapped")
+                        if (!layout.snap(id, snapped)) { message = "El conjunto no cabe ahí."; layout.settleInto(id, desktopArea(center)) }
+                    }
+                    else -> {
+                        // La ventana arrastrada manda: el modelo pasa a su posición (en el sistema de AWT de su pantalla).
+                        val r = layout.bounds.getValue(id)
+                        layout.move(id, actual.x - r.x, actual.y - r.y)
+                        val docked = candidate != null && layout.dock(id, candidate.target, candidate.before, desktopArea(center)).also {
+                            if (!it) message = "No hay espacio para acoplar el conjunto."
+                        }
+                        if (!docked) {
+                            val members = layout.group(id).members
+                            val first = layout.bounds.getValue(members.first())
+                            val phys = physicalBounds(dragged)
+                            // La pantalla que más tapa el conjunto: Windows le da su escala.
+                            val screen = if (phys != null && screens.isNotEmpty()) {
+                                val left = phys.x - members.takeWhile { it != id }.sumOf { m -> layout.bounds.getValue(m).width.scaled(windows[m]?.let(::windowScale) ?: 1.0) }
+                                dropScreen(screens, left, phys.y, members.sumOf { layout.bounds.getValue(it).width }, first.height)
+                            } else null
+                            trace("drop $id on ${screen?.bounds} at $actual")
+                            layout.settleInto(id, screen?.work ?: desktopArea(center))
+                        } else layout.settleInto(id, desktopArea(center))
+                    }
+                }
+                nativeDrag = false
+                syncGroupBounds(id)
+                javax.swing.Timer(180) { if (id in layout.bounds) raise(id) }.apply { isRepeats = false; start() }
+            }
+            nativeDrag = false
+            draggingGroup = false
+            geometrySettlesAt = System.nanoTime() + 400_000_000L
+        }
+        dragTimer = javax.swing.Timer(8) {
+            if (id !in layout.bounds || !dragged.isShowing) { finish(); return@Timer }
+            val rect = physicalBounds(dragged) ?: return@Timer
+            val ended = systemMoveEnded(dragged)
+            if (ended == null && releasedAt == 0L) {
+                if (rect != lastRect) followPhysical(id, dragged, rect)
+                // El modelo, para la vista previa de acoplar (sistema de AWT de la pantalla de la ventana).
+                val b = dragged.bounds
+                layout.bounds[id]?.let { r -> if (r.x != b.x || r.y != b.y) layout.move(id, b.x - r.x, b.y - r.y) }
+                preview = layout.candidate(id)
+                if (!primaryButtonDown()) releasedAt = System.nanoTime()
+            } else {
+                // Windows aplica su Snap o el maximizado antes de salir del bucle; se espera a que salga
+                // y a que la ventana deje de cambiar (si el bucle no llegó a empezar, basta con soltar).
+                stable = if (rect == lastRect) stable + 1 else 0
+                val now = System.nanoTime()
+                if ((ended != null && now - ended > 60_000_000L && stable >= 3) || (releasedAt != 0L && now - releasedAt > 2_000_000_000L)) finish()
+            }
+            lastRect = rect
+        }.apply { isCoalesce = true; start() }
+    }
+    /** Pega las demás ventanas del conjunto a la que mueve Windows, en píxeles físicos. */
+    private fun followPhysical(id: DockId, dragged: Window, rect: DockRect) {
+        val members = layout.group(id).members
+        val index = members.indexOf(id)
+        if (members.size < 2 || index < 0) return
+        val moves = mutableListOf<Pair<Window, Point>>()
+        var left = rect.x
+        for (m in members.subList(0, index).asReversed()) {
+            val w = windows[m] ?: continue
+            left -= (layout.bounds[m]?.width ?: continue).scaled(windowScale(w))
+            if (w.isShowing && !w.iconified()) moves += w to Point(left, rect.y)
+        }
+        var right = rect.x + (layout.bounds[id]?.width ?: return).scaled(windowScale(dragged))
+        for (m in members.subList(index + 1, members.size)) {
+            val w = windows[m] ?: continue
+            if (w.isShowing && !w.iconified()) moves += w to Point(right, rect.y)
+            right += (layout.bounds[m]?.width ?: continue).scaled(windowScale(w))
+        }
+        placePhysical(moves)
+    }
+    /** Hasta cuándo un cambio de tamaño de Windows es el ajuste de escala de un cambio de pantalla, no del usuario. */
+    var rescaleUntil = 0L
+    /**
+     * Posición y tamaño exactos del modelo para todo el conjunto, al soltarlo. Al pasar a una pantalla
+     * con otra escala, Windows le da a la ventana el tamaño físico de la anterior (medido: 513 en vez de
+     * 640 lógicos de 125 % a 100 %); se repite cuando ese ajuste ya ha llegado.
+     */
+    fun syncGroupBounds(id: DockId) {
+        if (id !in layout.bounds) return
+        rescaleUntil = System.nanoTime() + 1_500_000_000L
+        applyGroupBounds(id)
+        if (nativeMoves) for (delay in listOf(200, 600)) javax.swing.Timer(delay) { applyGroupBounds(id) }.apply { isRepeats = false; start() }
+    }
+    /**
+     * Posición y tamaño del modelo en todas las ventanas del conjunto, ya, en el mismo evento. Al arrastrar
+     * la unión o un borde, si cada ventana esperase a su fotograma de Compose se verían tamaños a destiempo.
+     */
+    fun applyGroupBounds(id: DockId) {
+        if (id !in layout.bounds) return
+        val members = layout.group(id).members
+        for (member in members) {
+            val window = windows[member] ?: continue
+            val r = layout.bounds[member] ?: continue
+            val overlap = if (nativeMoves && member != members.last()) 1 else 0
+            val want = Rectangle(r.x, r.y, r.width + overlap, r.height)
+            if (window.isShowing && !window.iconified() && window.bounds != want) window.bounds = want
+        }
+    }
     /**
      * Sube el conjunto detrás de [id], que queda delante y con el foco. Nunca saca nada de
      * minimizado: eso solo lo hace [setGroupMinimized] cuando vuelve la ventana principal.
@@ -189,6 +342,8 @@ internal class DockSession(val layout: DockLayout, val supportsMaximize: Boolean
     }
     /** Durante un minimizado o restaurado del conjunto llegan eventos propios con retraso: ignorarlos. */
     private var groupChangedAt = 0L
+    /** Última vez que se mostró una ventana del conjunto. */
+    var attachedAt = 0L
     fun settlingGroup() = System.nanoTime() - groupChangedAt < 800_000_000L
     /**
      * El botón de la barra de tareas es de la ventana principal. Si estaba activa otra del
@@ -196,6 +351,9 @@ internal class DockSession(val layout: DockLayout, val supportsMaximize: Boolean
      */
     fun taskbarToggle(id: DockId, previous: Window?): Boolean {
         if (id !in layout.bounds || settlingGroup()) return false
+        // Al abrir varias ventanas a la vez se activan unas tras otras: no es un clic en la barra de tareas
+        // (medido en el arnés: el conjunto recién abierto se minimizaba solo).
+        if (System.nanoTime() - attachedAt < 1_500_000_000L) return false
         val g = layout.group(id)
         if (g.leader != id || previous == null || g.members.none { it != id && windows[it] === previous }) return false
         if (previous.iconified() || !previous.isShowing) return false
@@ -228,13 +386,31 @@ internal class DockSession(val layout: DockLayout, val supportsMaximize: Boolean
     }
     fun maximize(id: DockId) {
         if(!supportsMaximize) return
-        val r = layout.bounds.getValue(id)
-        if (!layout.maximize(id, desktopArea(Point(r.x, r.y)))) message = "El conjunto no cabe en esta pantalla."
+        val g = layout.group(id)
+        val r = layout.bounds.getValue(g.members.first())
+        // La pantalla del centro del conjunto, no la de su esquina (que puede estar en el hueco entre pantallas).
+        val width = g.members.sumOf { layout.bounds[it]?.width ?: 0 }
+        val full = desktopArea(Point(r.x + width / 2, r.y + r.height / 2))
+        // En media pantalla (Snap), maximizar llena la pantalla; restaurar ya vuelve al tamaño normal.
+        if (g.maximized && g.area != null && g.area != full) {
+            if (!layout.snap(id, full)) message = "El conjunto no cabe en esta pantalla."
+            return
+        }
+        if (!layout.maximize(id, full)) message = "El conjunto no cabe en esta pantalla."
+    }
+    /** Vuelve al tamaño normal si está maximizado o en Snap (al arrastrarlo, por ejemplo). */
+    fun restore(id: DockId, area: DockRect = desktopArea()) {
+        if (layout.group(id).maximized) layout.maximize(id, area)
     }
     fun open(id: DockId, origin: DockId? = lastFocused ?: layout.bounds.keys.maxByOrNull { it.rank }) {
         if (id in layout.bounds) { raise(id); return }
         val anchor = origin?.let { layout.bounds[it] }
-        val area = desktopArea(anchor?.let { Point(it.x,it.y) } ?: MouseInfo.getPointerInfo().location)
+        // Cerrada suelta (sin hermanos abiertos con los que volver): vuelve a su pantalla, no a la de la ventana
+        // desde la que se abre. Antes se metía en la pantalla del reproductor aunque se cerrase en la otra.
+        val home = layout.homes[id]
+        val alone = home != null && layout.groups.none { g -> g.members.any { it != id && it in home.siblings } }
+        val area = if (alone) desktopArea(Point(home!!.rect.x + home.rect.width / 2, home.rect.y + 20))
+            else desktopArea(anchor?.let { Point(it.x,it.y) } ?: MouseInfo.getPointerInfo().location)
         val before = layout.bounds.toMap()
         if (!layout.open(id,origin,area)) message = "La ventana se abre suelta porque no cabe acoplada."
         else message = ""
@@ -333,12 +509,13 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
     if (session == null || id == null) return
     val revision = session.revision
     val scope = rememberCoroutineScope()
-    val bridge = remember { object { var applying = false; var job: Job? = null; var snappedAt = 0L } }
+    val bridge = remember { object { var applying = false; var job: Job? = null; var snappedAt = 0L; var reappliedAt = 0L } }
     fun seamOverlap(): Int = if (System.getProperty("os.name").startsWith("Windows") && id in session.layout.bounds &&
         session.layout.group(id).members.lastOrNull() != id) 1 else 0
     DisposableEffect(session, id, window) {
         session.trace("attach $id frame=${System.identityHashCode(window)} title=${window.name} actual=${window.bounds} model=${session.layout.bounds[id]}")
         session.windows[id] = window
+        session.attachedAt = System.nanoTime()
         val listener = object : WindowAdapter() {
             override fun windowStateChanged(e: WindowEvent) {
                 // Cualquier miembro (también con Win+↓): las demás no tienen botón propio y se perderían.
@@ -376,10 +553,36 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
                     val overlap = seamOverlap()
                     val change = nativeDockChange(DockRect(actual.x,actual.y,actual.width,actual.height),expected,overlap)
                     val resized = change == NativeDockChange.Resize
+                    // Win+flechas: Windows coloca él la ventana principal en una mitad/cuarto/maximizada.
+                    // Se ajusta el conjunto entero a ese hueco en vez de estirar solo esa ventana.
+                    val group = session.layout.group(id)
+                    val native = if (change != NativeDockChange.None && group.leader == id && session.nativeMoves)
+                        matchSnap(snapScreens(), DockRect(actual.x, actual.y, actual.width - overlap, actual.height), tolerance = 2) else null
+                    if (native != null && WindowsSnapSettings.arranging) {
+                        session.trace("native snap $id ${native.zone} ${native.rect}")
+                        if (!session.layout.snap(id, native.rect)) { session.message = "El conjunto no cabe ahí."; session.syncGroupLocations(id) }
+                        return@launch
+                    }
+                    // Oto no deja a Windows ni a Compose redimensionar las acopladas: una diferencia es casi siempre su último
+                    // tamaño aún sin llegar (medido al soltar la unión: 550 frente a 554, y se perdía el maximizado). Se vuelve
+                    // a aplicar; solo si la ventana insiste en menos de 1 s se acepta como cambio real.
+                    val reapply = change != NativeDockChange.None && System.nanoTime() - bridge.reappliedAt > 1_000_000_000L
+                    if(reapply) bridge.reappliedAt = System.nanoTime()
+                    if((resized || change == NativeDockChange.Move) && (reapply || System.nanoTime() < session.rescaleUntil)) {
+                        // Ajuste de escala de Windows tras cambiar de pantalla: el tamaño bueno es el del modelo.
+                        session.trace("rescale $id: ${actual.width}x${actual.height} -> $expected")
+                        window.bounds = java.awt.Rectangle(expected.x, expected.y, expected.width + overlap, expected.height)
+                        return@launch
+                    }
                     if(resized) {
                         session.trace("native resize $id: ${actual.width}x${actual.height}")
-                        if(session.layout.group(id).maximized) session.maximize(id)
+                        if(group.maximized) session.restore(id)
                         session.layout.resize(id,actual.width - overlap,actual.height,actual.y)
+                    }
+                    if(change == NativeDockChange.Move && System.nanoTime() < session.rescaleUntil) {
+                        session.trace("rescale move $id: back to $expected")
+                        window.bounds = java.awt.Rectangle(expected.x, expected.y, expected.width + overlap, expected.height)
+                        return@launch
                     }
                     if(change == NativeDockChange.Move) {
                         val group = session.layout.group(id)
@@ -421,7 +624,7 @@ internal fun WindowScope.BindDock(session: DockSession?, id: DockId?, state: Win
             (session.layout.bounds[id] ?: targetBounds)?.let { r ->
                 session.trace("apply $id frame=${System.identityHashCode(window)} rect=$r")
                 // Mientras el conjunto se desliza, la posición la lleva animateShift.
-                if (!session.isShifting(id)) state.position = WindowPosition(r.x.dp, r.y.dp)
+                if (!session.isShifting(id) && !session.nativeDrag) state.position = WindowPosition(r.x.dp, r.y.dp)
                 state.size = androidx.compose.ui.unit.DpSize((r.width + overlap).dp, r.height.dp)
             }
             delay(32)
@@ -479,6 +682,11 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
             val groupLeft = (session.layout.bounds[originalGroup.members.first()] ?: return@awaitEachGesture).x
             val groupRight = (session.layout.bounds[originalGroup.members.last()] ?: return@awaitEachGesture).let { it.x + it.width }
             val secondary = originalGroup.leader != id
+            // En Windows el arrastre va en píxeles físicos (ver [SnapScreen]): con pantallas de escala
+            // distinta, el punto de AWT salta al cruzar de una a otra y el conjunto se rompía.
+            val screens = if (session.nativeMoves) snapScreens() else emptyList()
+            /** El arrastre pasó a [DockSession.startNativeDrag]: este gesto ya no mueve ni suelta nada. */
+            var handedOff = false
             try {
                 while (true) {
                     val event = awaitPointerEvent()
@@ -499,12 +707,12 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
                                 } else { lastTap=now; lastTapPoint=point }
                             }
                         }
-                        if (active && change.changedToUpIgnoreConsumed()) {
+                        if (active) {
                             session.preview?.let { candidate ->
                                 if (!session.layout.dock(id, candidate.target, candidate.before, desktopArea(Point(point.x,point.y))))
                                     session.message = "No hay espacio para acoplar el conjunto."
                             }
-                            session.layout.constrain(id, desktopArea(point))
+                            session.layout.settleInto(id, desktopArea(point))
                             session.syncGroupLocations(id)
                             javax.swing.Timer(180) { if(id in session.layout.bounds) session.raise(id) }.apply { isRepeats=false; start() }
                         }
@@ -527,8 +735,12 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
                         } else if (!insideLane && origin.distance(point) >= threshold) {
                             session.reorderPreview = null
                             val wasMaximized = group.maximized
+                            // Windows con «restaurar al arrastrar» apagado: maximizado no se mueve.
+                            if (wasMaximized && group.leader == id && screens.isNotEmpty() && !WindowsSnapSettings.dragFromMaximize) {
+                                change.consume(); continue
+                            }
                             if (group.leader != id) session.layout.detach(id)
-                            else if (wasMaximized) session.maximize(id)
+                            else if (wasMaximized) session.restore(id, desktopArea(point))
                             val current = session.layout.bounds[id] ?: break
                             val x = point.x - ((origin.x - original.x).toDouble() / original.width * current.width).roundToInt()
                             val y = point.y - (origin.y - original.y).coerceIn(0, 44)
@@ -537,7 +749,18 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
                             session.draggingGroup = true
                             if(!wasMaximized) session.syncGroupLocations(id)
                             session.raise(id)
-                            session.trace("drag $id: group=" + session.layout.group(id).members)
+                            // Agarre en unidades lógicas desde la primera ventana del conjunto: en una pantalla
+                            // con otra escala el puntero sigue sobre el mismo punto de la ventana.
+                            val first = session.layout.bounds[session.layout.group(id).members.first()]
+                            session.trace("drag $id: group=" + session.layout.group(id).members + " native=${screens.isNotEmpty()}")
+                            if (screens.isNotEmpty() && first != null) {
+                                // A partir de aquí lo lleva Windows directamente: al cambiar de escala, Compose
+                                // corta los eventos del ratón (medido) y el conjunto se quedaba a medias.
+                                change.consume()
+                                handedOff = true
+                                session.startNativeDrag(id, Point(point.x - first.x, point.y - first.y), screens)
+                                break
+                            }
                         }
                     } else {
                         session.layout.move(id, point.x - previous.x, point.y - previous.y)
@@ -547,11 +770,13 @@ internal fun WindowScope.DockDragArea(session: DockSession?, id: DockId?, modifi
                     if (active) { change.consume(); session.preview = session.layout.candidate(id) }
                 }
             } finally {
-                if (active) {
-                    session.geometrySettlesAt = System.nanoTime() + 250_000_000L
+                if (active && !handedOff) {
+                    session.geometrySettlesAt = System.nanoTime() + 400_000_000L
                     session.draggingGroup = false
+                    session.nativeDrag = false
                 }
-                session.preview = null; session.reorderPreview = null
+                if (!handedOff) session.preview = null
+                session.reorderPreview = null
             }
         }
     }) { content() }
@@ -586,11 +811,12 @@ internal fun androidx.compose.foundation.layout.BoxScope.DockEdges(session: Dock
                         change.consume()
                         val p = MouseInfo.getPointerInfo()?.location ?: continue
                         for (e in edges) session.layout.resizeEdge(id, e, (if (e == DockEdge.Left || e == DockEdge.Right) p.x else p.y) - grab.getValue(e))
-                        session.syncGroupLocations(id)
+                        session.applyGroupBounds(id)
                     }
                 } finally {
                     session.geometrySettlesAt = System.nanoTime() + 250_000_000L
                     session.draggingGroup = false
+                    session.syncGroupBounds(id)
                 }
             }
         })

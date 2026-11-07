@@ -22,20 +22,20 @@ class MobileConnection(private val app: OtoApp) {
     private var queueCache: Pair<Any, JSONArray>? = null
     private fun queueJson(queue: List<io.github.iaguito22.oto.playback.QueueEntry>): JSONArray =
         queueCache?.takeIf { it.first === queue }?.second
-            ?: JSONArray(queue.map { JSONObject().put("id",it.id).put("title",it.title).put("artist",it.artist).put("artwork",it.artwork) }).also { queueCache = queue to it }
+            ?: JSONArray(queue.map { JSONObject().put("id",it.id).put("title",it.title).put("artist",it.artist).put("artwork",it.artwork).put("artistId",it.artistId) }).also { queueCache = queue to it }
     // Siempre lo de este teléfono, aunque la interfaz esté mostrando el ordenador (ver PlayerConnection.Mirror).
     val adapter = object : LinkPlayer {
         override fun snapshot(): JSONObject {
             val s = player.localState.value
             val audio=app.getSystemService(AudioManager::class.java)
             val position = player.here { player.position() }
-            return JSONObject().put("name", "Oto móvil").put("id", s.id).put("title", s.title).put("artist", s.artist).put("artwork", s.artwork)
+            return JSONObject().put("name", "Oto móvil").put("id", s.id).put("title", s.title).put("artist", s.artist).put("artwork", s.artwork).put("artistId", s.artists.firstOrNull()?.second)
                 .put("playing", s.playing).put("buffering", s.buffering).put("duration", s.durationMs).put("position", position)
                 .put("volume",audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()/audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)).put("index", s.index).put("shuffle", player.localShuffle.value).put("loop", player.localLoopMode.value != LoopMode.Off)
                 .put("queue", queueJson(player.sessionQueue.value))
                 .put("sourceKind", player.localSource.value?.kind).put("sourceTitle", player.localSource.value?.title)
         }
-        override suspend fun like() { val s = player.localState.value; s.id?.let { app.prefs.toggleLike(Heard(it,s.title,s.artist,s.artwork)) } }
+        override suspend fun like() { val s = player.localState.value; s.id?.let { app.prefs.toggleLike(Heard(it,s.title,s.artist,s.artwork,s.artists.firstOrNull()?.second)) } }
         override fun toggle() = player.here { player.toggle() }
         override fun next() = player.here { player.next() }
         override fun previous() = player.here { player.previous() }
@@ -47,7 +47,7 @@ class MobileConnection(private val app: OtoApp) {
         override fun remove(index: Int) = player.here { player.remove(index) }
         override fun dj() = player.here { player.playDj {} }
         override fun addToQueue(song: JSONObject, next: Boolean) {
-            val track=Heard(song.getString("id"),song.getString("title"),song.optString("artist"),song.optString("artwork").takeUnless { it.isBlank() || it=="null" }).toSong()
+            val track=Heard(song.getString("id"),song.getString("title"),song.optString("artist"),song.optString("artwork").takeUnless { it.isBlank() || it=="null" },song.optString("artistId").takeUnless { it.isBlank() || it=="null" }).toSong()
             player.here { if(next) player.playNext(track) else player.enqueue(track) }
         }
         override fun setPlaying(on: Boolean) { if(player.localState.value.playing != on) player.here { player.toggle() } }
@@ -57,7 +57,7 @@ class MobileConnection(private val app: OtoApp) {
         }
         override fun replace(state: JSONObject) {
             val a = state.getJSONArray("queue")
-            val songs = (0 until a.length()).map { i -> a.getJSONObject(i).let { Heard(it.getString("id"),it.getString("title"),it.getString("artist"),it.optString("artwork").takeUnless { s -> s.isBlank() || s=="null" }).toSong() } }
+            val songs = (0 until a.length()).map { i -> a.getJSONObject(i).let { Heard(it.getString("id"),it.getString("title"),it.getString("artist"),it.optString("artwork").takeUnless { s -> s.isBlank() || s=="null" },it.optString("artistId").takeUnless { s -> s.isBlank() || s=="null" }).toSong() } }
             player.prepareTransfer(songs, state.optInt("index").coerceIn(songs.indices), state.optLong("position"), state.optBoolean("shuffle"))
         }
     }
@@ -135,7 +135,7 @@ class MobileConnection(private val app: OtoApp) {
         check(link.remote.value != null) { "El ordenador no está conectado" }
         link.command(JSONObject().put("action", "addToQueue").put("next", false)
             .put("song", JSONObject().put("id", song.id).put("title", song.title)
-                .put("artist", song.artist).put("artwork", song.artwork)))
+                .put("artist", song.artist).put("artwork", song.artwork).put("artistId", song.artistId)))
     }
     suspend fun sendAccount() {
         val session = app.account.session.value ?: error("Inicia sesión en Oto móvil primero")
