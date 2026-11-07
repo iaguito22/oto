@@ -2,6 +2,12 @@
 
 Índice en `AGENTS.md`. Estados de 03–05/11/2026; contrastar con `git log` y GitHub.
 
+## Release 2.1.1 — 07/11/2026 (solo Windows)
+
+- https://github.com/iaguito22/oto/releases/tag/v2.1.1: solo `Oto-2.1.1-windows-x64.msi` (con CDS y FFmpeg) y SHA256SUMS. Linux y Android siguen en la 2.1.0 (este PC, `igl20`, no tiene SDK de Android ni la firma). Solo sube `packageVersion` del escritorio; Android sigue en 2.1.0 / versionCode 15.
+- Contenido: Snap nativo de Windows, dos pantallas, redimensionar maximizado, latido, corazón con un clic, artista sin id (el id por el enlace necesita también una APK nueva: código Android sin compilar).
+- Probado: actualizar encima de la 2.1.0 instalada con `msiexec /i` (código 0, una sola entrada «Oto 2.1.1», JAR igual al compilado). Instalada en el PC de Iago el 07/11 a las 17:00. Copia y notas: `C:\Users\igl20\Documents\release-2.1.1`.
+
 ## Release 2.1.0 — 06/11/2026
 
 - **Publicada (Latest)**: https://github.com/iaguito22/oto/releases/tag/v2.1.0. Actions sobre el borrador correctas: «Comprobar paquete Arch» 42229570179 y «Comprobar paquetes Linux» 42229565220. NO instalada todavía en el PC ni en el móvil.
