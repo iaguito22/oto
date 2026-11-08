@@ -432,7 +432,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                 if(inFolder!=null && folderLists.isEmpty())item(span={GridItemSpan(maxLineSpan)}){EmptyLibrary("Esta carpeta está vacía. Añade listas con «Añadir o quitar listas».")}
                                 if(folder==null && history.isNotEmpty()) {
                                     item(key="recent-title",span={GridItemSpan(maxLineSpan)}) {Text("Oído hace poco",style=OtoType.section)}
-                                    items(history.take(8),key={"recent:${it.id}"},span={GridItemSpan(maxLineSpan)}) {h->val actions=songActions(h,null);PlaylistContextMenu(actions){LibraryLine(h.title,h.artist,h.artwork,{player.play(h.toSong())}){if(h.id==np.id)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=Color.White.copy(alpha=.7f));SongMenuButton(h.title,actions)}}}
+                                    items(history.distinctBy{it.id}.take(8),key={"recent:${it.id}"},span={GridItemSpan(maxLineSpan)}) {h->val actions=songActions(h,null);PlaylistContextMenu(actions){LibraryLine(h.title,h.artist,h.artwork,{player.play(h.toSong())}){if(h.id==np.id)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=Color.White.copy(alpha=.7f));SongMenuButton(h.title,actions)}}}
                                 }
                             }
                         }

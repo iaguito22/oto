@@ -8,12 +8,17 @@ import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.channels.Channel
 import java.awt.AWTEvent
 import java.awt.Component
+import java.awt.Dimension
 import java.awt.EventQueue
 import java.awt.MouseInfo
 import java.awt.Point
 import java.awt.Toolkit
 import java.awt.Window
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.event.InputEvent
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
 import java.awt.event.MouseWheelEvent
 import javax.swing.SwingUtilities
 import kotlin.math.abs
@@ -35,8 +40,20 @@ internal object SmoothWheel {
         var target: Component? = null
         var x = 0; var y = 0; var modifiers = 0; var scrollAmount = 3
         var remaining = 0.0
+        /** Tamaño de la ventana al empezar el movimiento: si cambia a mitad, se cancela lo pendiente. */
+        var size: Dimension? = null
+        /** Hasta aquí (nanoTime) la rueda pasa directa: la ventana se acaba de activar, restaurar o redimensionar. */
+        var settlingUntil = 0L
         val wake = Channel<Unit>(Channel.CONFLATED)
+        fun unsettled() { settlingUntil = System.nanoTime() + SETTLE_NS; remaining = 0.0 }
     }
+
+    /**
+     * Al activar una ventana desde la barra de tareas, Windows la restaura y Oto sube el resto del
+     * conjunto: durante ese instante la ventana cambia de tamaño y se repinta. Repartir pasos ahí
+     * coincidía con un cuelgue y un error (sin traza aún); la rueda pasa directa a Compose hasta que se asienta.
+     */
+    private const val SETTLE_NS = 400_000_000L
 
     private class SmoothWheelEvent(source: Component, time: Long, modifiers: Int, x: Int, y: Int, sx: Int, sy: Int, amount: Int, rotation: Double) :
         MouseWheelEvent(source, MOUSE_WHEEL, time, modifiers, x, y, sx, sy, 0, false, WHEEL_UNIT_SCROLL, amount, 0, rotation)
@@ -64,6 +81,8 @@ internal object SmoothWheel {
         val source = e.component ?: return false
         val window = source as? Window ?: SwingUtilities.getWindowAncestor(source) ?: return false
         val m = motions[window] ?: return false
+        if (System.nanoTime() < m.settlingUntil || !window.isShowing) { m.remaining = 0.0; return false }
+        if (m.remaining == 0.0) m.size = window.size
         // Cambiar de sentido o de eje (Mayús) no arrastra lo que quedaba pendiente.
         val shift = e.modifiersEx and InputEvent.SHIFT_DOWN_MASK
         if (m.target !== source || (m.modifiers and InputEvent.SHIFT_DOWN_MASK) != shift || sign(m.remaining) != sign(e.preciseWheelRotation)) m.remaining = 0.0
@@ -75,6 +94,7 @@ internal object SmoothWheel {
 
     private fun step(m: Motion, dtMs: Double) {
         val target = m.target ?: run { m.remaining = 0.0; return }
+        if (System.nanoTime() < m.settlingUntil || !m.window.isShowing || (m.size != null && m.window.size != m.size)) { m.remaining = 0.0; return }
         var part = m.remaining * (1 - exp(-dtMs.coerceIn(1.0, 50.0) / TAU_MS))
         if (abs(m.remaining) < .02 || abs(part) >= abs(m.remaining)) part = m.remaining
         else if (abs(part) < .004) part = sign(m.remaining) * .004
@@ -100,7 +120,24 @@ internal object SmoothWheel {
         val motion = remember(window) { Motion(window) }
         DisposableEffect(motion) {
             motions[window] = motion
-            onDispose { if (motions[window] === motion) motions.remove(window) }
+            val windowListener = object : WindowAdapter() {
+                override fun windowActivated(e: WindowEvent) = motion.unsettled()
+                override fun windowDeiconified(e: WindowEvent) = motion.unsettled()
+                override fun windowStateChanged(e: WindowEvent) = motion.unsettled()
+            }
+            val componentListener = object : ComponentAdapter() {
+                override fun componentResized(e: ComponentEvent) = motion.unsettled()
+                override fun componentShown(e: ComponentEvent) = motion.unsettled()
+            }
+            window.addWindowListener(windowListener)
+            window.addWindowStateListener(windowListener)
+            window.addComponentListener(componentListener)
+            onDispose {
+                window.removeWindowListener(windowListener)
+                window.removeWindowStateListener(windowListener)
+                window.removeComponentListener(componentListener)
+                if (motions[window] === motion) motions.remove(window)
+            }
         }
         LaunchedEffect(motion) {
             while (true) {

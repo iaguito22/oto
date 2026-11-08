@@ -1,6 +1,8 @@
 package io.github.iaguito22.oto.desktop
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.window.LocalWindowExceptionHandlerFactory
 import androidx.compose.ui.window.application
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.YouTubeLocale
@@ -39,6 +41,7 @@ fun main() {
     }
     val instance = DesktopInstance.acquire() ?: return
     Runtime.getRuntime().addShutdownHook(Thread { instance.close() })
+    ErrorLog.install()
     Timber.plant(Timber.DebugTree())
     InnerTubeXPlayer.initialize(null)
 
@@ -83,7 +86,9 @@ fun main() {
 
     prepareDesktopWindows()
     application {
-        ModularDesktop(player, prefs, menu, importer, account, cloud, login, downloads, lyricsStore, ::exitApplication)
+        CompositionLocalProvider(LocalWindowExceptionHandlerFactory provides ErrorLog.windows) {
+            ModularDesktop(player, prefs, menu, importer, account, cloud, login, downloads, lyricsStore, ::exitApplication)
+        }
     }
 }
 
