@@ -27,5 +27,7 @@ jobs:
             /opt/oto/runtime/bin/java -version
             test -x /opt/oto/bin/Oto
             test -L /usr/bin/oto
+            test -x /usr/bin/oto
+            test "$(readlink -f /usr/bin/oto)" = "/opt/oto/bin/Oto"
             pacman -Qk oto
           '

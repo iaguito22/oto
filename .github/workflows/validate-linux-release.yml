@@ -40,7 +40,7 @@ jobs:
             openbox > /tmp/openbox.log 2>&1 &
             sleep 2
             export XDG_DATA_HOME="$RUNNER_TEMP/oto-data" XDG_CACHE_HOME="$RUNNER_TEMP/oto-cache" SKIKO_RENDER_API=SOFTWARE_FAST
-            /opt/oto/bin/Oto > oto-linux.log 2>&1 &
+            oto > oto-linux.log 2>&1 &
             app_pid=$!
             trap "kill $app_pid 2>/dev/null || true" EXIT
             for attempt in $(seq 1 40); do

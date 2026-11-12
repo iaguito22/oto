@@ -64,7 +64,6 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     val welcomePrefs = remember { OtoDirs.keyValue("desktop_welcome") }
     var welcomeOpen by remember { mutableStateOf(welcomePrefs.getString("seen_version") != "1") }
     fun closeWelcome() { welcomePrefs.putString("seen_version", "1"); welcomeOpen = false }
-    if (welcomeOpen) WelcomeWindow(::closeWelcome)
     DisposableEffect(login) { onDispose { login.cancel() } }
     var shortcut by remember { mutableStateOf(kv.getString("shortcut") ?: "CTRL + ALT + O") }
     var shortcutIssue by remember { mutableStateOf<String?>(null) }
@@ -137,7 +136,10 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     var windowsHidden by remember { mutableStateOf(false) }
     fun closePrimary(id: DockId) {
         val other = if(id == DockId.Player) DockId.Library else DockId.Player
-        if(other !in docking.layout.bounds) windowsHidden = true else docking.close(id)
+        if(other !in docking.layout.bounds) {
+            if (shouldQuitWhenNoTray(java.awt.SystemTray.isSupported(), supportsDesktopShortcut, shortcutIssue)) quit()
+            else windowsHidden = true
+        } else docking.close(id)
     }
     fun showOrHide(force: Boolean = false) {
         windowsHidden = if(force) false else !windowsHidden
@@ -251,6 +253,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     }
     fun shortcuts(event: KeyEvent): Boolean {
         if(event.type != KeyEventType.KeyDown) return false
+        if(welcomeOpen && event.key == Key.Escape) { closeWelcome(); return true }
         return when {
             event.isCtrlPressed && event.isShiftPressed && event.key == Key.M -> {changeForm(PlayerForm.entries[(form.ordinal+1)%PlayerForm.entries.size]);true}
             event.isCtrlPressed && (event.key == Key.K || event.key == Key.F) -> { menuOpen = true;true }
@@ -355,7 +358,12 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     ModuleWindow("Guardar",rememberModuleState("save",380,540),savingTrack!=null && !windowsHidden,{savingTrack=null}) {
         savingTrack?.let { SaveSpace(it,prefs,palette) }
     }
+    if (welcomeOpen) WelcomeWindow(::closeWelcome)
 }
+
+/** Evita dejar el proceso atrapado en segundo plano cuando el escritorio no tiene bandeja ni atajo global. */
+internal fun shouldQuitWhenNoTray(traySupported: Boolean, shortcutSupported: Boolean, shortcutIssue: String?): Boolean =
+    !traySupported && (!shortcutSupported || shortcutIssue != null)
 
 @Composable
 private fun rememberModuleState(id: String, w: Int, h: Int): WindowState {

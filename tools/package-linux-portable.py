@@ -56,7 +56,8 @@ def add_link(tar, name, target):
     tar.addfile(info)
 
 launcher = b'''#!/bin/sh
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+SELF="$(readlink -f -- "$0" 2>/dev/null || printf '%s' "$0")"
+ROOT="$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)"
 exec "$ROOT/runtime/bin/java" -Dcompose.application.configure.swing.globals=true -Dcompose.application.resources.dir="$ROOT/app/resources" -cp "$ROOT/app/*" io.github.iaguito22.oto.desktop.MainKt "$@"
 '''
 desktop = b'''[Desktop Entry]
@@ -76,7 +77,7 @@ with zipfile.ZipFile(a.linux_skiko) as skiko:
 
 with tarfile.open(payload, 'w', format=tarfile.PAX_FORMAT) as out:
     for jar in sorted((a.app_dir / 'app').glob('*.jar')):
-        if 'runtime-windows' not in jar.name:
+        if 'runtime-windows' not in jar.name and 'runtime-linux' not in jar.name:
             add_bytes(out, 'opt/oto/app/' + jar.name, jar.read_bytes())
     add_bytes(out, 'opt/oto/app/skiko-awt-runtime-linux-x64.jar', a.linux_skiko.read_bytes())
     with tarfile.open(a.linux_jre, 'r:gz') as jre:

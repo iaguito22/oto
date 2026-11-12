@@ -55,7 +55,9 @@ internal val welcomeSteps = listOf(
 @Composable
 internal fun WelcomeWindow(close: () -> Unit) {
     val state = rememberWindowState(position = WindowPosition(Alignment.Center), width = 1040.dp, height = 780.dp)
-    ModuleWindow("Bienvenida", state, true, close, accent = DefaultAccent, minimum = DpSize(780.dp, 620.dp), keys = {
+    var frame by remember { mutableStateOf<java.awt.Window?>(null) }
+    LaunchedEffect(frame) { frame?.let { it.toFront(); it.requestFocus() } }
+    ModuleWindow("Bienvenida", state, true, close, accent = DefaultAccent, minimum = DpSize(780.dp, 620.dp), onWindow = { frame = it }, keys = {
         if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { close(); true } else false
     }) {
         WelcomeContent(close)
