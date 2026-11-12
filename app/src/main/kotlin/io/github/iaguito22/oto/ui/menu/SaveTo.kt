@@ -101,7 +101,8 @@ data class Saving(val songs: List<Heard>, val title: String, val sub: String, va
 @Composable
 fun ColumnScope.SaveTo(what: Saving, onDone: () -> Unit) {
     val c = Oto.colors
-    val prefs = (LocalContext.current.applicationContext as OtoApp).prefs
+    val app = LocalContext.current.applicationContext as OtoApp
+    val prefs = app.prefs
     val liked by prefs.likedIds.collectAsStateWithLifecycle(initialValue = null)
     val playlists by prefs.playlists.collectAsStateWithLifecycle(initialValue = null)
     val scope = rememberCoroutineScope()
@@ -128,18 +129,21 @@ fun ColumnScope.SaveTo(what: Saving, onDone: () -> Unit) {
         val isLiked = likedNow.containsAll(ids)
         ToggleRow({ LikedArt(40.dp) }, "Me gusta", null, isLiked) {
             tick(!isLiked)
+            if (!isLiked) songs.forEach { app.player.reactDj(it.id, io.github.iaguito22.oto.dj.DjReaction.Like) }
             scope.launch { prefs.setLikedAll(songs, !isLiked) }
         }
         lists.forEach { p ->
             val inside = remember(p.songs, ids) { p.songs.count { it.id in ids } == ids.size }
             ToggleRow({ Mosaic(p.songs, 40.dp) }, p.name, count(p.songs.size), inside) {
                 tick(!inside)
+                if (!inside) songs.forEach { app.player.reactDj(it.id, io.github.iaguito22.oto.dj.DjReaction.Save) }
                 scope.launch { if (inside) prefs.removeAllFromPlaylist(p.id, ids) else prefs.addAllToPlaylist(p.id, songs) }
             }
         }
         // Una canción suelta empieza sin nombre; un álbum propone el suyo.
         NewListRow(suggested = if (songs.size > 1) what.title else "", onCreate = { name ->
             tick(true)
+            songs.forEach { app.player.reactDj(it.id, io.github.iaguito22.oto.dj.DjReaction.Save) }
             scope.launch { prefs.createPlaylist(name, songs) }
         })
     }

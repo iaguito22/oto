@@ -27,6 +27,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.text.style.TextOverflow
+import io.github.iaguito22.oto.dj.DjMode
+import io.github.iaguito22.oto.dj.DjMood
 import io.github.iaguito22.oto.playback.NowPlaying
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.delay
@@ -113,7 +115,9 @@ internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:Imag
     onLike:()->Unit,onSave:()->Unit, source:Source?, onSource:()->Unit, onArtist:(String,String)->Unit,
     qualityLabel:String? = null, verticalPin:(@Composable () -> Unit)? = null,
     shuffle:Boolean=false, loopMode:io.github.iaguito22.oto.LoopMode=io.github.iaguito22.oto.LoopMode.Off,
-    onShuffle:(()->Unit)?=null, onLoop:(()->Unit)?=null) {
+    onShuffle:(()->Unit)?=null, onLoop:(()->Unit)?=null,
+    djActive:Boolean=false, djMode:DjMode=DjMode.Normal, djMood:DjMood=DjMood.Auto,
+    onDjMood:((DjMood)->Unit)?=null, onToggleAdhd:(()->Unit)?=null) {
     val pulse = rememberCoverPulse(np.playing,beatEnabled,beat)
     val controls by animateFloatAsState(if(chrome)1f else 0f,tween(180),label="playerChrome")
     // Sentido del último salto: «Anterior» desliza hacia la derecha; el resto, hacia la izquierda.
@@ -209,6 +213,16 @@ internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:Imag
                 Column(Modifier.fillMaxWidth().height(38.dp).hoverable(interaction,source.kind != "DJ").clickable(interactionSource=interaction,indication=null,enabled=source.kind != "DJ",onClick=onSource),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.Center) {
                     Text(source.kind.uppercase(),style=OtoType.rowSub.copy(fontSize=OtoType.rowSub.fontSize * scale),color=Color.White.copy(alpha=.45f),maxLines=1)
                     Text(source.title,style=OtoType.rowTitle.copy(fontSize=OtoType.rowTitle.fontSize * scale),maxLines=1,overflow=TextOverflow.Ellipsis)
+                }
+            }
+            if(djActive && np.id != null && onDjMood != null && onToggleAdhd != null) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    DjMoodSelector(djMood, MaterialTheme.colorScheme.primary, onDjMood)
+                    DjAdhdTogglePill(djMode == DjMode.Adhd, MaterialTheme.colorScheme.primary, onToggleAdhd)
                 }
             }
             Spacer(Modifier.weight(1f))

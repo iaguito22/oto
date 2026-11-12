@@ -32,6 +32,9 @@ class Memory(private val file: File?) {
     /** Nombre (ver [artistKey]) → id de YouTube Music, de los que hubo que buscar. */
     val ids = HashMap<String, String>()
 
+    /** Canción (clave/id) → instante de la última vez que la puso el DJ, para enfriamiento obligatorio. */
+    val recentSongs = HashMap<String, Long>()
+
     init {
         runCatching {
             val o = JSONObject(file?.takeIf { it.exists() }?.readText() ?: return@runCatching)
@@ -40,6 +43,7 @@ class Memory(private val file: File?) {
             }
             o.optJSONObject("anchors")?.let { a -> a.keys().forEach { anchors[it] = a.getLong(it) } }
             o.optJSONObject("ids")?.let { a -> a.keys().forEach { ids[it] = a.getString(it) } }
+            o.optJSONObject("recent")?.let { a -> a.keys().forEach { recentSongs[it] = a.getLong(it) } }
         }
     }
 
@@ -52,19 +56,32 @@ class Memory(private val file: File?) {
         arms.getValue(kind).let { it[0] += reward; it[1] += 1 }
     }
 
+    fun rememberSong(track: Track, now: Long) {
+        recentSongs[track.key] = now
+        recentSongs[track.id] = now
+    }
+
+    fun isRecent(track: Track, now: Long, windowMs: Long = RECENT_WINDOW): Boolean {
+        val last = maxOf(recentSongs[track.key] ?: 0L, recentSongs[track.id] ?: 0L)
+        return last > 0L && (now - last) in 0 until windowMs
+    }
+
     fun save(now: Long) {
         val f = file ?: return
-        // Las anclas de hace más de un mes ya no frenan nada.
+        // Las anclas y canciones recientes de hace más de un mes ya no frenan nada.
         anchors.values.removeAll { now - it > 30 * DAY }
+        recentSongs.values.removeAll { now - it > 30 * DAY }
         val o = JSONObject()
             .put("arms", JSONObject().apply { arms.forEach { (k, v) -> put(k.name, org.json.JSONArray().put(v[0]).put(v[1])) } })
             .put("anchors", JSONObject(anchors as Map<*, *>))
             .put("ids", JSONObject(ids as Map<*, *>))
+            .put("recent", JSONObject(recentSongs as Map<*, *>))
         runCatching { f.writeText(o.toString()) }
     }
 
     private companion object {
         const val DECAY = 0.9
+        const val RECENT_WINDOW = 21 * DAY
     }
 }
 

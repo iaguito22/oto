@@ -11,6 +11,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.metrolist.innertube.models.Artist
 import com.metrolist.innertube.models.SongItem
+import io.github.iaguito22.oto.dj.DjMode
+import io.github.iaguito22.oto.dj.DjMood
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -45,6 +47,9 @@ private val RAM_SAVER = booleanPreferencesKey("ram_saver")
 private val LOOP = booleanPreferencesKey("loop")
 private val PLAYLIST_MODES = stringPreferencesKey("playlist_modes")
 private val CROSSFADE = intPreferencesKey("crossfade")
+private val SMART_MIX = booleanPreferencesKey("smart_mix")
+private val DJ_MOOD = stringPreferencesKey("dj_mood")
+private val DJ_MODE = stringPreferencesKey("dj_mode")
 private val ROMANIZE = booleanPreferencesKey("romanize")
 private val DROP_STYLE = stringPreferencesKey("drop_style")
 private val COVER_BEAT = booleanPreferencesKey("cover_beat")
@@ -59,6 +64,8 @@ const val LIKED_ID = "liked"
 
 /** Lo que viene puesto: un fundido corto, que se note sin comerse los finales. */
 const val DEFAULT_CROSSFADE = 3
+/** Mezcla inteligente activada por defecto (curva equal-power y transición de EQ cuando hay fundido). */
+const val DEFAULT_SMART_MIX = true
 /** Lo que se puede elegir en Ajustes. */
 val CROSSFADE_CHOICES = listOf(0, 3, 6, 10)
 
@@ -149,6 +156,31 @@ class Prefs(
 
     suspend fun setCrossfade(seconds: Int) {
         store.edit { it[CROSSFADE] = seconds }
+    }
+
+    /** Mezcla inteligente tipo Apple Music: curva equal-power y cruce progresivo de graves/EQ durante el fundido. */
+    val smartMix: Flow<Boolean> = store.data.map { it[SMART_MIX] ?: DEFAULT_SMART_MIX }.distinctUntilChanged()
+
+    suspend fun setSmartMix(on: Boolean) {
+        store.edit { it[SMART_MIX] = on }
+    }
+
+    /** Mood activo del DJ (ver [DjMood]). */
+    val djMood: Flow<DjMood> = store.data
+        .map { p -> DjMood.entries.firstOrNull { it.name == p[DJ_MOOD] } ?: DjMood.Auto }
+        .distinctUntilChanged()
+
+    suspend fun setDjMood(mood: DjMood) {
+        store.edit { it[DJ_MOOD] = mood.name }
+    }
+
+    /** Modo de sesión del DJ: normal o DJ rápido (ADHD) por segmentos cortos. */
+    val djMode: Flow<DjMode> = store.data
+        .map { p -> DjMode.entries.firstOrNull { it.name == p[DJ_MODE] } ?: DjMode.Normal }
+        .distinctUntilChanged()
+
+    suspend fun setDjMode(mode: DjMode) {
+        store.edit { it[DJ_MODE] = mode.name }
     }
 
     /** Bucle por defecto para las listas nuevas; si no, al acabar siguen canciones parecidas. */

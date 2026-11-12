@@ -63,6 +63,8 @@ import androidx.compose.ui.graphics.FilterQuality
 import kotlin.math.roundToInt
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
+import io.github.iaguito22.oto.dj.DjMode
+import io.github.iaguito22.oto.dj.DjReaction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.input.key.Key
@@ -115,6 +117,9 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     var volumeMenu by remember { mutableStateOf(false) }
     val shuffle by player.shuffle.collectAsState()
     val loop by player.loop.collectAsState()
+    val djActive by player.djActive.collectAsState()
+    val djMode by player.djMode.collectAsState()
+    val djMood by player.djMood.collectAsState()
     val scope=rememberCoroutineScope()
     val snackbar=remember {SnackbarHostState()}
     val searchFocus=remember {FocusRequester()}
@@ -379,7 +384,16 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                             })
                             @Composable fun ShelvedCard(e:Shelved,modifier:Modifier,dragging:Boolean) {
                                 when {
-                                    e.special=="dj" -> PlaylistCard("DJ","Mezcla para ti",null,modifier,special="dj",accent=palette.primary,lifted=dragging,onPlay={player.playDj {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ")}}}) {player.playDj {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ")}}}
+                                    e.special=="dj" -> PlaylistCard(
+                                        "DJ",
+                                        if(djActive && djMode==DjMode.Normal) "Pinchando · ${djMood.label}" else "Mezcla para ti",
+                                        null,
+                                        modifier,
+                                        special="dj",
+                                        accent=palette.primary,
+                                        lifted=dragging,
+                                        onPlay={player.playDj(DjMode.Normal) {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ")}}}
+                                    ) {player.playDj(DjMode.Normal) {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ")}}}
                                     e.special!=null -> PlaylistContextMenu(listOf(ContextMenuItem(if(LIKED_ID in wanted) "Quitar la descarga" else "Descargar") {scope.launch { prefs.setDownloadList(LIKED_ID,LIKED_ID !in wanted) }})) {
                                         PlaylistCard("Me gusta","${liked.songs.size} canciones",null,modifier,special="liked",accent=palette.primary,lifted=dragging,onPlay=if(liked.songs.isNotEmpty()){{player.playLocal(liked,null,true)}}else null) {local=LIKED_ID}
                                     }
@@ -395,12 +409,26 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                             LazyVerticalGrid(columns=GridCells.FixedSize(featuredWidth),state=grid,verticalArrangement=Arrangement.spacedBy(18.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(bottom=28.dp)) {
                                 if(inFolder==null) item(key="featured",span={GridItemSpan(maxLineSpan)}) {
                                     Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
-                                        Text("Tus listas",style=OtoType.section)
+                                        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                                            Text("Tus listas",style=OtoType.section,modifier=Modifier.weight(1f))
+                                            DjMoodSelector(djMood,palette.primary,player::setDjMood)
+                                        }
                                         LazyRow(state=pinnedRow,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
                                             items(topOrder,key={it.key}) { e ->
                                                 ReorderableItem(pinnedReorder,e.key) { dragging ->
                                                     ShelvedCard(e,Modifier.width(featuredWidth).longPressDraggableHandle(enabled=e.movable,onDragStopped={saveTop()}),dragging)
                                                 }
+                                            }
+                                            item(key="dj_adhd") {
+                                                PlaylistCard(
+                                                    "DJ rápido (ADHD)",
+                                                    if(djActive && djMode==DjMode.Adhd) "Pinchando · ${djMood.label}" else "Saltando intros · ~1 min",
+                                                    null,
+                                                    Modifier.width(featuredWidth),
+                                                    special="dj_adhd",
+                                                    accent=palette.primary,
+                                                    onPlay={player.playAdhdDj {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ rápido")}}}
+                                                ) {player.playAdhdDj {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ rápido")}}}
                                             }
                                         }
                                     }
@@ -696,6 +724,13 @@ internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $
                     "dj" -> Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(lerp(accent,Color(0xFF121212),.25f),lerp(accent,Color(0xFF121212),.8f)))),contentAlignment=Alignment.Center) {
                         Box(Modifier.fillMaxSize(.72f).background(Color(0xFF121212),CircleShape),contentAlignment=Alignment.Center) {Box(Modifier.fillMaxSize(.36f).background(accent,CircleShape))}
                     }
+                    "dj_adhd" -> Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(lerp(accent,Color(0xFF121212),.18f),lerp(accent,Color(0xFF121212),.78f)))),contentAlignment=Alignment.Center) {
+                        Box(Modifier.fillMaxSize(.74f).border(2.dp,Color(0xFF121212),CircleShape),contentAlignment=Alignment.Center) {
+                            Box(Modifier.fillMaxSize(.58f).background(Color(0xFF121212),CircleShape),contentAlignment=Alignment.Center) {
+                                Box(Modifier.fillMaxSize(.42f).background(accent,CircleShape))
+                            }
+                        }
+                    }
                     else -> if(playlist != null) PlaylistMosaic(playlist,accent,Modifier.fillMaxSize()) else LibraryArt(url,Modifier.fillMaxSize())
                 }
             }
@@ -738,7 +773,7 @@ internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $
     }
 }
 
-@Composable internal fun SaveSpace(track:Heard,prefs:Prefs,palette:ArtworkPalette) {
+@Composable internal fun SaveSpace(track:Heard,prefs:Prefs,palette:ArtworkPalette,onReact:(DjReaction)->Unit={}) {
     val lists by prefs.playlists.collectAsState(initial=emptyList())
     val liked by prefs.likedIds.collectAsState(initial=emptySet())
     val scope=rememberCoroutineScope()
@@ -753,14 +788,21 @@ internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $
         Text("Guardar en",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),modifier=Modifier.padding(start=2.dp,top=4.dp))
         LazyColumn(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(3.dp)) {
             if("Me gusta".contains(search,true)) item(key="liked") {
-                SaveDestination("Me gusta",null,track.id in liked,palette,true) { scope.launch { prefs.toggleLike(track) } }
+                val isLiked = track.id in liked
+                SaveDestination("Me gusta",null,isLiked,palette,true) {
+                    scope.launch { prefs.toggleLike(track) }
+                    if(!isLiked) onReact(DjReaction.Like)
+                }
             }
             items(lists.filter{it.name.contains(search,true)},key={it.id}){list ->
             val saved=list.songs.any{it.id==track.id}
-                SaveDestination(list.name,list.songs.firstOrNull()?.artwork,saved,palette,false) { scope.launch { if(saved)prefs.removeFromPlaylist(list.id,track.id)else prefs.addToPlaylist(list.id,track) } }
+                SaveDestination(list.name,list.songs.firstOrNull()?.artwork,saved,palette,false) {
+                    scope.launch { if(saved)prefs.removeFromPlaylist(list.id,track.id)else prefs.addToPlaylist(list.id,track) }
+                    if(!saved) onReact(DjReaction.Save)
+                }
             }
             if(search.isNotEmpty() && lists.none{it.name.equals(search,true)}) item(key="create") {
-                TextButton(onClick={scope.launch{prefs.createPlaylist(search,track)};query=""}){Text("Crear «$search»",color=palette.primary,maxLines=1,overflow=TextOverflow.Ellipsis)}
+                TextButton(onClick={scope.launch{prefs.createPlaylist(search,track)};onReact(DjReaction.Save);query=""}){Text("Crear «$search»",color=palette.primary,maxLines=1,overflow=TextOverflow.Ellipsis)}
             }
         }
     }

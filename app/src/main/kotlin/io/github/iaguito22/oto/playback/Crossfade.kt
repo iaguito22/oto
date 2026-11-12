@@ -4,9 +4,13 @@ import android.content.Context
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.MediaSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -14,10 +18,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import timber.log.Timber
-import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.sin
+
+/** Plan de salida adelantada (p. ej. segmento corto en DJ rápido ADHD). */
+data class TransitionPlan(val transitionAtMs: Long, val fadeDurationMs: Long)
 
 /**
  * Fundido entre canciones: el final de una suena a la vez que el principio de la siguiente, una apagándose y la otra
@@ -46,6 +50,14 @@ class Crossfade(
     private val gain: () -> Float,
     /** Cuánto ha subido la que entra: 0 → 1. El servicio lo multiplica por su volumen. */
     private val onFadeIn: (Float) -> Unit,
+    /** Mezcla inteligente tipo Apple Music (curva S equal-power + cruce de graves). */
+    private val smartMix: () -> Boolean = { true },
+    /** Plan personalizado de transición para el ítem actual (p. ej. modo ADHD). */
+    private val transitionPlan: (MediaItem, Long) -> TransitionPlan? = { _, _ -> null },
+    /** Posición inicial (ms) al saltar a la siguiente canción en [handOver]. */
+    private val nextStartPosition: (MediaItem) -> Long = { 0L },
+    private val incomingProcessor: BassSwapAudioProcessor? = null,
+    private val outgoingProcessor: BassSwapAudioProcessor? = null,
 ) {
     private var tail: ExoPlayer? = null
     private var job: Job? = null
@@ -53,6 +65,8 @@ class Crossfade(
     private var preparedFor: Pair<String, Int>? = null
     private var skipped: Pair<String, Int>? = null
     private var lead = 200L
+    @Volatile var handingOver: Boolean = false
+        private set
 
     /** Empieza a vigilar el final de cada canción. */
     fun start() {
@@ -67,39 +81,51 @@ class Crossfade(
 
     fun release() {
         job?.cancel()
+        resetProcessors()
         tail?.release()
         tail = null
     }
 
     /** Un vistazo: devuelve cuánto esperar hasta el siguiente. */
     private suspend fun step(): Long {
-        val fade = length()
         val item = player.currentMediaItem
-        if (fade <= 0 || item == null || !player.isPlaying || player.repeatMode == Player.REPEAT_MODE_ONE || !player.hasNextMediaItem()) {
+        if (item == null || !player.isPlaying || player.repeatMode == Player.REPEAT_MODE_ONE || !player.hasNextMediaItem()) {
             stopTail()
             return IDLE_MS
         }
         val dur = player.duration
         val pos = player.currentPosition
         val me = item.mediaId to player.currentMediaItemIndex
+        val plan = if (dur != C.TIME_UNSET) transitionPlan(item, dur) else null
+        val fade = plan?.fadeDurationMs ?: length()
+        val transitionAt = plan?.transitionAtMs ?: dur
         // Las muy cortas (o sin duración aún) no se funden: se comería media canción.
-        if (dur == C.TIME_UNSET || dur < fade * 3 || me == skipped) return IDLE_MS
-        val at = dur - fade
+        if (fade <= 0 || dur == C.TIME_UNSET || transitionAt <= 0L || transitionAt < fade * 2 || (plan == null && dur < fade * 3) || me == skipped) {
+            if (fade <= 0) stopTail()
+            return IDLE_MS
+        }
+        val at = (transitionAt - fade).coerceAtLeast(0L)
+        if (pos > at - MIN_PRE_HANDOVER_MS && preparedFor != me) {
+            stopTail()
+            return IDLE_MS
+        }
         // [tail] arranca antes del fundido: lo que tarda en asentarse.
-        val from = at - SETTLE_MS - ALIGN_BUDGET_MS
+        val from = (at - SETTLE_MS - ALIGN_BUDGET_MS).coerceAtLeast(0L)
         val left = from - pos
         if (preparedFor != null && preparedFor != me) stopTail()
         if (left > PREPARE_MS) return (left - PREPARE_MS).coerceIn(50, IDLE_MS)
 
         val t = tail ?: build().also { tail = it }
         if (preparedFor == null) {
-            // Si la siguiente aún no ha empezado a bajar, fundir sería meter un silencio en medio: se deja acabar sola.
-            if (player.totalBufferedDuration - (dur - pos) < NEXT_READY_MS) {
+            // En modo normal, si la siguiente aún no ha empezado a bajar, fundir sería meter un silencio en medio: se deja acabar sola.
+            // En plan adelantado (ADHD), [tail] cubre el relevo mientras la siguiente salta al segmento.
+            if (plan == null && player.totalBufferedDuration - (dur - pos) < NEXT_READY_MS) {
                 Timber.d("fundido: la siguiente no está lista, sin fundido")
                 skipped = me
                 return IDLE_MS
             }
             preparedFor = me
+            outgoingProcessor?.cutAmount = 0f
             t.setMediaItem(item, from)
             t.volume = 0f
             t.playWhenReady = false
@@ -121,49 +147,66 @@ class Crossfade(
     private suspend fun handOver(t: ExoPlayer, fade: Long) {
         val outGain = gain()
         val index = player.currentMediaItemIndex
-        t.volume = 0f
-        t.play()
-        // Sonando callado hasta que su posición es la de verdad. Pausar o pasar de canción mientras, lo cancela.
-        val asked = System.nanoTime()
-        fun cancelled() = !player.playWhenReady || player.currentMediaItemIndex != index || t.playerError != null
-        while (System.nanoTime() - asked < SETTLE_MS * 1_000_000L) {
-            if (cancelled()) { stopTail(); return }
-            delay(FRAME_MS)
+        handingOver = true
+        try {
+            t.volume = 0f
+            t.play()
+            // Sonando callado hasta que su posición es la de verdad. Pausar o pasar de canción mientras, lo cancela.
+            val asked = System.nanoTime()
+            fun cancelled() = !player.playWhenReady || player.currentMediaItemIndex != index || t.playerError != null
+            while (System.nanoTime() - asked < SETTLE_MS * 1_000_000L) {
+                if (cancelled()) { stopTail(); return }
+                delay(FRAME_MS)
+            }
+            val drift = player.currentPosition - t.currentPosition
+            // Lo que tardó en sonar, para la próxima vez (sin pasarse: un tirón puntual no lo descoloca).
+            lead = (lead + drift * 7 / 10).coerceIn(0, 1000)
+            // Y para esta: nunca arranca clavada (en un Nothing Phone (2), hasta 90 ms por delante), y pasar el sonido con ese desfase se
+            // oía como un corte. Callada, se la acelera o se la frena un poco hasta que va a la par.
+            val aligned = align(t, index) ?: return
+            Timber.d("fundido: desfase %d ms → %d ms, adelanto %d ms", drift, aligned, lead)
+            // El paso de uno a otro: la misma música, así que lineal (a mitad suman lo mismo que una).
+            val swap = System.nanoTime()
+            while (true) {
+                val q = ((System.nanoTime() - swap) / 1e6 / SWAP_MS).toFloat().coerceIn(0f, 1f)
+                if (!player.playWhenReady || player.currentMediaItemIndex != index) { onFadeIn(1f); stopTail(); return }
+                t.volume = outGain * q
+                onFadeIn(1f - q)
+                if (q >= 1f) break
+                delay(4)
+            }
+            onFadeIn(0f)
+            val nextIndex = player.currentMediaItemIndex + 1
+            val nextItem = if (nextIndex < player.mediaItemCount) player.getMediaItemAt(nextIndex) else null
+            val nextStartMs = nextItem?.let(nextStartPosition)?.coerceAtLeast(0L) ?: 0L
+            if (nextStartMs > 0L) player.seekTo(nextIndex, nextStartMs) else player.seekToNextMediaItem()
+            val next = player.currentMediaItemIndex
+            preparedFor = null
+            val smart = smartMix()
+            val start = System.nanoTime()
+            while (true) {
+                val p = ((System.nanoTime() - start) / 1e6 / fade).toFloat().coerceIn(0f, 1f)
+                // Potencia constante sobre curva S suave y cruce de graves cuando smartMix está activo.
+                t.volume = outGain * SmartMixMath.outgoingGain(p, smart)
+                onFadeIn(SmartMixMath.incomingGain(p, smart))
+                outgoingProcessor?.cutAmount = SmartMixMath.outgoingBassCut(p, smart)
+                incomingProcessor?.cutAmount = SmartMixMath.incomingBassCut(p, smart)
+                // Pausar o pasar de canción a mano corta el fundido: la que entra, a su volumen; la que se va, fuera.
+                // playWhenReady y no isPlaying: justo tras el salto la que entra está un momento cargando, y eso no es pausar.
+                if (p >= 1f || !player.playWhenReady || player.currentMediaItemIndex != next) break
+                delay(FRAME_MS)
+            }
+        } finally {
+            handingOver = false
+            resetProcessors()
+            onFadeIn(1f)
+            stopTail()
         }
-        val drift = player.currentPosition - t.currentPosition
-        // Lo que tardó en sonar, para la próxima vez (sin pasarse: un tirón puntual no lo descoloca).
-        lead = (lead + drift * 7 / 10).coerceIn(0, 1000)
-        // Y para esta: nunca arranca clavada (en un Nothing Phone (2), hasta 90 ms por delante), y pasar el sonido con ese desfase se
-        // oía como un corte. Callada, se la acelera o se la frena un poco hasta que va a la par.
-        val aligned = align(t, index) ?: return
-        Timber.d("fundido: desfase %d ms → %d ms, adelanto %d ms", drift, aligned, lead)
-        // El paso de uno a otro: la misma música, así que lineal (a mitad suman lo mismo que una).
-        val swap = System.nanoTime()
-        while (true) {
-            val q = ((System.nanoTime() - swap) / 1e6 / SWAP_MS).toFloat().coerceIn(0f, 1f)
-            if (!player.playWhenReady || player.currentMediaItemIndex != index) { onFadeIn(1f); stopTail(); return }
-            t.volume = outGain * q
-            onFadeIn(1f - q)
-            if (q >= 1f) break
-            delay(4)
-        }
-        onFadeIn(0f)
-        player.seekToNextMediaItem()
-        val next = player.currentMediaItemIndex
-        preparedFor = null
-        val start = System.nanoTime()
-        while (true) {
-            val p = ((System.nanoTime() - start) / 1e6 / fade).toFloat().coerceIn(0f, 1f)
-            // Potencia constante: a mitad las dos suenan a un 70 %, y no se nota un bajón.
-            t.volume = outGain * cos(p * PI.toFloat() / 2)
-            onFadeIn(sin(p * PI.toFloat() / 2))
-            // Pausar o pasar de canción a mano corta el fundido: la que entra, a su volumen; la que se va, fuera.
-            // playWhenReady y no isPlaying: justo tras el salto la que entra está un momento cargando, y eso no es pausar.
-            if (p >= 1f || !player.playWhenReady || player.currentMediaItemIndex != next) break
-            delay(FRAME_MS)
-        }
-        onFadeIn(1f)
-        stopTail()
+    }
+
+    private fun resetProcessors() {
+        incomingProcessor?.cutAmount = 0f
+        outgoingProcessor?.cutAmount = 0f
     }
 
     /**
@@ -195,6 +238,7 @@ class Crossfade(
 
     private fun stopTail() {
         preparedFor = null
+        resetProcessors()
         val t = tail ?: return
         if (t.playbackState != Player.STATE_IDLE || t.mediaItemCount > 0) {
             t.stop()
@@ -202,11 +246,23 @@ class Crossfade(
         }
     }
 
-    private fun build() = ExoPlayer.Builder(context)
-        .setMediaSourceFactory(sources)
-        // Sin foco de audio: si lo pidiera, le quitaría el suyo a [player], que se pararía.
-        .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), false)
-        .build()
+    private fun build(): ExoPlayer {
+        val renderers = object : DefaultRenderersFactory(context) {
+            override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink {
+                val processors = outgoingProcessor?.let { arrayOf(it) } ?: emptyArray()
+                return DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .setAudioProcessors(processors)
+                    .build()
+            }
+        }
+        return ExoPlayer.Builder(context, renderers)
+            .setMediaSourceFactory(sources)
+            // Sin foco de audio: si lo pidiera, le quitaría el suyo a [player], que se pararía.
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), false)
+            .build()
+    }
 
     private companion object {
         const val IDLE_MS = 500L
@@ -219,6 +275,7 @@ class Crossfade(
         const val SETTLE_MS = 600L
         // Lo que suele tardar en ponerse a la par: así el fundido sigue empezando más o menos donde tocaba.
         const val ALIGN_BUDGET_MS = 600L
+        const val MIN_PRE_HANDOVER_MS = 300L
         const val SWAP_MS = 80L
         // Cuánto se le da para ponerse a la par, cuánto desfase se acepta y cuánto se la puede acelerar o frenar.
         const val ALIGN_MS = 2_000L

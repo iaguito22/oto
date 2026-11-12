@@ -15,10 +15,14 @@ import com.metrolist.innertube.models.AlbumItem
 import com.metrolist.innertube.models.ArtistItem
 import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
+import io.github.iaguito22.oto.DEFAULT_SMART_MIX
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.LoopMode
 import io.github.iaguito22.oto.PlaylistMode
 import io.github.iaguito22.oto.Prefs
+import io.github.iaguito22.oto.dj.DjMode
+import io.github.iaguito22.oto.dj.DjMood
+import io.github.iaguito22.oto.dj.DjReaction
 import io.github.iaguito22.oto.dj.Plays
 import io.github.iaguito22.oto.dj.Smart
 import io.github.iaguito22.oto.toSong
@@ -105,6 +109,12 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     private val _defaultLoop = MutableStateFlow(false)
     private val _modes = MutableStateFlow<Map<String, PlaylistMode>>(emptyMap())
     val modes: StateFlow<Map<String, PlaylistMode>> = _modes.asStateFlow()
+    private val _djMood = MutableStateFlow(DjMood.Auto)
+    val djMood: StateFlow<DjMood> = _djMood.asStateFlow()
+    private val _djMode = MutableStateFlow(DjMode.Normal)
+    val djMode: StateFlow<DjMode> = _djMode.asStateFlow()
+    private val _smartMix = MutableStateFlow(DEFAULT_SMART_MIX)
+    val smartMix: StateFlow<Boolean> = _smartMix.asStateFlow()
 
     // Lo que el aleatorio tiene en cuenta, siempre a mano: lo que te gusta y cuándo sonó de verdad cada una.
     @Volatile private var liked = emptySet<String>()
@@ -136,6 +146,14 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
             }
         }
         scope.launch { prefs.playlistModes.collect { _modes.value = it } }
+        scope.launch { prefs.djMood.collect { _djMood.value = it } }
+        scope.launch {
+            prefs.djMode.collect { mode ->
+                _djMode.value = mode
+                if (_source.value?.kind == "DJ") _source.value = djSource(mode)
+            }
+        }
+        scope.launch { prefs.smartMix.collect { _smartMix.value = it } }
         scope.launch { prefs.likedIds.collect { liked = it } }
         // El historial cambia con cada canción: es cuando el diario de escuchas tiene algo nuevo.
         scope.launch {
@@ -433,18 +451,56 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
      * El DJ (ver [io.github.iaguito22.oto.dj.Dj]): lo elige el servicio, de una en una. [onFail]: aún no sabe nada de
      * ti (no hay listas, Me gusta ni historial).
      */
-    override fun playDj(onFail: () -> Unit) { mirror?.let { return it.send("dj") }; playDjHere(onFail) }
+    override fun playDj(onFail: () -> Unit) = playDj(DjMode.Normal, onFail)
 
-    private fun playDjHere(onFail: () -> Unit) = withController { c ->
+    fun playDjAdhd(onFail: () -> Unit = {}) = playDj(DjMode.Adhd, onFail)
+
+    fun playDj(mode: DjMode, onFail: () -> Unit = {}) {
+        mirror?.let { return it.send("dj") }
+        _djMode.value = mode
+        scope.launch { prefs.setDjMode(mode) }
+        playDjHere(mode, onFail)
+    }
+
+    fun setDjMood(mood: DjMood) {
+        _djMood.value = mood
+        scope.launch { prefs.setDjMood(mood) }
+        if (mirror != null) return
+        controller?.sendCustomCommand(SessionCommand(DJ_MOOD_COMMAND, Bundle.EMPTY), Bundle().apply { putString(EXTRA_DJ_MOOD, mood.name) })
+    }
+
+    fun setDjMode(mode: DjMode) {
+        _djMode.value = mode
+        if (_source.value?.kind == "DJ") _source.value = djSource(mode)
+        scope.launch { prefs.setDjMode(mode) }
+        if (mirror != null) return
+        controller?.sendCustomCommand(SessionCommand(DJ_MODE_COMMAND, Bundle.EMPTY), Bundle().apply { putString(EXTRA_DJ_MODE, mode.name) })
+    }
+
+    fun reactDj(trackId: String, reaction: DjReaction) {
+        if (mirror != null || _source.value?.kind != "DJ" || trackId.isBlank()) return
+        controller?.sendCustomCommand(
+            SessionCommand(DJ_REACT_COMMAND, Bundle.EMPTY),
+            Bundle().apply {
+                putString(EXTRA_DJ_TRACK_ID, trackId)
+                putString(EXTRA_DJ_REACTION, reaction.name)
+            },
+        )
+    }
+
+    private fun djSource(mode: DjMode) = Source("DJ", if (mode == DjMode.Adhd) "Modo rápido (ADHD)" else "Mezcla para ti")
+
+    private fun playDjHere(mode: DjMode, onFail: () -> Unit) = withController { c ->
         shuffling?.cancel()
         val before = _source.value
         val beforeId = currentListId
         currentListId = null
-        _source.value = Source("DJ", "Mezcla para ti")
+        _source.value = djSource(mode)
         original = null
         _loopMode.value = LoopMode.Off
         c.repeatMode = Player.REPEAT_MODE_OFF
-        val result = c.sendCustomCommand(SessionCommand(DJ_COMMAND, Bundle.EMPTY), Bundle.EMPTY)
+        val args = Bundle().apply { putString(EXTRA_DJ_MODE, mode.name) }
+        val result = c.sendCustomCommand(SessionCommand(DJ_COMMAND, Bundle.EMPTY), args)
         result.addListener({
             if (runCatching { result.get().resultCode }.getOrNull() != SessionResult.RESULT_SUCCESS) {
                 currentListId = beforeId

@@ -39,7 +39,13 @@ import io.github.iaguito22.oto.ui.theme.Space
 
 /** El DJ en Tu música, junto a Me gusta: un disco que gira mientras pincha. */
 @Composable
-fun DjCard(spinning: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null) {
+fun DjCard(
+    spinning: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    subtitle: String = if (spinning) "Pinchando" else "Mezcla para ti",
+    onLongClick: (() -> Unit)? = null,
+) {
     val c = Oto.colors
     Column(
         modifier
@@ -51,7 +57,7 @@ fun DjCard(spinning: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier
         DjArt(140.dp, spinning)
         Spacer(Modifier.height(Space.sm))
         Text("DJ", style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 1.05f), color = c.text, maxLines = 1)
-        Text(if (spinning) "Pinchando" else "Mezcla para ti", style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(subtitle, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

@@ -136,6 +136,8 @@ import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.QualityMode
 import io.github.iaguito22.oto.R
 import io.github.iaguito22.oto.Storage
+import io.github.iaguito22.oto.dj.DjMode
+import io.github.iaguito22.oto.dj.DjMood
 import io.github.iaguito22.oto.dj.Smart
 import io.github.iaguito22.oto.playback.PlayerConnection
 import io.github.iaguito22.oto.toHeard
@@ -288,6 +290,8 @@ fun MenuSheet(
     // Recolocando la fila de arriba de Tus listas: cada una se arrastra a su sitio, hasta «Listo».
     var arranging by remember { mutableStateOf(false) }
     var djMenu by remember { mutableStateOf(false) }
+    val djMood by connection.djMood.collectAsStateWithLifecycle()
+    val djMode by connection.djMode.collectAsStateWithLifecycle()
     val spots by prefs.spots.collectAsStateWithLifecycle(initialValue = null)
     val focus = LocalFocusManager.current
     val haptics = LocalHapticFeedback.current
@@ -437,12 +441,17 @@ fun MenuSheet(
             ) { nav ->
                 when (nav.view) {
                     View.Tabs -> HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 0, userScrollEnabled = !arranging) { page ->
+                        val launchDj: (DjMode) -> Unit = { mode ->
+                            if (playlists.orEmpty().all { it.songs.isEmpty() } && liked?.songs.isNullOrEmpty()) say("El DJ aprende de tus listas: guarda algo primero")
+                            else { connection.playDj(mode, onFail = { say("El DJ no ha podido empezar") }); onClose() }
+                        }
                         if (page == 0) YourMusic(history, liked, playlists, pinned, folders, played, currentId, play, onHold = { hold(it, null) }, onOpen = vm::openLocal, onFolder = vm::openFolder, onNew = { creating = true },
                             dj = source?.kind == "DJ" && np.playing,
-                            onDj = {
-                                if (playlists.orEmpty().all { it.songs.isEmpty() } && liked?.songs.isNullOrEmpty()) say("El DJ aprende de tus listas: guarda algo primero")
-                                else { connection.playDj(onFail = { say("El DJ no ha podido empezar") }); onClose() }
-                            },
+                            djMood = djMood,
+                            djMode = djMode,
+                            onDj = { launchDj(DjMode.Normal) },
+                            onDjAdhd = { launchDj(DjMode.Adhd) },
+                            onDjMood = { m -> haptics.performHapticFeedback(HapticFeedbackType.SegmentTick); connection.setDjMood(m) },
                             onListMenu = { listMenu = it },
                             onFolderMenu = { folderMenu = it },
                             arranging = arranging, onDoneArranging = { arranging = false },
@@ -540,7 +549,7 @@ fun MenuSheet(
                         )
                         null -> Unit
                     }
-                    View.Settings -> Settings(onBack = { settings = false }, onTutorial = onTutorial, onImport = { importing = true }, onAccount = { accounting = true })
+                    View.Settings -> Settings(connection = connection, onBack = { settings = false }, onTutorial = onTutorial, onImport = { importing = true }, onAccount = { accounting = true })
                     View.Account -> AccountView(onBack = { accounting = false }, onSignedIn = vm::loadHome)
                     View.Import -> Import(onBack = { importing = false }, onLists = {
                         importing = false; settings = false
@@ -621,7 +630,24 @@ fun MenuSheet(
             )
         }
         Floating(djMenu.takeIf { it }, onDismiss = { djMenu = false }) {
-            FloatHeader({ DjArt(48.dp, source?.kind == "DJ" && np.playing) }, "DJ", "Mezcla para ti, con lo que oyes")
+            val djSub = if (djMode == DjMode.Adhd) "DJ rápido (ADHD) · ${djMood.label}" else "Mezcla para ti · ${djMood.label}"
+            val startFromMenu: (DjMode) -> Unit = { mode ->
+                djMenu = false
+                if (playlists.orEmpty().all { it.songs.isEmpty() } && liked?.songs.isNullOrEmpty()) say("El DJ aprende de tus listas: guarda algo primero")
+                else { connection.playDj(mode, onFail = { say("El DJ no ha podido empezar") }); onClose() }
+            }
+            FloatHeader({ DjArt(48.dp, source?.kind == "DJ" && np.playing) }, "DJ", djSub)
+            ActionRow(R.drawable.ic_play_arrow, "Iniciar DJ normal") { startFromMenu(DjMode.Normal) }
+            ActionRow(R.drawable.ic_timer, "Iniciar DJ rápido (ADHD)", trailing = { Text("45-75 s", style = OtoType.rowSub, color = Oto.colors.textMuted) }) { startFromMenu(DjMode.Adhd) }
+            Text("MOOD EN VIVO", style = OtoType.label, color = Oto.colors.textMuted, modifier = Modifier.padding(start = Space.md, top = Space.sm, bottom = Space.xs))
+            LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.xs), modifier = Modifier.padding(bottom = Space.xs)) {
+                items(DjMood.entries, key = { it.name }) { m ->
+                    Chip(m.label, m == djMood) {
+                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                        connection.setDjMood(m)
+                    }
+                }
+            }
             ActionRow(R.drawable.ic_swap_horiz, "Mover") { djMenu = false; arranging = true }
         }
         Floating(listMenu, onDismiss = { listMenu = null }) { list ->
@@ -1452,7 +1478,7 @@ private fun ChoiceRow(icon: Int, title: String, body: String, options: List<Stri
 }
 
 @Composable
-private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () -> Unit, onAccount: () -> Unit) {
+private fun Settings(connection: PlayerConnection, onBack: () -> Unit, onTutorial: () -> Unit, onImport: () -> Unit, onAccount: () -> Unit) {
     val c = Oto.colors
     Column(Modifier.fillMaxSize().padding(horizontal = Space.sm)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1476,7 +1502,9 @@ private fun Settings(onBack: () -> Unit, onTutorial: () -> Unit, onImport: () ->
             SettingRow(R.drawable.ic_account_circle, "Dispositivos", "Conectar con Oto Desktop en la red local") { app.startActivity(android.content.Intent(app, io.github.iaguito22.oto.remote.DevicesActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
             AudioSettings(app.prefs)
             CrossfadeRow(app.prefs)
+            SmartMixRow(app.prefs)
             PlaybackSettings(app.prefs)
+            DjSettings(connection)
             ScreenSettings(app.prefs)
             SpaceRow(app)
             SettingRow(R.drawable.ic_swipe_up, "Ver los gestos otra vez", "El tutorial del principio", onTutorial)
@@ -1621,6 +1649,59 @@ private fun CrossfadeRow(prefs: Prefs) {
     }
 }
 
+/** Mezcla inteligente tipo Apple Music: curva S de potencia constante y cruce de graves durante el fundido. */
+@Composable
+private fun SmartMixRow(prefs: Prefs) {
+    val scope = rememberCoroutineScope()
+    val smart by prefs.smartMix.collectAsStateWithLifecycle(initialValue = null)
+    val on = smart ?: return
+    ToggleRow(
+        R.drawable.ic_graphic_eq,
+        "Mezcla inteligente",
+        if (on) "Curva suave y cruce progresivo de graves entre canciones para que no choquen los bombos."
+        else "Fundido clásico por volumen sin filtro de graves.",
+        on,
+    ) { scope.launch { prefs.setSmartMix(!on) } }
+}
+
+/** Mood activo del DJ y modo rápido (ADHD) por segmentos cortos. */
+@Composable
+private fun DjSettings(connection: PlayerConnection) {
+    val c = Oto.colors
+    val haptics = LocalHapticFeedback.current
+    val mood by connection.djMood.collectAsStateWithLifecycle()
+    val mode by connection.djMode.collectAsStateWithLifecycle()
+    val adhd = mode == DjMode.Adhd
+    Row(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.md)) {
+        SettingIcon(R.drawable.ic_graphic_eq)
+        Spacer(Modifier.width(Space.md))
+        Column(Modifier.weight(1f)) {
+            Text("Mood del DJ", style = OtoType.rowTitle, color = c.text)
+            Text(
+                "Adapta energía, continuidad y descubrimiento al instante, incluso mientras pincha.",
+                style = OtoType.rowSub,
+                color = c.textMuted,
+                modifier = Modifier.padding(top = 2.dp, bottom = Space.sm),
+            )
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
+                items(DjMood.entries, key = { it.name }) { m ->
+                    Chip(m.label, m == mood) {
+                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                        connection.setDjMood(m)
+                    }
+                }
+            }
+        }
+    }
+    ToggleRow(
+        R.drawable.ic_timer,
+        "DJ rápido (ADHD)",
+        if (adhd) "Salta la intro y mezcla cada canción tras unos 45-75 segundos."
+        else "Las canciones del DJ suenan enteras. Puedes lanzar el modo rápido aparte desde Tu música.",
+        adhd,
+    ) { connection.setDjMode(if (adhd) DjMode.Normal else DjMode.Adhd) }
+}
+
 /**
  * Lo que ocupa Oto en el móvil, con una barra hasta su tope (ver [Storage]). Se vacía con su botón y un segundo toque:
  * antes bastaba rozar la fila.
@@ -1727,7 +1808,11 @@ private fun YourMusic(
     onListMenu: (LocalPlaylist) -> Unit,
     onFolderMenu: (String) -> Unit,
     dj: Boolean,
+    djMood: DjMood,
+    djMode: DjMode,
     onDj: () -> Unit,
+    onDjAdhd: () -> Unit,
+    onDjMood: (DjMood) -> Unit,
     arranging: Boolean,
     onDoneArranging: () -> Unit,
     onReorder: (List<String>, Map<String, Int>) -> Unit,
@@ -1784,9 +1869,28 @@ private fun YourMusic(
                 else -> onFolderMenu(e.folder)
             }
         }
+        val djSub = when {
+            dj && djMode == DjMode.Adhd -> "Modo ADHD · ${djMood.label}"
+            dj -> "Pinchando · ${djMood.label}"
+            else -> "Mezcla para ti"
+        }
         item(key = "pinned") {
-            ShelfRow(top, arranging, onMove = reorder, onOpen = open, onMenu = menu, dj = dj) {
+            ShelfRow(top, arranging, onMove = reorder, onOpen = open, onMenu = menu, dj = dj, djSubtitle = djSub) {
                 if (playlists.isEmpty()) item(key = "new") { NewListCard(onNew) }
+            }
+        }
+        if (!arranging) item(key = "djQuick") {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = Space.lg),
+                horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                modifier = Modifier.padding(top = Space.sm),
+            ) {
+                item(key = "adhdLaunch") {
+                    Chip("DJ rápido (ADHD)", dj && djMode == DjMode.Adhd, onClick = onDjAdhd)
+                }
+                items(DjMood.entries, key = { it.name }) { m ->
+                    Chip(m.label, m == djMood) { onDjMood(m) }
+                }
             }
         }
         // Con muchas listas, un segundo carrusel no se acababa nunca. Seis a la vista; todas, con su orden y sus filtros,
@@ -1820,6 +1924,7 @@ private fun ShelfRow(
     onOpen: (Shelved) -> Unit,
     onMenu: (Shelved) -> Unit,
     dj: Boolean = false,
+    djSubtitle: String = if (dj) "Pinchando" else "Mezcla para ti",
     tail: LazyListScope.() -> Unit = {},
 ) {
     val haptics = LocalHapticFeedback.current
@@ -1865,7 +1970,7 @@ private fun ShelfRow(
                 val click = { if (!arranging) onOpen(e) }
                 val hold = { if (!arranging) { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onMenu(e) } }
                 when {
-                    e.special == "dj" -> DjCard(dj, onClick = click, modifier = lift, onLongClick = hold)
+                    e.special == "dj" -> DjCard(dj, onClick = click, modifier = lift, subtitle = djSubtitle, onLongClick = hold)
                     e.folder == null -> PlaylistCard(e.lists.first(), onClick = click, onLongClick = hold, modifier = lift)
                     else -> FolderCard(e.folder, e.lists, onClick = click, onLongClick = hold, modifier = lift)
                 }

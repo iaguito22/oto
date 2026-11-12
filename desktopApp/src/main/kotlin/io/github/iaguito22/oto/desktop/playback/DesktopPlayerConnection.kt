@@ -9,10 +9,15 @@ import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.LoopMode
 import io.github.iaguito22.oto.PlaylistMode
 import io.github.iaguito22.oto.OtoDirs
-import io.github.iaguito22.oto.desktop.isWindowsDesktop
+import io.github.iaguito22.oto.DEFAULT_SMART_MIX
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.QualityMode
+import io.github.iaguito22.oto.dj.AdhdPlanner
+import io.github.iaguito22.oto.dj.AdhdSegment
 import io.github.iaguito22.oto.dj.Dj
+import io.github.iaguito22.oto.dj.DjMode
+import io.github.iaguito22.oto.dj.DjMood
+import io.github.iaguito22.oto.dj.DjReaction
 import io.github.iaguito22.oto.dj.Memory
 import io.github.iaguito22.oto.dj.Play
 import io.github.iaguito22.oto.dj.Plays
@@ -57,9 +62,6 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.min
 import kotlin.math.pow
-import kotlin.math.PI
-import kotlin.math.sin
-import kotlin.math.cos
 
 /**
  * Implementación de [OtoPlayer] para Linux y Windows.
@@ -140,9 +142,27 @@ class DesktopPlayerConnection(
     private var currentIndex = -1
     private var radio: Radio? = null
     private var dj: Dj? = null
+    private var djReplenishJob: Job? = null
     @Volatile private var resolvingTrack = false
     private var resolveJob: Job? = null
     private var lyricsJob: Job? = null
+
+    private val _djActive = MutableStateFlow(false)
+    val djActive: StateFlow<Boolean> = _djActive.asStateFlow()
+
+    private val _djMode = MutableStateFlow(DjMode.Normal)
+    val djMode: StateFlow<DjMode> = _djMode.asStateFlow()
+
+    private val _djMood = MutableStateFlow(DjMood.Auto)
+    val djMood: StateFlow<DjMood> = _djMood.asStateFlow()
+
+    private val _adhdSegment = MutableStateFlow<AdhdSegment?>(null)
+    val adhdSegment: StateFlow<AdhdSegment?> = _adhdSegment.asStateFlow()
+
+    @Volatile private var smartMixEnabled = DEFAULT_SMART_MIX
+    @Volatile private var ramSaverEnabled = false
+    @Volatile private var currentTrackStartOffsetMs = 0L
+    @Volatile private var finishedAdhdTrackKey: String? = null
 
     private val activeDeck = MutableStateFlow<DesktopAudioEngine?>(null)
     private var engine: DesktopAudioEngine
@@ -156,7 +176,15 @@ class DesktopPlayerConnection(
         return deck
     }
     private val decks = listOf(createDeck("audio"),createDeck("audio-crossfade"))
-    private data class PreparedNext(val currentId:String,val next:SongItem,val deck:DesktopAudioEngine,val quality:Quality?,val gain:Float)
+    val supportsCrossfade: Boolean get() = decks.all { it.supportsCrossfade }
+    private data class PreparedNext(
+        val currentId:String,
+        val next:SongItem,
+        val deck:DesktopAudioEngine,
+        val quality:Quality?,
+        val gain:Float,
+        val adhdSegment:AdhdSegment? = null,
+    )
     @Volatile private var preparedNext:PreparedNext? = null
     @Volatile private var preparingKey:Pair<String,String>? = null
     @Volatile private var preparingDeck:DesktopAudioEngine? = null
@@ -182,6 +210,19 @@ class DesktopPlayerConnection(
                     buffering = resolvingTrack || es.buffering,
                     durationMs = if (es.durationMs > 0L) es.durationMs else cur.durationMs,
                 )
+                val activeDj = dj
+                if (activeDj != null && activeDj.mode == DjMode.Adhd && es.durationMs > 0L && _adhdSegment.value == null && !crossfadeActive) {
+                    val curSong = songQueue.getOrNull(currentIndex)
+                    if (curSong != null && curSong.id == cur.id) {
+                        val fadeMs = DesktopTransitionPlanner.effectiveAdhdCrossfadeMs(fadeSeconds, ramSaverEnabled)
+                        val seg = synchronized(activeDj) { activeDj.adhdSegment(curSong.toTrack(), es.durationMs, fadeMs) }
+                        _adhdSegment.value = seg
+                        if (seg != null && currentTrackStartOffsetMs == 0L && seg.startMs > 5000L && es.positionMs < 3000L && es.playing && !es.buffering) {
+                            currentTrackStartOffsetMs = seg.startMs
+                            active.seekTo(seg.startMs)
+                        }
+                    }
+                }
             } }
         }
         scope.launch {
@@ -198,15 +239,33 @@ class DesktopPlayerConnection(
         }
         scope.launch { prefs.playlistModes.collect { _modes.value = it } }
         scope.launch { prefs.likedIds.collect { liked = it } }
+        scope.launch { prefs.smartMix.collect { smartMixEnabled = it } }
+        scope.launch {
+            prefs.djMood.collect { mood ->
+                _djMood.value = mood
+                dj?.let { activeDj -> synchronized(activeDj) { activeDj.setMood(mood) } }
+            }
+        }
+        scope.launch {
+            prefs.djMode.collect { mode ->
+                if (dj == null) _djMode.value = mode
+            }
+        }
         scope.launch {
             prefs.history.collect {
                 heardAt = withContext(Dispatchers.IO) { runCatching { plays.all() }.getOrDefault(emptyList()) }.filter { it.heard }.associate { it.id to it.at }
             }
         }
-        if(isWindowsDesktop) {
-            scope.launch { kotlinx.coroutines.flow.combine(prefs.crossfade, prefs.ramSaver) { seconds, saving -> if(saving) 0 else seconds }.collect { fadeSeconds=it.coerceAtLeast(0); if(fadeSeconds==0) cancelCrossfade() } }
-            scope.launch { watchCrossfade() }
+        scope.launch {
+            kotlinx.coroutines.flow.combine(prefs.crossfade, prefs.ramSaver) { seconds, saving ->
+                ramSaverEnabled = saving
+                if (saving) 0 else seconds
+            }.collect {
+                fadeSeconds = it.coerceAtLeast(0)
+                if (fadeSeconds == 0 && dj?.mode != DjMode.Adhd) cancelCrossfade()
+            }
         }
+        scope.launch { watchCrossfade() }
     }
 
     fun beat(): Float = engine.beat(position())
@@ -228,6 +287,7 @@ class DesktopPlayerConnection(
         preparedNext?.deck?.takeIf { it !== activeDeck.value }?.stop()
         preparedNext=null; preparingKey=null
         outgoing?.takeIf { it !== activeDeck.value }?.stop(); outgoing=null
+        engine.resetMixBands()
         fadeIn=1f;fadeOut=0f
         applyDeckGains()
     }
@@ -238,9 +298,13 @@ class DesktopPlayerConnection(
             val current = songQueue.getOrNull(currentIndex)
             val next = songQueue.getOrNull(currentIndex+1)
             val state = engine.state.value
-            val length = fadeSeconds * 1000L
+            val activeAdhd = if (dj?.mode == DjMode.Adhd) _adhdSegment.value else null
+            val pcmSupported = supportsCrossfade
+            val canPrepareCrossfade = pcmSupported && !ramSaverEnabled && (fadeSeconds > 0 || activeAdhd != null)
+            val length = if (activeAdhd != null) DesktopTransitionPlanner.effectiveAdhdCrossfadeMs(fadeSeconds, ramSaverEnabled) else fadeSeconds * 1000L
             val key = if(current!=null && next!=null) current.id to next.id else null
-            if(length <= 0 || key==null || !state.playing || state.buffering || state.durationMs < length*3) {
+            val minTrackDurationOk = activeAdhd != null || state.durationMs >= length * 3L
+            if(!canPrepareCrossfade || length <= 0 || key==null || !state.playing || state.buffering || !minTrackDurationOk) {
                 if(fading?.isActive != true && (preparedNext!=null || preparation?.isActive==true)) cancelCrossfade()
             } else if(fading?.isActive != true) {
                 if(preparingKey != key) {
@@ -249,9 +313,33 @@ class DesktopPlayerConnection(
                     val generation=preparationGeneration.get()
                     preparation=scope.launch(Dispatchers.IO) { prepareNext(current!!,next!!,generation) }
                 }
-                val candidate=preparedNext
-                if(candidate!=null && candidate.currentId==current!!.id && candidate.next.id==next!!.id && state.durationMs-state.positionMs <= length) {
-                    fading=scope.launch { performCrossfade(candidate,length) }
+            }
+
+            if (fading?.isActive != true && current != null) {
+                val candidate = preparedNext?.takeIf { it.currentId == current.id && it.next.id == next?.id }
+                val action = DesktopTransitionPlanner.evaluate(
+                    positionMs = state.positionMs,
+                    durationMs = state.durationMs,
+                    playing = state.playing,
+                    buffering = state.buffering,
+                    configuredFadeSeconds = fadeSeconds,
+                    ramSaver = ramSaverEnabled,
+                    crossfadeSupported = pcmSupported,
+                    nextReady = candidate != null,
+                    adhdSegment = activeAdhd,
+                )
+                when (action) {
+                    is TransitionAction.StartCrossfade -> if (candidate != null) {
+                        fading = scope.launch { performCrossfade(candidate, action.durationMs) }
+                    }
+                    TransitionAction.FinishTrackNow -> {
+                        val trackKey = "${currentIndex}:${current.id}"
+                        if (finishedAdhdTrackKey != trackKey) {
+                            finishedAdhdTrackKey = trackKey
+                            onTrackFinished(completedNaturally = true)
+                        }
+                    }
+                    TransitionAction.None -> Unit
                 }
             }
             delay(100)
@@ -264,22 +352,32 @@ class DesktopPlayerConnection(
         deck.stop()
         try {
             val duration=(next.duration ?: 0).takeIf { it>0 }?.times(1000L) ?: 0L
+            val activeDj = dj
+            val adhdFadeMs = DesktopTransitionPlanner.effectiveAdhdCrossfadeMs(fadeSeconds, ramSaverEnabled)
+            var nextSeg = if (activeDj?.mode == DjMode.Adhd && duration > 0L) {
+                synchronized(activeDj) { activeDj.adhdSegment(next.toTrack(), duration, adhdFadeMs) }
+            } else null
+            val initialPos = nextSeg?.startMs ?: 0L
             val local=downloads.localFile(next.id)
             val quality:Quality?
             val gain:Float
             if(local!=null) {
                 quality=downloads.quality(next.id); gain=1f
-                if(!deck.loadLocalFile(local,duration,playWhenReady=false)) return
+                if(!deck.loadLocalFile(local,duration,playWhenReady=false,initialPositionMs=initialPos)) return
             } else {
                 val tier=if(prefs.dataSaver.first() && prefs.quality.first()!=QualityMode.Max) Tier.Low else Tier.High
                 val stream=InnerTubeXPlayer.resolve(next.id,tier).getOrThrow()
                 currentCoroutineContext().ensureActive()
                 quality=stream.quality
                 gain=stream.loudnessDb?.let { min(1f,10f.pow(-it.toFloat()/20f)) } ?: 1f
-                deck.loadAndPlay(tier.key(next.id),stream.url,stream.headers,stream.contentLength,duration,stream.quality.codec,playWhenReady=false)
+                deck.loadAndPlay(tier.key(next.id),stream.url,stream.headers,stream.contentLength,duration,stream.quality.codec,playWhenReady=false,initialPositionMs=initialPos)
             }
             val ready=withTimeoutOrNull(90_000) { deck.state.first { !it.buffering && it.bufferedFraction>=1f } } != null
-            if(ready && preparationGeneration.get()==generation && preparingKey==(current.id to next.id) && activeDeck.value !== deck) preparedNext=PreparedNext(current.id,next,deck,quality,gain)
+            if (ready && activeDj?.mode == DjMode.Adhd && nextSeg == null && deck.state.value.durationMs > 0L) {
+                nextSeg = synchronized(activeDj) { activeDj.adhdSegment(next.toTrack(), deck.state.value.durationMs, adhdFadeMs) }
+                if (nextSeg != null && nextSeg.startMs > 0L) deck.seekTo(nextSeg.startMs)
+            }
+            if(ready && preparationGeneration.get()==generation && preparingKey==(current.id to next.id) && activeDeck.value !== deck) preparedNext=PreparedNext(current.id,next,deck,quality,gain,nextSeg)
         } catch(cancelled:kotlinx.coroutines.CancellationException) { throw cancelled }
         catch(error:Exception) { Timber.w(error,"No se pudo preparar la siguiente canción para el fundido") }
         finally {
@@ -295,6 +393,8 @@ class DesktopPlayerConnection(
         val originalIndex=currentIndex
         val oldGain=currentLoudnessGain
         val deck=next.deck
+        val (_, startInBands) = MixCurve.bands(0f, smartMixEnabled)
+        deck.setMixBands(startInBands.copy(overall = 1f))
         deck.setGain(0f)
         deck.resume()
         val started=withTimeoutOrNull(1500) { deck.state.first { it.playing && !it.buffering && it.positionMs>0 } } != null
@@ -306,6 +406,16 @@ class DesktopPlayerConnection(
         preparedNext=null;preparation=null;preparingKey=null
         currentIndex=originalIndex+1
         currentLoudnessGain=next.gain
+        val resolvedNextSeg = next.adhdSegment ?: dj?.takeIf { it.mode == DjMode.Adhd }?.let { activeDj ->
+            deck.state.value.durationMs.takeIf { it > 0L }?.let { dur ->
+                synchronized(activeDj) {
+                    activeDj.adhdSegment(next.next.toTrack(), dur, DesktopTransitionPlanner.effectiveAdhdCrossfadeMs(fadeSeconds, ramSaverEnabled))
+                }
+            }
+        }
+        _adhdSegment.value = resolvedNextSeg
+        currentTrackStartOffsetMs = resolvedNextSeg?.startMs ?: 0L
+        finishedAdhdTrackKey = null
         engine=deck
         val song=next.next
         _currentQuality.value=next.quality
@@ -317,16 +427,20 @@ class DesktopPlayerConnection(
         maybeReplenishQueue()
         val start=System.nanoTime()
         try {
+            val safeLength = length.coerceAtLeast(200L)
             while(true) {
-                val p=((System.nanoTime()-start)/1_000_000.0/length).toFloat().coerceIn(0f,1f)
-                fadeOut=cos(p*PI.toFloat()/2);fadeIn=sin(p*PI.toFloat()/2)
+                val p=((System.nanoTime()-start)/1_000_000.0/safeLength).toFloat().coerceIn(0f,1f)
+                val (outBands, inBands) = MixCurve.bands(p, smartMixEnabled)
+                fadeOut=outBands.overall; fadeIn=inBands.overall
+                old.setMixBands(outBands.copy(overall = 1f))
+                deck.setMixBands(inBands.copy(overall = 1f))
                 applyDeckGains()
                 if(p>=1f || engine !== deck || !deck.state.value.playing) break
                 delay(16)
             }
         } finally {
             if(outgoing===old) { old.stop();outgoing=null }
-            if(activeDeck.value===deck) { fadeIn=1f;fadeOut=0f;applyDeckGains() }
+            if(activeDeck.value===deck) { fadeIn=1f;fadeOut=0f;deck.resetMixBands();applyDeckGains() }
         }
     }
 
@@ -335,7 +449,7 @@ class DesktopPlayerConnection(
     override fun restarts(): Boolean = _positionMs.value > 3500L
 
     override fun play(song: SongItem) {
-        dj = null
+        clearDjSession()
         stopAutoplay()
         radio = Radio(song.id)
         originalQueue = null
@@ -413,8 +527,18 @@ class DesktopPlayerConnection(
      * Como en el móvil: la lista recupera su aleatorio y su bucle (o los de Ajustes si es nueva). Con aleatorio, la
      * tocada ([start]) suena la primera y el resto se baraja con [Shuffle], que evita repetir artista seguido.
      */
-    private fun playList(listId: String?, items: List<SongItem>, itemAges: List<Float?>, start: Int?) {
+    private fun clearDjSession() {
         dj = null
+        djReplenishJob?.cancel()
+        djReplenishJob = null
+        _djActive.value = false
+        _adhdSegment.value = null
+        currentTrackStartOffsetMs = 0L
+        finishedAdhdTrackKey = null
+    }
+
+    private fun playList(listId: String?, items: List<SongItem>, itemAges: List<Float?>, start: Int?) {
+        clearDjSession()
         radio = null
         stopAutoplay()
         currentListId = listId
@@ -437,31 +561,81 @@ class DesktopPlayerConnection(
     private fun shuffleItems(items: List<SongItem>, itemAges: List<Float?>) =
         items.mapIndexed { i, s -> Shuffle.Item(s.id, s.artists.joinToString { it.name }, itemAges.getOrNull(i)) }
 
-    override fun playDj(onFail: () -> Unit) {
+    override fun playDj(onFail: () -> Unit) = playDj(DjMode.Normal, onFail)
+
+    fun playAdhdDj(onFail: () -> Unit) = playDj(DjMode.Adhd, onFail)
+
+    fun playDj(mode: DjMode, onFail: () -> Unit) {
         scope.launch {
+            val mood = _djMood.value
             val newDj = withContext(Dispatchers.Default) {
                 val lists = prefs.playlists.first()
                 val liked = prefs.liked.first()
                 val history = prefs.history.first()
                 val profile = Profile(lists, liked, history, plays.all(), System.currentTimeMillis())
-                Dj(profile, djCatalog, Memory(File(OtoDirs.filesDir, "dj.json")), scope, log = { Timber.tag("dj").d(it) })
+                Dj(profile, djCatalog, Memory(File(OtoDirs.filesDir, "dj.json")), scope, mood = mood, mode = mode) { Timber.tag("dj").d(it) }
             }
             val first = newDj.start()
             if (first == null) {
                 onFail()
                 return@launch
             }
+            prefs.setDjMode(mode)
             radio = null
             stopAutoplay()
+            djReplenishJob?.cancel()
+            djReplenishJob = null
             dj = newDj
+            _djActive.value = true
+            _djMode.value = mode
             originalQueue = null
             currentListId = null
             applyLoopMode(LoopMode.Off)
-            _source.value = Source("DJ", "Mezcla para ti")
+            _source.value = Source("DJ", if (mode == DjMode.Adhd) "DJ rápido (ADHD)" else "Mezcla para ti")
             songQueue = mutableListOf(first.toSong())
             currentIndex = 0
             syncQueueFlow()
             startCurrentTrack()
+            maybeReplenishQueue()
+        }
+    }
+
+    fun setDjMood(mood: DjMood) {
+        _djMood.value = mood
+        dj?.let { activeDj -> synchronized(activeDj) { activeDj.setMood(mood) } }
+        scope.launch { prefs.setDjMood(mood) }
+    }
+
+    fun setDjMode(mode: DjMode) {
+        _djMode.value = mode
+        scope.launch { prefs.setDjMode(mode) }
+        val activeDj = dj ?: return
+        if (activeDj.mode == mode) return
+        cancelCrossfade()
+        synchronized(activeDj) { activeDj.setMode(mode) }
+        _source.value = Source("DJ", if (mode == DjMode.Adhd) "DJ rápido (ADHD)" else "Mezcla para ti")
+        if (mode == DjMode.Adhd) {
+            val cur = songQueue.getOrNull(currentIndex)
+            val dur = _state.value.durationMs
+            if (cur != null && dur > 0L) {
+                val fadeMs = DesktopTransitionPlanner.effectiveAdhdCrossfadeMs(fadeSeconds, ramSaverEnabled)
+                val seg = synchronized(activeDj) { activeDj.adhdSegment(cur.toTrack(), dur, fadeMs) }
+                _adhdSegment.value = seg
+                if (seg != null && _positionMs.value < seg.startMs) {
+                    currentTrackStartOffsetMs = seg.startMs
+                    engine.seekTo(seg.startMs)
+                }
+            }
+        } else {
+            _adhdSegment.value = null
+            finishedAdhdTrackKey = null
+        }
+    }
+
+    fun reportDjReaction(trackId: String, reaction: DjReaction) {
+        val activeDj = dj ?: return
+        scope.launch(Dispatchers.IO) {
+            runCatching { synchronized(activeDj) { activeDj.react(trackId, reaction) } }
         }
     }
 
@@ -505,6 +679,7 @@ class DesktopPlayerConnection(
         if (index < currentIndex) currentIndex--
         if (songQueue.isEmpty()) {
             resolveJob?.cancel(); lyricsJob?.cancel(); resolvingTrack = false
+            clearDjSession()
             engine.stop()
             currentIndex = -1
             _state.value = NowPlaying()
@@ -687,6 +862,18 @@ class DesktopPlayerConnection(
             maybeReplenishQueue()
         } else {
             scope.launch {
+                val activeDj = dj
+                if (activeDj != null) {
+                    val nextTrack = withContext(Dispatchers.IO) { runCatching { activeDj.next() }.getOrNull() }
+                    if (nextTrack != null && dj === activeDj) {
+                        songQueue.add(nextTrack.toSong())
+                        currentIndex++
+                        syncQueueFlow()
+                        startCurrentTrack()
+                        maybeReplenishQueue()
+                        return@launch
+                    }
+                }
                 // Una lista sin bucle: lo que ya tenía preparado la reproducción automática (o lo pide ahora).
                 if (originalQueue != null && dj == null && radio == null && _loopMode.value == LoopMode.Off) {
                     maybeAutoplay()
@@ -767,7 +954,8 @@ class DesktopPlayerConnection(
         if (remaining > 2) return
         val activeDj = dj
         if (activeDj != null) {
-            scope.launch(Dispatchers.IO) {
+            if (djReplenishJob?.isActive == true) return
+            djReplenishJob = scope.launch(Dispatchers.IO) {
                 val t = runCatching { activeDj.next() }.getOrNull()
                 if (t != null && dj === activeDj) {
                     songQueue.add(t.toSong())
@@ -790,7 +978,8 @@ class DesktopPlayerConnection(
         engine.pause()
         _shuffle.value = shuffled
         stopAutoplay(); currentListId = null
-        radio = null; dj = null; originalQueue = songs.toList(); ages = List(songs.size) { null }; songQueue = songs.toMutableList(); currentIndex = index.coerceIn(songs.indices)
+        clearDjSession()
+        radio = null; originalQueue = songs.toList(); ages = List(songs.size) { null }; songQueue = songs.toMutableList(); currentIndex = index.coerceIn(songs.indices)
         syncQueueFlow(); startCurrentTrack(false, positionMs)
     }
 
@@ -800,12 +989,22 @@ class DesktopPlayerConnection(
         resolveJob?.cancel()
         engine.stop()
         _currentQuality.value = null
+        finishedAdhdTrackKey = null
         resolvingTrack = true
+        val durGuess = (song.duration ?: 0).takeIf { it > 0 }?.times(1000L) ?: 0L
+        val activeDj = dj
+        val adhdSeg = if (activeDj?.mode == DjMode.Adhd && durGuess > 0L) {
+            val fadeMs = DesktopTransitionPlanner.effectiveAdhdCrossfadeMs(fadeSeconds, ramSaverEnabled)
+            synchronized(activeDj) { activeDj.adhdSegment(song.toTrack(), durGuess, fadeMs) }
+        } else null
+        _adhdSegment.value = adhdSeg
+        val startPosMs = if (initialPositionMs > 0L) initialPositionMs else adhdSeg?.startMs ?: 0L
+        currentTrackStartOffsetMs = startPosMs
+
         resolveJob = scope.launch {
             val dataSaver = prefs.dataSaver.first()
             val qualityMode = prefs.quality.first()
             val tier = if (dataSaver && qualityMode != io.github.iaguito22.oto.QualityMode.Max) Tier.Low else Tier.High
-            val durGuess = (song.duration ?: 0).takeIf { it > 0 }?.times(1000L) ?: 0L
 
             _state.value = NowPlaying(
                 id = song.id,
@@ -833,7 +1032,7 @@ class DesktopPlayerConnection(
                 currentLoudnessGain = 1f
                 engine.setGain(volumeGain())
                 resolvingTrack = false
-                engine.loadLocalFile(local, durGuess, playWhenReady, initialPositionMs)
+                engine.loadLocalFile(local, durGuess, playWhenReady, startPosMs)
                 return@launch
             }
 
@@ -856,7 +1055,7 @@ class DesktopPlayerConnection(
                     durationMs = durGuess,
                     codec = stream.quality.codec,
                     playWhenReady = playWhenReady,
-                    initialPositionMs = initialPositionMs,
+                    initialPositionMs = startPosMs,
                 )
             }.onFailure { err ->
                 resolvingTrack = false
@@ -932,17 +1131,27 @@ class DesktopPlayerConnection(
         val cur = _state.value
         val id = cur.id ?: return
         val dur = cur.durationMs
-        val pos = if (completed && dur > 0L) dur else _positionMs.value
-        if (pos < 2000L) return
+        val seg = _adhdSegment.value
+        val listenedMs = DesktopTransitionPlanner.listenedDurationMs(
+            completed = completed,
+            positionMs = _positionMs.value,
+            durationMs = dur,
+            adhdSegment = seg,
+            startOffsetMs = currentTrackStartOffsetMs,
+        )
+        val activeDj = dj
+        if (listenedMs < 2000L && activeDj == null) return
         scope.launch(Dispatchers.IO) {
             runCatching {
                 val song = songQueue.firstOrNull { it.id == id }?.toTrack()
-                val kind = if (dj != null) dj?.picks?.lastOrNull { it.track.id == id }?.kind else null
-                if (song != null && (kind != null || pos >= 1_000)) {
-                    plays.add(Play(id, song.title, song.artist, song.artistId, System.currentTimeMillis(), pos, dur.coerceAtLeast(pos), kind))
+                val kind = activeDj?.let { synchronized(it) { it.picks.lastOrNull { p -> p.track.id == id }?.kind } }
+                if (song != null && listenedMs >= 2000L) {
+                    plays.add(Play(id, song.title, song.artist, song.artistId, System.currentTimeMillis(), listenedMs, dur.coerceAtLeast(listenedMs), kind))
                 }
-                if (kind != null) dj?.heard(id, pos, dur.coerceAtLeast(pos))
-                if (id in autoIds && song != null) auto?.heard(id, song.artist, pos, dur)
+                if (kind != null) {
+                    synchronized(activeDj) { activeDj.heard(id, listenedMs, dur.coerceAtLeast(listenedMs)) }
+                }
+                if (id in autoIds && song != null && listenedMs >= 2000L) auto?.heard(id, song.artist, listenedMs, dur)
             }
         }
     }

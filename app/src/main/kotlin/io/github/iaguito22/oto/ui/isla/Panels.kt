@@ -1,14 +1,21 @@
 package io.github.iaguito22.oto.ui.isla
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -18,7 +25,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
+import io.github.iaguito22.oto.dj.DjMode
+import io.github.iaguito22.oto.dj.DjMood
 import io.github.iaguito22.oto.playback.QueueEntry
+import io.github.iaguito22.oto.ui.theme.Motion
 import io.github.iaguito22.oto.ui.theme.Radius
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -109,6 +119,9 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
             OutputChip()
             Spacer(Modifier.weight(1f))
             if (queue.isNotEmpty()) Text("Desliza para quitar", style = OtoType.label.copy(fontSize = 11.sp), color = Oto.colors.textFaint, maxLines = 1)
+        }
+        if (source?.kind == "DJ" && !connection.mirrored) {
+            DjQueueControls(connection)
         }
         if (queue.isEmpty()) {
             Empty(R.drawable.ic_queue_music, "No hay nada detrás", "Pon una canción y la radio irá llenando esto sola.")
@@ -245,5 +258,58 @@ private fun Removable(onRemove: () -> Unit, content: @Composable () -> Unit) {
         },
         onDismiss = { onRemove() },
     ) { content() }
+}
+
+/** Controles en vivo del DJ dentro de la cola: modo rápido (ADHD) y selección de mood. */
+@Composable
+private fun DjQueueControls(connection: PlayerConnection) {
+    val haptics = LocalHapticFeedback.current
+    val mood by connection.djMood.collectAsStateWithLifecycle()
+    val mode by connection.djMode.collectAsStateWithLifecycle()
+    val adhd = mode == DjMode.Adhd
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = Space.lg),
+        horizontalArrangement = Arrangement.spacedBy(Space.xs),
+        modifier = Modifier.padding(bottom = Space.sm),
+    ) {
+        item(key = "adhd") {
+            QueueChip(
+                label = "DJ rápido (ADHD)",
+                selected = adhd,
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    connection.setDjMode(if (adhd) DjMode.Normal else DjMode.Adhd)
+                },
+            )
+        }
+        items(DjMood.entries, key = { it.name }) { m ->
+            QueueChip(
+                label = m.label,
+                selected = m == mood,
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    connection.setDjMood(m)
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun QueueChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val c = Oto.colors
+    val bg by animateColorAsState(if (selected) c.accent.copy(alpha = 0.22f) else c.field, tween(Motion.EFFECTS), label = "qChipBg")
+    val fg by animateColorAsState(if (selected) c.accent else c.textMuted, tween(Motion.EFFECTS), label = "qChipFg")
+    Text(
+        label,
+        style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 0.96f),
+        color = fg,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(bg)
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    )
 }
 

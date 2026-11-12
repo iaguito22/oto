@@ -7,6 +7,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -26,6 +27,7 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.session.CommandButton
@@ -38,10 +40,16 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import com.metrolist.innertube.YouTube
+import io.github.iaguito22.oto.DEFAULT_SMART_MIX
 import io.github.iaguito22.oto.MainActivity
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.QualityMode
+import io.github.iaguito22.oto.dj.AdhdPlanner
+import io.github.iaguito22.oto.dj.AdhdSegment
 import io.github.iaguito22.oto.dj.Dj
+import io.github.iaguito22.oto.dj.DjMode
+import io.github.iaguito22.oto.dj.DjMood
+import io.github.iaguito22.oto.dj.DjReaction
 import io.github.iaguito22.oto.dj.Kind
 import io.github.iaguito22.oto.dj.Memory
 import io.github.iaguito22.oto.dj.Play
@@ -121,9 +129,22 @@ class PlaybackService : MediaLibraryService() {
 
     private var dj: Dj? = null
     private var djJob: Job? = null
+    private val djTracks = HashMap<String, Track>()
+    private val adhdSegments = HashMap<String, AdhdSegment>()
+    private var adhdIntroAppliedFor: Pair<String, Int>? = null
+    private var adhdMonitorJob: Job? = null
+    @Volatile private var djMood = DjMood.Auto
+    @Volatile private var djMode = DjMode.Normal
+    @Volatile private var smartMix = DEFAULT_SMART_MIX
+    // Tiempo real reproducido en la pista actual (descuenta pausas e intros saltadas en modo ADHD).
+    private var playAccumMs = 0L
+    private var playStartedAtMs = 0L
+    private var currentTrackAlreadyLiked = false
     // Lo que dura cada una, para saber qué parte se oyó al pasar a otra.
     private val durations = HashMap<String, Long>()
 
+    private val incomingBass = BassSwapAudioProcessor()
+    private val outgoingBass = BassSwapAudioProcessor()
     private lateinit var crossfade: Crossfade
     @Volatile private var fadeMs = 0L
     // El volumen es el de la normalización de cada canción ([gain]) por lo que lleva subido en un fundido ([fadeIn]).
@@ -148,7 +169,20 @@ class PlaybackService : MediaLibraryService() {
         // Sin la precarga de ExoPlayer: la siguiente ya la baja entera [WholeSongLoadControl] en cuanto esta termina de
         // bajar, y la precarga añadía 30 s de la de después, que casi nunca se oyen.
         player.addListener(listener)
-        crossfade = Crossfade(this, player, sources, scope, { fadeMs }, { gain }, onFadeIn = { fadeIn = it; applyVolume() })
+        crossfade = Crossfade(
+            context = this,
+            player = player,
+            sources = sources,
+            scope = scope,
+            length = { fadeMs },
+            gain = { gain },
+            onFadeIn = { fadeIn = it; applyVolume() },
+            smartMix = { smartMix },
+            transitionPlan = ::transitionPlanFor,
+            nextStartPosition = ::nextStartPositionFor,
+            incomingProcessor = incomingBass,
+            outgoingProcessor = outgoingBass,
+        )
         crossfade.start()
 
         session = MediaLibrarySession.Builder(this, player, callback)
@@ -169,9 +203,22 @@ class PlaybackService : MediaLibraryService() {
         scope.launch { prefs.quality.collect { mode = it } }
         scope.launch { prefs.dataSaver.collect { saver = it } }
         scope.launch { prefs.crossfade.collect { fadeMs = it * 1000L } }
+        scope.launch { prefs.smartMix.collect { smartMix = it } }
+        scope.launch { prefs.djMood.collect { djMood = it; dj?.setMood(it) } }
+        scope.launch { prefs.djMode.collect { updateDjMode(it) } }
 
         // El corazón de la notificación sigue a Prefs: lo cambie quien lo cambie, aquí se ve.
-        scope.launch { prefs.likedIds.collect { liked = it; showLike() } }
+        scope.launch {
+            prefs.likedIds.collect { newLiked ->
+                val current = player.currentMediaItem
+                if (current != null && dj != null && current.isDjItem && !currentTrackAlreadyLiked && current.mediaId in newLiked) {
+                    currentTrackAlreadyLiked = true
+                    dj?.react(current.mediaId, DjReaction.Like)
+                }
+                liked = newLiked
+                showLike()
+            }
+        }
 
         connectivity.registerDefaultNetworkCallback(networkCallback)
     }
@@ -197,8 +244,14 @@ class PlaybackService : MediaLibraryService() {
 
     /** El sink de siempre, con [AudioLevels] delante para que la gota sepa cuándo pega el bombo. */
     private fun renderersFactory() = object : DefaultRenderersFactory(this) {
-        override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink =
-            AudioLevels.Sink(super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)!!)
+        override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink {
+            val base = DefaultAudioSink.Builder(context)
+                .setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                .setAudioProcessors(arrayOf(incomingBass))
+                .build()
+            return AudioLevels.Sink(base)
+        }
     }
 
     private fun dataSourceFactory(): DataSource.Factory {
@@ -546,15 +599,107 @@ class PlaybackService : MediaLibraryService() {
 
     // --- DJ ---
 
+    private val MediaItem.isDjItem: Boolean
+        get() = mediaMetadata.extras?.getString(DJ_KIND) != null
+
+    private fun effectiveAdhdFadeMs(): Long = if (fadeMs > 0L) fadeMs else AdhdPlanner.DEFAULT_MIX_MS
+
+    private fun ensureAdhdSegment(item: MediaItem, durMs: Long): AdhdSegment? {
+        val d = dj ?: return null
+        if (djMode != DjMode.Adhd || !item.isDjItem || durMs <= 0L) return null
+        val cached = adhdSegments[item.mediaId]
+        if (cached != null && cached.fullDurationMs == durMs) return cached
+        val track = djTracks[item.mediaId] ?: item.toHeard().toDjFallbackTrack(durMs)
+        val seg = d.adhdSegment(track, durationMs = durMs, crossfadeMs = effectiveAdhdFadeMs()) ?: return null
+        adhdSegments[item.mediaId] = seg
+        return seg
+    }
+
+    private fun io.github.iaguito22.oto.Heard.toDjFallbackTrack(durMs: Long) = Track(
+        id = id,
+        title = title,
+        artists = artist.split(", ").filter { it.isNotBlank() }.ifEmpty { listOf(artist) },
+        artistIds = listOf(artistId),
+        artwork = artwork,
+        seconds = (durMs / 1000L).toInt().takeIf { it > 0 },
+    )
+
+    private fun transitionPlanFor(item: MediaItem, durMs: Long): TransitionPlan? {
+        if (dj == null || djMode != DjMode.Adhd || !item.isDjItem) return null
+        return AdhdPlayback.transitionPlan(ensureAdhdSegment(item, durMs))
+    }
+
+    private fun nextStartPositionFor(item: MediaItem): Long {
+        if (dj == null || djMode != DjMode.Adhd || !item.isDjItem) return 0L
+        val durMs = item.mediaMetadata.durationMs ?: djTracks[item.mediaId]?.seconds?.let { it * 1000L } ?: return 0L
+        return ensureAdhdSegment(item, durMs)?.startMs ?: 0L
+    }
+
+    private fun applyAdhdForCurrent(durMs: Long) {
+        val item = player.currentMediaItem ?: return
+        if (dj == null || djMode != DjMode.Adhd || !item.isDjItem || durMs <= 0L) {
+            adhdMonitorJob?.cancel()
+            return
+        }
+        val seg = ensureAdhdSegment(item, durMs) ?: return
+        val key = item.mediaId to player.currentMediaItemIndex
+        if (adhdIntroAppliedFor != key) {
+            adhdIntroAppliedFor = key
+            if (AdhdPlayback.shouldSkipIntro(seg, player.currentPosition)) {
+                player.seekTo(seg.startMs)
+            }
+        }
+        startAdhdMonitor(key, seg)
+    }
+
+    private fun startAdhdMonitor(key: Pair<String, Int>, seg: AdhdSegment) {
+        adhdMonitorJob?.cancel()
+        adhdMonitorJob = scope.launch {
+            while (isActive) {
+                delay(250L)
+                val current = player.currentMediaItem ?: break
+                if (dj == null || djMode != DjMode.Adhd || (current.mediaId to player.currentMediaItemIndex) != key) break
+                if (!player.isPlaying || crossfade.handingOver) continue
+                if (player.currentPosition >= seg.endMs) {
+                    if (player.hasNextMediaItem()) {
+                        val nextIdx = player.currentMediaItemIndex + 1
+                        val nextStart = nextStartPositionFor(player.getMediaItemAt(nextIdx))
+                        if (nextStart > 0L) player.seekTo(nextIdx, nextStart) else player.seekToNextMediaItem()
+                    }
+                    break
+                }
+            }
+        }
+    }
+
+    private fun updateDjMode(newMode: DjMode) {
+        if (djMode == newMode) return
+        djMode = newMode
+        dj?.setMode(newMode)
+        adhdSegments.clear()
+        adhdIntroAppliedFor = null
+        if (newMode == DjMode.Adhd) {
+            val item = player.currentMediaItem ?: return
+            val dur = player.duration.takeIf { it > 0 } ?: item.mediaMetadata.durationMs ?: 0L
+            if (dur > 0L) applyAdhdForCurrent(dur)
+        } else {
+            adhdMonitorJob?.cancel()
+        }
+    }
+
     /** Arranca el DJ (ver [Dj]): la primera suena al momento y el resto se elige de una en una, sobre la marcha. */
-    private fun startDj(): ListenableFuture<SessionResult> {
+    private fun startDj(requestedMode: DjMode? = null): ListenableFuture<SessionResult> {
+        val modeToUse = requestedMode ?: djMode
+        djMode = modeToUse
         val done = SettableFuture.create<SessionResult>()
-        firstOfDj { first ->
+        firstOfDj(modeToUse) { first ->
             if (first == null) {
                 done.set(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
                 return@firstOfDj
             }
-            player.setMediaItems(listOf(first))
+            val startPos = nextStartPositionFor(first)
+            if (startPos > 0L) adhdIntroAppliedFor = first.mediaId to 0
+            player.setMediaItems(listOf(first), 0, startPos)
             player.prepare()
             player.play()
             done.set(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -563,10 +708,14 @@ class PlaybackService : MediaLibraryService() {
     }
 
     /** Prepara el DJ y da su primera canción (null si no hay de dónde sacarla); quien la recibe la pone. */
-    private fun firstOfDj(then: (MediaItem?) -> Unit) {
+    private fun firstOfDj(modeToUse: DjMode = djMode, then: (MediaItem?) -> Unit) {
         stopRadio()
         list = false
         djJob?.cancel()
+        adhdMonitorJob?.cancel()
+        adhdSegments.clear()
+        adhdIntroAppliedFor = null
+        djTracks.clear()
         djJob = scope.launch {
             val d = withContext(Dispatchers.Default) {
                 val lists = prefs.playlists.first()
@@ -574,11 +723,20 @@ class PlaybackService : MediaLibraryService() {
                 val history = prefs.history.first()
                 val plays = app.plays.all()
                 val profile = traced("oto.dj.profile") { Profile(lists, liked, history, plays, System.currentTimeMillis()) }
-                Dj(profile, app.djCatalog, Memory(File(filesDir, "dj.json")), scope, log = { Timber.tag("dj").d(it) })
+                Dj(
+                    profile = profile,
+                    catalog = app.djCatalog,
+                    memory = Memory(File(filesDir, "dj.json")),
+                    scope = scope,
+                    mood = djMood,
+                    mode = modeToUse,
+                    log = { Timber.tag("dj").d(it) },
+                )
             }
             val first = d.start() ?: return@launch then(null)
             dj = d
-            Timber.tag("dj").d("%s: %s — %s", d.picks.last().kind, first.artist, first.title)
+            djTracks[first.id] = first
+            Timber.tag("dj").d("%s (%s/%s): %s — %s", d.picks.last().kind, d.mood.label, d.mode.label, first.artist, first.title)
             then(first.toDjItem(d))
         }
         djJob?.invokeOnCompletion { scope.launch { topUpDj() } }
@@ -593,6 +751,10 @@ class PlaybackService : MediaLibraryService() {
 
     private fun stopDj() {
         djJob?.cancel()
+        adhdMonitorJob?.cancel()
+        adhdSegments.clear()
+        adhdIntroAppliedFor = null
+        djTracks.clear()
         dj = null
     }
 
@@ -603,8 +765,9 @@ class PlaybackService : MediaLibraryService() {
         djJob = scope.launch {
             val t = d.next() ?: return@launch
             if (dj !== d) return@launch
+            djTracks[t.id] = t
             player.addMediaItem(t.toDjItem(d))
-            Timber.tag("dj").d("%s: %s — %s", d.picks.last().kind, t.artist, t.title)
+            Timber.tag("dj").d("%s (%s/%s): %s — %s", d.picks.last().kind, d.mood.label, d.mode.label, t.artist, t.title)
         }
     }
 
@@ -614,16 +777,31 @@ class PlaybackService : MediaLibraryService() {
         return item.buildUpon().setMediaMetadata(item.mediaMetadata.buildUpon().setExtras(extras).build()).build()
     }
 
+    private fun flushPlayMs(): Long {
+        if (playStartedAtMs > 0L) {
+            playAccumMs += (SystemClock.elapsedRealtime() - playStartedAtMs).coerceAtLeast(0L)
+            playStartedAtMs = 0L
+        }
+        return playAccumMs
+    }
+
+    private fun resetPlayClock() {
+        playAccumMs = 0L
+        playStartedAtMs = if (player.isPlaying) SystemClock.elapsedRealtime() else 0L
+    }
+
     /** Lo que se oyó de [item] antes de pasar a otra: al diario (de lo que aprende el DJ) y, si es suya, al DJ. */
-    private fun logPlay(item: MediaItem, ms: Long) {
+    private fun logPlay(item: MediaItem, posMs: Long, accumMs: Long = 0L) {
         val dur = durations[item.mediaId] ?: item.mediaMetadata.durationMs ?: 0L
+        val seg = adhdSegments[item.mediaId]
+        val listenedMs = AdhdPlayback.effectiveListenedMs(posMs, accumMs, seg)
         val kind = item.mediaMetadata.extras?.getString(DJ_KIND)?.let { k -> Kind.entries.firstOrNull { it.name == k } }
-        if (kind == null && ms < 1_000) return
+        if (kind == null && listenedMs < 1_000) return
         val h = item.toHeard()
-        val play = Play(h.id, h.title, h.artist, h.artistId, System.currentTimeMillis(), ms, dur, kind)
+        val play = Play(h.id, h.title, h.artist, h.artistId, System.currentTimeMillis(), listenedMs, dur, kind)
         scope.launch(Dispatchers.IO) { app.plays.add(play) }
-        if (kind != null) dj?.heard(item.mediaId, ms, dur)
-        if (item.isAuto) auto?.heard(item.mediaId, h.artist, ms, dur)
+        if (kind != null) dj?.heard(item.mediaId, listenedMs, dur)
+        if (item.isAuto) auto?.heard(item.mediaId, h.artist, listenedMs, dur)
     }
 
     private fun remember(vararg keys: String) {
@@ -663,14 +841,25 @@ class PlaybackService : MediaLibraryService() {
             retries.keys.retainAll(setOf(id))
             // Lo que ya no suena ni va a sonar justo después vuelve a decidir su calidad la próxima vez.
             playingIndex = player.currentMediaItemIndex
+            val activeIds = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet()
             // Lo que ya no está en la cola vuelve a decidir su calidad la próxima vez; lo que sigue en ella, no (puede
             // estar a medio cargar).
-            tiers.keys.retainAll((0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet())
+            tiers.keys.retainAll(activeIds)
+            djTracks.keys.retainAll(activeIds)
+            adhdSegments.keys.retainAll(activeIds)
             stallJob?.cancel()
             if (player.playbackState == Player.STATE_BUFFERING) watchStart()
-            durations.keys.retainAll(setOf(id) + (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet())
+            durations.keys.retainAll(setOf(id) + activeIds)
             remember(id, sameSong(mediaItem.mediaMetadata.title?.toString().orEmpty(), mediaItem.mediaMetadata.artist?.toString().orEmpty()))
+            resetPlayClock()
+            currentTrackAlreadyLiked = id in liked
             applyLoudness()
+            val knownDur = player.duration.takeIf { it > 0 } ?: mediaItem.mediaMetadata.durationMs ?: 0L
+            if (dj != null && djMode == DjMode.Adhd && mediaItem.isDjItem && knownDur > 0L) {
+                applyAdhdForCurrent(knownDur)
+            } else {
+                adhdMonitorJob?.cancel()
+            }
             topUpRadio()
             autoplay()
             topUpDj()
@@ -687,9 +876,11 @@ class PlaybackService : MediaLibraryService() {
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (isPlaying) {
+                if (playStartedAtMs == 0L) playStartedAtMs = SystemClock.elapsedRealtime()
                 player.currentMediaItem?.mediaId?.let(::countInHistory)
                 prefetch()
             } else {
+                flushPlayMs()
                 historyJob?.cancel()
                 prefetchJob?.cancel()
                 writer?.cancel()
@@ -709,10 +900,14 @@ class PlaybackService : MediaLibraryService() {
         }
 
         override fun onPlaybackStateChanged(state: Int) {
-            val id = player.currentMediaItem?.mediaId ?: return
+            val item = player.currentMediaItem ?: return
+            val id = item.mediaId
             if (state == Player.STATE_BUFFERING && player.currentPosition <= STARTED_MS) watchStart() else if (state != Player.STATE_BUFFERING) stallJob?.cancel()
             if (state == Player.STATE_READY && player.duration > 0) {
                 durations[id] = player.duration
+                if (dj != null && djMode == DjMode.Adhd && item.isDjItem) {
+                    applyAdhdForCurrent(player.duration)
+                }
                 fetchLyrics()
             }
         }
@@ -721,8 +916,17 @@ class PlaybackService : MediaLibraryService() {
             val item = old.mediaItem ?: return
             // Moverse dentro de la misma no es dejarla; volver a empezarla sola (repetir una), sí. Cambiarla por ella
             // misma en baja ([watchStart]) tampoco.
-            if (item.mediaId == new.mediaItem?.mediaId && reason != Player.DISCONTINUITY_REASON_AUTO_TRANSITION) return
-            logPlay(item, old.positionMs)
+            if (item.mediaId == new.mediaItem?.mediaId && reason != Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
+                if (dj != null && djMode == DjMode.Adhd && item.isDjItem && reason == Player.DISCONTINUITY_REASON_SEEK) {
+                    adhdSegments[item.mediaId]?.let { seg ->
+                        if (new.positionMs >= seg.endMs + 1_000L) adhdMonitorJob?.cancel()
+                    }
+                }
+                return
+            }
+            val accum = flushPlayMs()
+            logPlay(item, old.positionMs, accum)
+            resetPlayClock()
         }
     }
 
@@ -770,7 +974,15 @@ class PlaybackService : MediaLibraryService() {
         // Todos los controladores (también la notificación) pueden pulsar el corazón; y explorar la biblioteca (Android Auto).
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult =
             MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                .setAvailableSessionCommands(MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon().add(LIKE).add(DJ).build())
+                .setAvailableSessionCommands(
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
+                        .add(LIKE)
+                        .add(DJ)
+                        .add(DJ_MOOD_CMD)
+                        .add(DJ_MODE_CMD)
+                        .add(DJ_REACT_CMD)
+                        .build(),
+                )
                 .build()
 
         override fun onCustomCommand(
@@ -779,10 +991,38 @@ class PlaybackService : MediaLibraryService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
-            if (customCommand.customAction == DJ.customAction) return startDj()
-            if (customCommand.customAction != LIKE.customAction) return super.onCustomCommand(session, controller, customCommand, args)
-            toggleLike()
-            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            return when (customCommand.customAction) {
+                DJ.customAction -> {
+                    val requestedMode = args.getString(EXTRA_DJ_MODE)?.let { name -> DjMode.entries.firstOrNull { it.name == name } }
+                    startDj(requestedMode)
+                }
+                DJ_MOOD_CMD.customAction -> {
+                    val mood = args.getString(EXTRA_DJ_MOOD)?.let { name -> DjMood.entries.firstOrNull { it.name == name } }
+                    if (mood != null) {
+                        djMood = mood
+                        dj?.setMood(mood)
+                    }
+                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                DJ_MODE_CMD.customAction -> {
+                    val mode = args.getString(EXTRA_DJ_MODE)?.let { name -> DjMode.entries.firstOrNull { it.name == name } }
+                    if (mode != null) updateDjMode(mode)
+                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                DJ_REACT_CMD.customAction -> {
+                    val id = args.getString(EXTRA_DJ_TRACK_ID)
+                    val reaction = args.getString(EXTRA_DJ_REACTION)?.let { name -> DjReaction.entries.firstOrNull { it.name == name } }
+                    if (!id.isNullOrEmpty() && reaction != null) {
+                        dj?.react(id, reaction)
+                    }
+                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                LIKE.customAction -> {
+                    toggleLike()
+                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                else -> super.onCustomCommand(session, controller, customCommand, args)
+            }
         }
 
         // Los MediaItem que llegan de un controlador pierden la URI por el camino. Los de Android Auto pueden venir
@@ -813,7 +1053,11 @@ class PlaybackService : MediaLibraryService() {
                 val f = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
                 firstOfDj { first ->
                     if (first == null) f.setException(IllegalStateException("El DJ no tiene de dónde sacar"))
-                    else f.set(MediaSession.MediaItemsWithStartPosition(listOf(first), 0, 0))
+                    else {
+                        val startPos = nextStartPositionFor(first)
+                        if (startPos > 0L) adhdIntroAppliedFor = first.mediaId to 0
+                        f.set(MediaSession.MediaItemsWithStartPosition(listOf(first), 0, startPos))
+                    }
                 }
                 return f
             }
@@ -885,8 +1129,18 @@ class PlaybackService : MediaLibraryService() {
         const val DJ_KIND = "oto_dj"
         val LIKE = SessionCommand("io.github.iaguito22.oto.LIKE", Bundle.EMPTY)
         val DJ = SessionCommand(DJ_COMMAND, Bundle.EMPTY)
+        val DJ_MOOD_CMD = SessionCommand(DJ_MOOD_COMMAND, Bundle.EMPTY)
+        val DJ_MODE_CMD = SessionCommand(DJ_MODE_COMMAND, Bundle.EMPTY)
+        val DJ_REACT_CMD = SessionCommand(DJ_REACT_COMMAND, Bundle.EMPTY)
     }
 }
 
 /** Lo que pide la interfaz para arrancar el DJ. */
 const val DJ_COMMAND = "io.github.iaguito22.oto.DJ"
+const val DJ_MOOD_COMMAND = "io.github.iaguito22.oto.DJ_MOOD"
+const val DJ_MODE_COMMAND = "io.github.iaguito22.oto.DJ_MODE"
+const val DJ_REACT_COMMAND = "io.github.iaguito22.oto.DJ_REACT"
+const val EXTRA_DJ_MODE = "mode"
+const val EXTRA_DJ_MOOD = "mood"
+const val EXTRA_DJ_TRACK_ID = "track_id"
+const val EXTRA_DJ_REACTION = "reaction"

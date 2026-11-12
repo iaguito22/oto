@@ -20,6 +20,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.github.iaguito22.oto.dj.DjMode
+import io.github.iaguito22.oto.dj.DjMood
+import io.github.iaguito22.oto.dj.DjReaction
 import io.github.iaguito22.oto.playback.Source
 import io.github.iaguito22.oto.playback.StreamInfo
 import io.github.iaguito22.oto.ui.menu.DOWNLOADS_ID
@@ -231,6 +234,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
         if (h.id in likedIds) flash = CueLabel(R.drawable.ic_favorite, "Ya está en Me gusta")
         else {
             flash = CueLabel(R.drawable.ic_favorite, "En Me gusta")
+            connection.reactDj(h.id, DjReaction.Like)
             scope.launch { app.prefs.setLiked(h, true) }
         }
     }
@@ -456,6 +460,8 @@ private fun Stage(
     val paused by animateFloatAsState(if (np.id != null && !np.playing && !np.buffering) 1f else 0f, spring(dampingRatio = 0.62f, stiffness = 300f), label = "paused")
     val beat by (LocalContext.current.applicationContext as OtoApp).prefs.coverBeat.collectAsStateWithLifecycle(initialValue = true)
     val source by connection.source.collectAsStateWithLifecycle()
+    val djMood by connection.djMood.collectAsStateWithLifecycle()
+    val djMode by connection.djMode.collectAsStateWithLifecycle()
     val next by connection.queue.collectAsStateWithLifecycle()
     val previous by connection.previousEntry.collectAsStateWithLifecycle()
     // Tirar hacia abajo del origen o de la carátula abre de dónde viene lo que suena.
@@ -473,6 +479,9 @@ private fun Stage(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(SOURCE_TOP))
             SourceHeader(source.takeIf { np.id != null }, pull, onCenter = { sourceCenter = it }, onOpen = { onSource(sourceCenter) })
+            if (source?.kind == "DJ" && np.id != null && !connection.mirrored) {
+                DjLiveBar(djMood, djMode, connection, onFlash)
+            }
         }
         BoxWithConstraints(Modifier.padding(horizontal = 36.dp), contentAlignment = Alignment.Center) {
             val side = minOf(maxWidth, 340.dp, (maxHeight - LYRICS_EXTRA).coerceAtLeast(COVER_MIN))
@@ -614,6 +623,51 @@ private fun SourceHeader(source: Source?, pull: Animatable<Float, *>, onCenter: 
         Text(
             s.title, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 48.dp),
+        )
+    }
+}
+
+/** Pastillas discretas en vivo para cambiar de mood y alternar DJ rápido (ADHD) sin salir del reproductor. */
+@Composable
+private fun DjLiveBar(mood: DjMood, mode: DjMode, connection: PlayerConnection, onFlash: (CueLabel) -> Unit) {
+    val c = Oto.colors
+    val haptics = LocalHapticFeedback.current
+    val adhd = mode == DjMode.Adhd
+    Row(
+        Modifier.padding(top = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Mood: ${mood.label}",
+            style = OtoType.label.copy(fontSize = 11.sp),
+            color = if (mood != DjMood.Auto) c.accent else c.textMuted,
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(if (mood != DjMood.Auto) c.accent.copy(alpha = 0.20f) else c.field)
+                .clickable(remember { MutableInteractionSource() }, null) {
+                    val entries = DjMood.entries
+                    val next = entries[(entries.indexOf(mood) + 1) % entries.size]
+                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    connection.setDjMood(next)
+                    onFlash(CueLabel(R.drawable.ic_graphic_eq, "Mood: ${next.label}"))
+                }
+                .padding(horizontal = 12.dp, vertical = 5.dp),
+        )
+        Text(
+            "DJ rápido (ADHD)",
+            style = OtoType.label.copy(fontSize = 11.sp),
+            color = if (adhd) c.accent else c.textMuted,
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(if (adhd) c.accent.copy(alpha = 0.20f) else c.field)
+                .clickable(remember { MutableInteractionSource() }, null) {
+                    val next = if (adhd) DjMode.Normal else DjMode.Adhd
+                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    connection.setDjMode(next)
+                    onFlash(CueLabel(R.drawable.ic_timer, if (next == DjMode.Adhd) "DJ rápido (ADHD)" else "DJ normal"))
+                }
+                .padding(horizontal = 12.dp, vertical = 5.dp),
         )
     }
 }

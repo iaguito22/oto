@@ -175,6 +175,9 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     val shuffle by player.shuffle.collectAsState()
     val loop by player.loop.collectAsState()
     val loopMode by player.loopMode.collectAsState()
+    val djActive by player.djActive.collectAsState()
+    val djMode by player.djMode.collectAsState()
+    val djMood by player.djMood.collectAsState()
     val lyrics by player.lyrics.collectAsState()
     val lyricsLoading by player.lyricsLoading.collectAsState()
     val volume by player.volume.collectAsState()
@@ -196,7 +199,13 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     var palette by remember { mutableStateOf(ArtworkPalette()) }
     LaunchedEffect(nowPlaying.artwork) { val (bmp, pal) = ArtworkLoader.load(nowPlaying.artwork); artwork = bmp; palette = pal }
     val backdrop by produceState<ImageBitmap?>(null, artwork, artworkBackground) { value = if(artworkBackground && artwork != null) blurredBackdrop(artwork!!) else null }
-    fun like() { nowPlaying.id?.let { id -> uiScope.launch { prefs.setLiked(Heard(id, nowPlaying.title, nowPlaying.artist, nowPlaying.artwork, nowPlaying.artists.firstOrNull()?.second), !isLiked) } } }
+    fun like() {
+        nowPlaying.id?.let { id ->
+            val liking = !isLiked
+            uiScope.launch { prefs.setLiked(Heard(id, nowPlaying.title, nowPlaying.artist, nowPlaying.artwork, nowPlaying.artists.firstOrNull()?.second), liking) }
+            if (liking && mirrored == null) player.reportDjReaction(id, io.github.iaguito22.oto.dj.DjReaction.Like)
+        }
+    }
     val playerWindow = rememberDockState(docking,DockId.Player)
     val libraryWindow = rememberDockState(docking,DockId.Library)
     val queueWindow = rememberDockState(docking,DockId.Queue)
@@ -311,6 +320,16 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             onLoop = { if(m != null) toMobile("loop") { it.put("value", !m.loop) } else player.setLoop(when(loopMode) { io.github.iaguito22.oto.LoopMode.Off -> io.github.iaguito22.oto.LoopMode.All
                 io.github.iaguito22.oto.LoopMode.All -> io.github.iaguito22.oto.LoopMode.One
                 io.github.iaguito22.oto.LoopMode.One -> io.github.iaguito22.oto.LoopMode.Off }) },
+            djActive = djActive && m == null,
+            djMode = djMode,
+            djMood = djMood,
+            onDjMood = player::setDjMood,
+            onToggleAdhd = {
+                player.setDjMode(
+                    if (djMode == io.github.iaguito22.oto.dj.DjMode.Adhd) io.github.iaguito22.oto.dj.DjMode.Normal
+                    else io.github.iaguito22.oto.dj.DjMode.Adhd
+                )
+            },
             verticalPin =if(playerSolo && form==PlayerForm.Vertical) ({
                 HoverAction(pinIcon(pinned),if(pinned) "Desfijar" else "Fijar sobre otras ventanas",enabled=chrome,
                     onClick={pinned=!pinned;kv.putString("pinned",pinned.toString())},
@@ -356,7 +375,11 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         LibrarySpace(player,prefs,menu,importer,account,cloud,login,downloads,palette,{openSave(it, "biblioteca")},{devicesOpen=true},libraryRequest,jump,artworkBackground,{ artworkBackground=it;kv.putString("artwork_background",it.toString()) },{librarySearchFocused=it},{ devices.requestAccount(); devicesOpen=true }, backdrop != null, backdropOpacity,{backdropOpacity=it;kv.putString("artwork_opacity",it.toString())}, { val src=source; if(src?.item != null || src?.local != null) jump=LibraryJump(jump.version+1,src?.item,src?.local) else if(src?.kind != "DJ") queueOpen=true }, shortcut,shortcutIssue,{shortcut=it;kv.putString("shortcut",it)},playerVisible=playerOpen && menuOpen && docking.layout.group(DockId.Library).members.contains(DockId.Player),remoteLink=devices.link,following=mirrored?.now)
     }
     ModuleWindow("Guardar",rememberModuleState("save",380,540),savingTrack!=null && !windowsHidden,{savingTrack=null}) {
-        savingTrack?.let { SaveSpace(it,prefs,palette) }
+        savingTrack?.let { track ->
+            SaveSpace(track, prefs, palette) { reaction ->
+                if (mirrored == null) player.reportDjReaction(track.id, reaction)
+            }
+        }
     }
     if (welcomeOpen) WelcomeWindow(::closeWelcome)
 }

@@ -18,9 +18,18 @@ import javax.sound.sampled.AudioInputStream
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
 import javax.sound.sampled.FloatControl
+import javax.sound.sampled.LineUnavailableException
 import javax.sound.sampled.SourceDataLine
 import kotlin.math.log10
-import kotlin.math.roundToInt
+
+internal val PCM_FORMAT = AudioFormat(48000f, 16, 2, true, false)
+
+internal fun canUseFfmpegPcm(
+    ffmpegAvailable: Boolean = DesktopTools.find("ffmpeg") != null,
+    lineSupported: Boolean = runCatching {
+        AudioSystem.isLineSupported(DataLine.Info(SourceDataLine::class.java, PCM_FORMAT))
+    }.getOrDefault(false),
+): Boolean = ffmpegAvailable && lineSupported
 
 /**
  * Motor de audio de escritorio para Linux (PipeWire/PulseAudio/ALSA) y Windows (WASAPI/DirectSound).
@@ -28,9 +37,9 @@ import kotlin.math.roundToInt
  * Descarga y reproducción:
  * 1. Descarga por trozos HTTP de 1 MB (`downloadChunked`), igual que `Chunked.kt` en Android, evitando el
  *    estrangulamiento de ~33 KB/s de YouTube y guardando cada canción en caché de disco (`Tier.key(id)`).
- * 2. En Windows, FFmpeg decodifica a PCM y Java Sound entrega las muestras al dispositivo,
- *    permitiendo ajustar el volumen sin reiniciar la reproducción. En Linux se conserva ffplay.
- *    Ambos admiten Opus/WebM y AAC/M4A con seek `-ss`; Java Sound sirve de respaldo.
+ * 2. En Windows y Linux (cuando FFmpeg y una línea PCM Java Sound están disponibles), FFmpeg decodifica a PCM
+ *    y Java Sound entrega las muestras al dispositivo, permitiendo volumen en vivo y fundidos con EQ/bass-swap
+ *    sin reiniciar la reproducción. Si falta FFmpeg o falla la línea PCM, cae a ffplay o Java Sound.
  */
 class DesktopAudioEngine(
     private val cacheDir: File,
@@ -92,19 +101,32 @@ class DesktopAudioEngine(
     @Volatile private var playStartedWallMs: Long = 0L
     @Volatile private var pausedPositionMs: Long = 0L
     @Volatile private var gainLinear: Float = 1f
+    @Volatile private var mixBands: MixBands = MixBands.NEUTRAL
+    private val bandFilter = StereoBandFilter()
 
     private val hasFfplay: Boolean by lazy {
         runCatching {
             DesktopTools.find("ffplay") != null
         }.getOrDefault(false)
     }
-    private val useFfmpegPcm: Boolean by lazy {
-        System.getProperty("os.name").startsWith("Windows", true) && DesktopTools.find("ffmpeg") != null
+    private val hasFfmpegPcm: Boolean by lazy {
+        canUseFfmpegPcm()
     }
+    @Volatile private var pcmLineUnavailable = false
+    private val useFfmpegPcm: Boolean get() = hasFfmpegPcm && !pcmLineUnavailable
+    val supportsCrossfade: Boolean get() = useFfmpegPcm
 
     init {
         cacheDir.mkdirs()
         Runtime.getRuntime().addShutdownHook(Thread { currentProcess?.destroyForcibly(); currentLine?.close() })
+    }
+
+    internal fun setMixBands(bands: MixBands) {
+        mixBands = bands
+    }
+
+    internal fun resetMixBands() {
+        mixBands = MixBands.NEUTRAL
     }
 
     fun setGain(linear: Float) {
@@ -230,6 +252,7 @@ class DesktopAudioEngine(
     private fun startPlaybackAt(file: File, offsetMs: Long) {
         analyzeBeat(file)
         killDecodeProcess()
+        bandFilter.reset()
         startOffsetMs = offsetMs.coerceAtLeast(0L)
         playStartedWallMs = System.currentTimeMillis()
         _state.value = _state.value.copy(playing = true, buffering = hasFfplay || useFfmpegPcm, positionMs = startOffsetMs)
@@ -241,49 +264,7 @@ class DesktopAudioEngine(
                 if (useFfmpegPcm) {
                     playWithFfmpeg(file, startOffsetMs)
                 } else if (hasFfplay) {
-                    val sec = String.format(java.util.Locale.US, "%.3f", startOffsetMs / 1000.0)
-                    val vol = (gainLinear * 100f).toInt().coerceIn(0, 100)
-                    val pb = ProcessBuilder(
-                        DesktopTools.require("ffplay"),
-                        "-nodisp",
-                        "-autoexit",
-                        "-loglevel", "quiet",
-                        "-stats",
-                        "-ss", sec,
-                        "-af", "atrim=start=$sec,asetpts=PTS-STARTPTS",
-                        "-volume", vol.toString(),
-                        file.absolutePath,
-                    )
-                    val proc = pb.start()
-                    currentProcess = proc
-                    if (!isActive) { proc.destroyForcibly(); return@launch }
-                    val status = StringBuilder()
-                    var decodedAudio = false
-                    val clockPattern = Regex("^\\s*(-?\\d+(?:\\.\\d+)?)\\s+(?:M-A|:)")
-                    proc.errorStream.bufferedReader().use { reader ->
-                        while (isActive && currentProcess === proc) {
-                            val ch = reader.read()
-                            if (ch < 0) break
-                            if (ch == '\r'.code || ch == '\n'.code) {
-                                val seconds = clockPattern.find(status.toString())?.groupValues?.get(1)?.toDoubleOrNull()
-                                if (seconds != null && currentProcess === proc && _state.value.playing) {
-                                    decodedAudio = true
-                                    val position = (startOffsetMs + (seconds * 1000).toLong()).coerceAtLeast(startOffsetMs)
-                                        .let { if (activeDurationMs > 0) it.coerceAtMost(activeDurationMs) else it }
-                                    _state.value = _state.value.copy(positionMs = position, buffering = false)
-                                }
-                                status.setLength(0)
-                            } else if (status.length < 1024) status.append(ch.toChar())
-                        }
-                    }
-                    val code = proc.waitFor()
-                    if (isActive && currentProcess === proc && code == 0 && decodedAudio) {
-                        _state.value = _state.value.copy(playing = false, buffering = false, positionMs = activeDurationMs)
-                        onEnded()
-                    } else if (isActive && currentProcess === proc) {
-                        _state.value = _state.value.copy(playing = false, buffering = false)
-                        onError(IllegalStateException("No se pudo reproducir el audio (ffplay: $code)"))
-                    }
+                    playWithFfplay(file, startOffsetMs)
                 } else {
                     playWithJavaSound(file, startOffsetMs)
                 }
@@ -297,14 +278,72 @@ class DesktopAudioEngine(
         }
     }
 
-    /** Windows: FFmpeg decodifica y Java Sound entrega PCM al dispositivo. El volumen
-     * se aplica a las muestras, sin cerrar ni reiniciar el proceso por cada ajuste. */
+    private suspend fun playWithFfplay(file: File, offsetMs: Long) {
+        val sec = String.format(java.util.Locale.US, "%.3f", offsetMs / 1000.0)
+        val vol = (gainLinear * 100f).toInt().coerceIn(0, 100)
+        val pb = ProcessBuilder(
+            DesktopTools.require("ffplay"),
+            "-nodisp",
+            "-autoexit",
+            "-loglevel", "quiet",
+            "-stats",
+            "-ss", sec,
+            "-af", "atrim=start=$sec,asetpts=PTS-STARTPTS",
+            "-volume", vol.toString(),
+            file.absolutePath,
+        )
+        val proc = pb.start()
+        currentProcess = proc
+        if (!kotlinx.coroutines.currentCoroutineContext().isActive) { proc.destroyForcibly(); return }
+        val status = StringBuilder()
+        var decodedAudio = false
+        val clockPattern = Regex("^\\s*(-?\\d+(?:\\.\\d+)?)\\s+(?:M-A|:)")
+        proc.errorStream.bufferedReader().use { reader ->
+            while (kotlinx.coroutines.currentCoroutineContext().isActive && currentProcess === proc) {
+                val ch = reader.read()
+                if (ch < 0) break
+                if (ch == '\r'.code || ch == '\n'.code) {
+                    val seconds = clockPattern.find(status.toString())?.groupValues?.get(1)?.toDoubleOrNull()
+                    if (seconds != null && currentProcess === proc && _state.value.playing) {
+                        decodedAudio = true
+                        val position = (offsetMs + (seconds * 1000).toLong()).coerceAtLeast(offsetMs)
+                            .let { if (activeDurationMs > 0) it.coerceAtMost(activeDurationMs) else it }
+                        _state.value = _state.value.copy(positionMs = position, buffering = false)
+                    }
+                    status.setLength(0)
+                } else if (status.length < 1024) status.append(ch.toChar())
+            }
+        }
+        val code = proc.waitFor()
+        if (kotlinx.coroutines.currentCoroutineContext().isActive && currentProcess === proc && code == 0 && decodedAudio) {
+            _state.value = _state.value.copy(playing = false, buffering = false, positionMs = activeDurationMs)
+            onEnded()
+        } else if (kotlinx.coroutines.currentCoroutineContext().isActive && currentProcess === proc) {
+            _state.value = _state.value.copy(playing = false, buffering = false)
+            onError(IllegalStateException("No se pudo reproducir el audio (ffplay: $code)"))
+        }
+    }
+
+    /** FFmpeg decodifica a PCM s16le y Java Sound entrega las muestras al dispositivo. Volumen y EQ se aplican sin reiniciar el proceso. */
     private suspend fun playWithFfmpeg(file: File, offsetMs: Long) {
-        val format = AudioFormat(48000f, 16, 2, true, false)
-        val line = AudioSystem.getSourceDataLine(format)
+        val line = try {
+            AudioSystem.getSourceDataLine(PCM_FORMAT).also { it.open(PCM_FORMAT, 19200) }
+        } catch (err: Exception) {
+            if (err is LineUnavailableException || err is IllegalArgumentException) {
+                Timber.w(err, "Línea PCM no disponible; usando respaldo de escritorio")
+                pcmLineUnavailable = true
+                if (hasFfplay) {
+                    playWithFfplay(file, offsetMs)
+                } else {
+                    startTicker()
+                    playWithJavaSound(file, offsetMs)
+                }
+                return
+            }
+            throw err
+        }
         var process: Process? = null
         try {
-            line.open(format, 19200)
             currentLine = line
             val seconds = String.format(java.util.Locale.US, "%.3f", offsetMs / 1000.0)
             val proc = ProcessBuilder(DesktopTools.require("ffmpeg"), "-nostdin", "-v", "error",
@@ -320,13 +359,8 @@ class DesktopAudioEngine(
                 while (kotlinx.coroutines.currentCoroutineContext().isActive && currentProcess === proc && currentLine === line) {
                     val count = input.readNBytes(buffer, 0, buffer.size)
                     if (count == 0) break
-                    check(count % format.frameSize == 0) { "FFmpeg devolvió una muestra incompleta" }
-                    val gain = gainLinear
-                    if (gain != 1f) for (index in 0 until count step 2) {
-                        val sample = (((buffer[index + 1].toInt() and 255) shl 8) or (buffer[index].toInt() and 255)).toShort().toInt()
-                        val scaled = (sample * gain).roundToInt().coerceIn(-32768, 32767)
-                        buffer[index] = scaled.toByte(); buffer[index + 1] = (scaled shr 8).toByte()
-                    }
+                    check(count % PCM_FORMAT.frameSize == 0) { "FFmpeg devolvió una muestra incompleta" }
+                    bandFilter.processPcm16(buffer, count, mixBands, gainLinear)
                     line.write(buffer, 0, count)
                     kotlinx.coroutines.currentCoroutineContext().ensureActive()
                     if (currentProcess !== proc || currentLine !== line) return
@@ -439,6 +473,8 @@ class DesktopAudioEngine(
     }
 
     private fun stopInternal() {
+        mixBands = MixBands.NEUTRAL
+        bandFilter.reset()
         volumeJob?.cancel()
         volumeJob = null
         tickerJob?.cancel()

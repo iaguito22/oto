@@ -64,6 +64,8 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
     val remaining by prefs.showRemaining.collectAsState(initial=false)
     val romanize by prefs.romanize.collectAsState(initial=true)
     val crossfade by prefs.crossfade.collectAsState(initial=DEFAULT_CROSSFADE)
+    val smartMix by prefs.smartMix.collectAsState(initial=DEFAULT_SMART_MIX)
+    val crossfadeSupported = remember(player) { player.supportsCrossfade }
     val np by player.state.collectAsState()
     val nowId=np.id
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=32.dp),verticalArrangement=Arrangement.spacedBy(2.dp)) {
@@ -85,14 +87,30 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
             SettingFrame(MobileIcons.transitionFade,accent) {
                 Text("Fundido entre canciones",style=OtoType.rowTitle)
                 FadingText(when {
-                    !isWindowsDesktop -> "Disponible en Windows."
+                    !crossfadeSupported -> "Disponible cuando FFmpeg y la salida de audio PCM están disponibles."
                     ramSaver -> "Desactivado mientras esté activo el ahorro de RAM."
                     crossfade==0 -> "Cada canción acaba del todo antes de que empiece la siguiente."
                     else -> "Los últimos $crossfade segundos de una canción suenan a la vez que el principio de la siguiente. Solo cuando acaba sola, no al pasarla tú. Usa más RAM y CPU: suenan dos canciones a la vez."
                 })
-                if(isWindowsDesktop && !ramSaver) Box(Modifier.padding(top=8.dp)) {
+                if(crossfadeSupported && !ramSaver) Box(Modifier.padding(top=8.dp)) {
                     ChoiceSelector(CROSSFADE_CHOICES.map { if(it==0) "No" else "$it s" },CROSSFADE_CHOICES.indexOf(crossfade).coerceAtLeast(0),60.dp,accent) { scope.launch { prefs.setCrossfade(CROSSFADE_CHOICES[it]) } }
                 }
+            }
+        }
+        item {
+            SettingsToggle(
+                MobileIcons.graphicEq,
+                "Mezcla inteligente",
+                when {
+                    !crossfadeSupported -> "Disponible cuando FFmpeg y la salida de audio PCM están disponibles."
+                    ramSaver -> "Desactivada mientras esté activo el ahorro de RAM."
+                    smartMix -> "Curva en S y relevo progresivo de graves al mezclar para que no choquen bombos ni bajos."
+                    else -> "Fundido clásico de igual potencia sin ecualización entre pistas."
+                },
+                smartMix && crossfadeSupported && !ramSaver,
+                accent,
+            ) {
+                if (crossfadeSupported && !ramSaver) scope.launch { prefs.setSmartMix(!smartMix) }
             }
         }
         item {SettingsToggle(MobileIcons.shuffle,"Aleatorio","Las listas nuevas empiezan mezcladas. Cada una recuerda cómo la dejaste.",shuffle,accent){scope.launch{prefs.setShuffle(!shuffle)}}}
