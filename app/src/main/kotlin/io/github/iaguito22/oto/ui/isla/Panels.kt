@@ -5,12 +5,15 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -26,7 +29,8 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import io.github.iaguito22.oto.dj.DjMode
-import io.github.iaguito22.oto.dj.DjMood
+import io.github.iaguito22.oto.dj.DjPickInfo
+import io.github.iaguito22.oto.dj.Kind
 import io.github.iaguito22.oto.playback.QueueEntry
 import io.github.iaguito22.oto.ui.theme.Motion
 import io.github.iaguito22.oto.ui.theme.Radius
@@ -35,6 +39,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -48,13 +54,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.iaguito22.oto.R
 import io.github.iaguito22.oto.playback.PlayerConnection
+import io.github.iaguito22.oto.ui.menu.Art
 import io.github.iaguito22.oto.ui.menu.Empty
+import io.github.iaguito22.oto.ui.menu.djGenreLabel
 import io.github.iaguito22.oto.ui.menu.LoopButton
 import io.github.iaguito22.oto.ui.menu.ShuffleButton
 import io.github.iaguito22.oto.ui.menu.SongRow
@@ -103,31 +112,84 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Grab()
         val source by connection.source.collectAsStateWithLifecycle()
+        val nextUp by connection.djNextUp.collectAsStateWithLifecycle()
+        val djTanda by connection.djTanda.collectAsStateWithLifecycle()
+        val isDj = source?.kind == "DJ" && !connection.mirrored
+        val nextUpById = remember(nextUp) { nextUp.associateBy { it.track.id } }
+        val nextUpOrderById = remember(nextUp) { nextUp.withIndex().associate { (idx, it) -> it.track.id to (idx + 1) } }
+        val countLabel = if (queue.isEmpty()) null else if (queue.size == 1) "1 canción" else "${queue.size} canciones"
+        val djGenre = djGenreLabel(djTanda)
+        val headerSub = if (isDj) listOfNotNull(djGenre, countLabel).joinToString(" · ").ifEmpty { "Sesión inteligente" } else countLabel
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) {
-                Header("A continuación", if (queue.isEmpty()) null else if (queue.size == 1) "1 canción" else "${queue.size} canciones")
+                Header(if (isDj) "Cola del DJ" else "A continuación", headerSub)
             }
             // Una lista se puede barajar o volver a su orden, y poner en bucle. La radio va a su aire, pero la canción
             // que suena se puede repetir.
             val radio = source?.kind == "Radio"
-            if (source != null) Row(Modifier.padding(end = Space.lg, top = Space.sm), horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
-                if (source?.kind != "DJ") LoopButton(radio)
-                if (!radio) ShuffleButton()
+            if (isDj) {
+                DjSkipMoodPill(
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                        connection.skipDjTanda()
+                    },
+                    modifier = Modifier.padding(end = Space.lg, top = Space.sm),
+                )
+            } else if (source != null) {
+                Row(Modifier.padding(end = Space.lg, top = Space.sm), horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
+                    LoopButton(radio)
+                    if (!radio) ShuffleButton()
+                }
             }
         }
         Row(Modifier.padding(start = Space.lg, end = Space.lg, bottom = Space.sm), verticalAlignment = Alignment.CenterVertically) {
             OutputChip()
             Spacer(Modifier.weight(1f))
-            if (queue.isNotEmpty()) Text("Desliza para quitar", style = OtoType.label.copy(fontSize = 11.sp), color = Oto.colors.textFaint, maxLines = 1)
+            if (queue.isNotEmpty() || (isDj && nextUp.isNotEmpty())) {
+                Text(
+                    if (isDj && nextUp.isNotEmpty()) "Desliza o toca «Otra»" else "Desliza para quitar",
+                    style = OtoType.label.copy(fontSize = 11.sp), color = Oto.colors.textFaint, maxLines = 1,
+                )
+            }
         }
-        if (source?.kind == "DJ" && !connection.mirrored) {
+        if (isDj) {
             DjQueueControls(connection)
         }
         if (queue.isEmpty()) {
-            Empty(R.drawable.ic_queue_music, "No hay nada detrás", "Pon una canción y la radio irá llenando esto sola.")
+            if (isDj && nextUp.isNotEmpty()) {
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = Space.sm, end = Space.sm, bottom = Space.lg),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    item(key = NEXT_UP_DIVIDER) { DjSectionDivider(Modifier.animateItem()) }
+                    itemsIndexed(nextUp, key = { _, it -> "nextup:" + it.track.id }) { idx, pick ->
+                        val swap = {
+                            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                            connection.vetoDjNextUp(pick.track.id)
+                        }
+                        Removable(onRemove = swap) {
+                            DjNextUpRow(
+                                order = idx + 1,
+                                title = pick.track.title,
+                                artist = pick.track.artist,
+                                artwork = pick.track.artwork,
+                                pick = pick,
+                                onClick = {},
+                                onSwap = swap,
+                            )
+                        }
+                    }
+                }
+            } else if (isDj) {
+                DjQueueEmptyState()
+            } else {
+                Empty(R.drawable.ic_queue_music, "No hay nada detrás", "Pon una canción y la radio irá llenando esto sola.")
+            }
         } else {
             // Dónde empieza lo que no es de la lista: las parecidas del final o, en bucle, la vuelta al principio.
             val firstAuto = shown.indexOfFirst { it.auto }
+            val firstNextUp = if (isDj) shown.indexOfFirst { it.id in nextUpById } else -1
             // Dónde empieza, en bucle, la vuelta al principio (de la cola del reproductor: mientras se arrastra, sus
             // índices ya no van en orden). Al arrastrar, el aviso hace de frontera: cruzarlo pasa la canción a la
             // otra vuelta y el aviso se corre un sitio, en vez de que la cruce otra.
@@ -158,64 +220,87 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
                     // Los avisos van en su propia fila, fuera de las canciones: pegados a una, al subir otra a su
                     // sitio el aviso saltaba de una a otra, cambiaban de alto a mitad del arrastre y se intercambiaban
                     // sin parar hasta llegar arriba del todo.
+                    if (i == firstNextUp) item(key = NEXT_UP_DIVIDER) { DjSectionDivider(Modifier.animateItem()) }
                     if (i == firstAuto) item(key = AUTO_DIVIDER) { Divider("Al acabar la lista, parecidas", Modifier.animateItem()) }
                     if (i == border) item(key = WRAP_DIVIDER) { Divider("Y vuelve a empezar", Modifier.animateItem()) }
                     val key = keys[i]
+                    val pick = if (isDj) nextUpById[e.id] else null
                     item(key = key) {
-                        ReorderableItem(reorder, key, animateItemModifier = Modifier.animateItem(placementSpec = spring(stiffness = Spring.StiffnessMediumLow))) { dragging ->
-                            Column(
-                                Modifier.graphicsLayer {
-                                    if (dragging) {
-                                        scaleX = 1.03f; scaleY = 1.03f
-                                        shadowElevation = 12.dp.toPx()
-                                        shape = RoundedCornerShape(Radius.lg)
-                                        clip = true
+                        if (pick != null) {
+                            val swap = {
+                                haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                connection.vetoDjNextUp(e.id)
+                            }
+                            Removable(onRemove = swap) {
+                                DjNextUpRow(
+                                    order = nextUpOrderById[e.id],
+                                    title = e.title,
+                                    artist = e.artist,
+                                    artwork = e.artwork,
+                                    pick = pick,
+                                    onClick = { connection.skipTo(e.index); onClose() },
+                                    onSwap = swap,
+                                    modifier = Modifier.animateItem().padding(vertical = 3.dp),
+                                )
+                            }
+                        } else {
+                            ReorderableItem(reorder, key, animateItemModifier = Modifier.animateItem(placementSpec = spring(stiffness = Spring.StiffnessMediumLow))) { dragging ->
+                                Column(
+                                    Modifier.graphicsLayer {
+                                        if (dragging) {
+                                            scaleX = 1.03f; scaleY = 1.03f
+                                            shadowElevation = 12.dp.toPx()
+                                            shape = RoundedCornerShape(Radius.lg)
+                                            clip = true
+                                        }
+                                    },
+                                ) {
+                                    Removable(onRemove = { haptics.performHapticFeedback(HapticFeedbackType.Confirm); connection.remove(e.index) }) {
+                                        SongRow(
+                                            e.title, e.artist, e.artwork, current = false, onClick = { connection.skipTo(e.index); onClose() },
+                                            modifier = Modifier
+                                                .background(if (dragging) Oto.colors.field else Color.Transparent, RoundedCornerShape(Radius.lg))
+                                                .longPressDraggableHandle(
+                                                    onDragStarted = {
+                                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                        dragged = key
+                                                        local = local ?: queue
+                                                    },
+                                                    onDragStopped = {
+                                                        // La canción pasa, en el reproductor, al sitio de la que ocupaba ese hueco al empezar.
+                                                        val now = local
+                                                        val w = (localWrap ?: wrap).let { if (it < 0) Int.MAX_VALUE else it }
+                                                        dragged = null
+                                                        val from = keysOf(queue).indexOf(key)
+                                                        val to = now?.let { keysOf(it).indexOf(key) } ?: -1
+                                                        if (now != null && from >= 0 && to >= 0 && (from != to || localWrap != null && localWrap != wrap)) {
+                                                            // Se coloca junto a sus vecinas de la misma vuelta: detrás de la de
+                                                            // arriba (o de la que suena) en esta; delante de la de abajo en la siguiente.
+                                                            val real = queue[from].index
+                                                            when {
+                                                                to < w -> connection.place(real, after = now.getOrNull(to - 1)?.index)
+                                                                to + 1 < now.size -> connection.place(real, before = now[to + 1].index)
+                                                                to > w -> connection.place(real, after = now[to - 1].index)
+                                                                else -> connection.place(real, before = 0)
+                                                            }
+                                                        } else { local = null; localWrap = null }
+                                                    },
+                                                ),
+                                        )
                                     }
-                                },
-                            ) {
-                                Removable(onRemove = { haptics.performHapticFeedback(HapticFeedbackType.Confirm); connection.remove(e.index) }) {
-                                    SongRow(
-                                        e.title, e.artist, e.artwork, current = false, onClick = { connection.skipTo(e.index); onClose() },
-                                        modifier = Modifier
-                                            .background(if (dragging) Oto.colors.field else Color.Transparent, RoundedCornerShape(Radius.lg))
-                                            .longPressDraggableHandle(
-                                                onDragStarted = {
-                                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                    dragged = key
-                                                    local = local ?: queue
-                                                },
-                                                onDragStopped = {
-                                                    // La canción pasa, en el reproductor, al sitio de la que ocupaba ese hueco al empezar.
-                                                    val now = local
-                                                    val w = (localWrap ?: wrap).let { if (it < 0) Int.MAX_VALUE else it }
-                                                    dragged = null
-                                                    val from = keysOf(queue).indexOf(key)
-                                                    val to = now?.let { keysOf(it).indexOf(key) } ?: -1
-                                                    if (now != null && from >= 0 && to >= 0 && (from != to || localWrap != null && localWrap != wrap)) {
-                                                        // Se coloca junto a sus vecinas de la misma vuelta: detrás de la de
-                                                        // arriba (o de la que suena) en esta; delante de la de abajo en la siguiente.
-                                                        val real = queue[from].index
-                                                        when {
-                                                            to < w -> connection.place(real, after = now.getOrNull(to - 1)?.index)
-                                                            to + 1 < now.size -> connection.place(real, before = now[to + 1].index)
-                                                            to > w -> connection.place(real, after = now[to - 1].index)
-                                                            else -> connection.place(real, before = 0)
-                                                        }
-                                                    } else { local = null; localWrap = null }
-                                                },
-                                            ),
-                                    )
                                 }
                             }
                         }
                     }
                 }
-                item(key = "hint") {
-                    Text(
-                        "Mantén una canción para moverla.",
-                        style = OtoType.rowSub, color = Oto.colors.textFaint,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.lg),
-                    )
+                if (!isDj || shown.any { it.id !in nextUpById }) {
+                    item(key = "hint") {
+                        Text(
+                            "Mantén una canción para moverla.",
+                            style = OtoType.rowSub, color = Oto.colors.textFaint,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.lg),
+                        )
+                    }
                 }
             }
         }
@@ -225,6 +310,171 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
 // Las claves de los avisos de la cola: no son de canciones, así que no se mueven ni se intercambian.
 private const val AUTO_DIVIDER = 1
 private const val WRAP_DIVIDER = 2
+private const val NEXT_UP_DIVIDER = 3
+
+@Composable
+private fun DjSkipMoodPill(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val c = Oto.colors
+    Row(
+        modifier
+            .clip(CircleShape)
+            .background(c.accent.copy(alpha = 0.14f))
+            .border(1.dp, c.accent.copy(alpha = 0.36f), CircleShape)
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.accent), onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Icon(painterResource(R.drawable.ic_skip_next), contentDescription = "Saltar mood", modifier = Modifier.size(15.dp), tint = c.accent)
+        Text("Saltar mood", style = OtoType.label.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold), color = c.accent, maxLines = 1)
+    }
+}
+
+@Composable
+private fun DjSectionDivider(modifier: Modifier = Modifier) {
+    val c = Oto.colors
+    Row(
+        modifier.fillMaxWidth().padding(horizontal = Space.sm, vertical = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+    ) {
+        Icon(painterResource(R.drawable.ic_graphic_eq), contentDescription = null, modifier = Modifier.size(14.dp), tint = c.accent)
+        Text(
+            "SIGUIENTES DEL DJ",
+            style = OtoType.label.copy(fontSize = 10.5.sp, letterSpacing = 0.8.sp, fontWeight = FontWeight.SemiBold),
+            color = c.textMuted,
+        )
+        HorizontalDivider(Modifier.weight(1f), color = c.line)
+    }
+}
+
+@Composable
+private fun DjQueueEmptyState() {
+    val c = Oto.colors
+    Box(Modifier.fillMaxSize().padding(horizontal = Space.lg), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+            Box(
+                Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(c.accent.copy(alpha = 0.14f))
+                    .border(1.dp, c.accent.copy(alpha = 0.30f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(painterResource(R.drawable.ic_graphic_eq), contentDescription = null, modifier = Modifier.size(26.dp), tint = c.accent)
+            }
+            Text("El DJ está preparando lo siguiente", style = OtoType.section, color = c.text)
+            Text("Enseguida verás aquí los próximos temas.", style = OtoType.rowSub, color = c.textMuted)
+        }
+    }
+}
+
+private fun djKindCategory(pick: DjPickInfo): String = when {
+    pick.isBridge || pick.kind == Kind.BRIDGE -> "Puente"
+    pick.kind == Kind.FAMILIAR -> "Clásico"
+    pick.kind == Kind.DEEP -> "De tus artistas"
+    pick.kind == Kind.NEW -> "Descubrimiento"
+    else -> ""
+}
+
+private fun djReasonText(pick: DjPickInfo, category: String): String {
+    val reason = pick.reason.trim()
+    if (reason.isEmpty()) return ""
+    if (reason.equals(category, ignoreCase = true)) return ""
+    return reason
+}
+
+@Composable
+private fun DjNextUpRow(
+    order: Int?,
+    title: String,
+    artist: String,
+    artwork: String?,
+    pick: DjPickInfo,
+    onClick: () -> Unit,
+    onSwap: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = Oto.colors
+    val category = remember(pick) { djKindCategory(pick) }
+    val reason = remember(pick, category) { djReasonText(pick, category) }
+    val highlight = pick.isBridge || pick.kind == Kind.NEW
+    val shape = RoundedCornerShape(Radius.lg)
+    val cardBg = if (highlight) c.accent.copy(alpha = 0.11f) else c.field.copy(alpha = 0.50f)
+    val cardBorder = if (highlight) c.accent.copy(alpha = 0.32f) else c.line
+    Row(
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = Space.xs)
+            .clip(shape)
+            .background(cardBg)
+            .border(1.dp, cardBorder, shape)
+            .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
+            .padding(horizontal = Space.md, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (order != null) {
+            Text(
+                "+$order",
+                style = OtoType.label.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
+                color = if (highlight) c.accent else c.textFaint,
+                modifier = Modifier.width(24.dp),
+            )
+        }
+        Art(artwork, 46.dp, Radius.sm)
+        Spacer(Modifier.width(Space.md))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (artist.isNotEmpty()) {
+                Text(artist, style = OtoType.rowSub, color = c.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (category.isNotEmpty() || reason.isNotEmpty()) {
+                Row(
+                    Modifier.padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (category.isNotEmpty()) {
+                        Text(
+                            category,
+                            style = OtoType.label.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                            color = if (highlight) c.accent else c.textMuted,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(if (highlight) c.accent.copy(alpha = 0.18f) else c.field)
+                                .padding(horizontal = 7.dp, vertical = 2.dp),
+                        )
+                    }
+                    if (reason.isNotEmpty()) {
+                        Text(
+                            reason,
+                            style = OtoType.label.copy(fontSize = 11.sp),
+                            color = c.textFaint,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.width(Space.sm))
+        Row(
+            Modifier
+                .clip(CircleShape)
+                .background(c.field)
+                .border(1.dp, c.line, CircleShape)
+                .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onSwap)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(painterResource(R.drawable.ic_refresh), contentDescription = "Cambiar por otra", modifier = Modifier.size(13.dp), tint = c.textMuted)
+            Text("Otra", style = OtoType.label.copy(fontSize = 11.sp), color = c.textMuted)
+        }
+    }
+}
 
 /** Claves que no cambian al mover una canción (su id, y cuántas veces salió antes si está repetida). */
 private fun keysOf(list: List<QueueEntry>): List<String> {
@@ -260,35 +510,73 @@ private fun Removable(onRemove: () -> Unit, content: @Composable () -> Unit) {
     ) { content() }
 }
 
-/** Controles en vivo del DJ dentro de la cola: modo rápido (ADHD) y selección de mood. */
+/** Controles en vivo del DJ dentro de la cola: modo rápido (ADHD), oír entera esta y tus géneros. */
 @Composable
 private fun DjQueueControls(connection: PlayerConnection) {
     val haptics = LocalHapticFeedback.current
-    val mood by connection.djMood.collectAsStateWithLifecycle()
+    val genre by connection.djGenre.collectAsStateWithLifecycle()
+    val genres = io.github.iaguito22.oto.ui.menu.rememberDjGenres()
     val mode by connection.djMode.collectAsStateWithLifecycle()
+    val fullOnce by connection.djFullOnce.collectAsStateWithLifecycle()
     val adhd = mode == DjMode.Adhd
     LazyRow(
         contentPadding = PaddingValues(horizontal = Space.lg),
         horizontalArrangement = Arrangement.spacedBy(Space.xs),
-        modifier = Modifier.padding(bottom = Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(bottom = Space.md),
     ) {
         item(key = "adhd") {
             QueueChip(
-                label = "DJ rápido (ADHD)",
+                label = "DJ rápido",
                 selected = adhd,
+                icon = R.drawable.ic_timer,
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                     connection.setDjMode(if (adhd) DjMode.Normal else DjMode.Adhd)
                 },
             )
         }
-        items(DjMood.entries, key = { it.name }) { m ->
+        if (adhd) {
+            item(key = "fullOnce") {
+                QueueChip(
+                    label = if (fullOnce) "Entera esta" else "Oír esta entera",
+                    selected = fullOnce,
+                    icon = if (fullOnce) R.drawable.ic_check else null,
+                    onClick = {
+                        if (!fullOnce) {
+                            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                            connection.playDjFullOnce()
+                        }
+                    },
+                )
+            }
+        }
+        item(key = "sep") {
+            Box(
+                Modifier
+                    .padding(horizontal = 3.dp)
+                    .width(1.dp)
+                    .height(18.dp)
+                    .background(Oto.colors.line),
+            )
+        }
+        item(key = "genre:all") {
             QueueChip(
-                label = m.label,
-                selected = m == mood,
+                label = "Todo",
+                selected = genre == null,
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                    connection.setDjMood(m)
+                    connection.setDjGenre(null)
+                },
+            )
+        }
+        items(genres, key = { "genre:" + it.name }) { g ->
+            QueueChip(
+                label = g.name,
+                selected = g.name == genre,
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    connection.setDjGenre(g.name)
                 },
             )
         }
@@ -296,20 +584,30 @@ private fun DjQueueControls(connection: PlayerConnection) {
 }
 
 @Composable
-private fun QueueChip(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun QueueChip(label: String, selected: Boolean, onClick: () -> Unit, icon: Int? = null) {
     val c = Oto.colors
-    val bg by animateColorAsState(if (selected) c.accent.copy(alpha = 0.22f) else c.field, tween(Motion.EFFECTS), label = "qChipBg")
+    val bg by animateColorAsState(if (selected) c.accent.copy(alpha = 0.18f) else c.field, tween(Motion.EFFECTS), label = "qChipBg")
+    val border by animateColorAsState(if (selected) c.accent.copy(alpha = 0.45f) else c.line, tween(Motion.EFFECTS), label = "qChipBorder")
     val fg by animateColorAsState(if (selected) c.accent else c.textMuted, tween(Motion.EFFECTS), label = "qChipFg")
-    Text(
-        label,
-        style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 0.96f),
-        color = fg,
-        maxLines = 1,
-        modifier = Modifier
+    Row(
+        Modifier
             .clip(CircleShape)
             .background(bg)
+            .border(1.dp, border, CircleShape)
             .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 6.dp),
-    )
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        if (icon != null) {
+            Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(13.dp), tint = fg)
+        }
+        Text(
+            label,
+            style = OtoType.rowTitle.copy(fontSize = OtoType.rowSub.fontSize * 0.96f),
+            color = fg,
+            maxLines = 1,
+        )
+    }
 }
 

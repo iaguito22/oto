@@ -140,6 +140,9 @@ import io.github.iaguito22.oto.LIKED_ID
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.Prefs
 import io.github.iaguito22.oto.QualityMode
+import io.github.iaguito22.oto.dj.DjMode
+import io.github.iaguito22.oto.dj.DjPickInfo
+import io.github.iaguito22.oto.dj.Kind
 import io.github.iaguito22.oto.account.Account
 import io.github.iaguito22.oto.desktop.BrowserLogin
 import io.github.iaguito22.oto.desktop.LoginState
@@ -4199,26 +4202,77 @@ internal fun QueuePane(
     onClose: (() -> Unit)? = null,
     currentIndex: Int? = null,
     loopMode: io.github.iaguito22.oto.LoopMode = if (loop) io.github.iaguito22.oto.LoopMode.All else io.github.iaguito22.oto.LoopMode.Off,
+    djActive: Boolean = false,
+    djMode: DjMode = DjMode.Normal,
+    djTanda: String? = null,
+    djFullOnce: Boolean = false,
+    djNextUp: List<DjPickInfo> = emptyList(),
+    onPlayDjFullOnce: (() -> Unit)? = null,
+    onVetoDjNextUp: ((String) -> Unit)? = null,
 ) {
+    val nextUpIds = remember(djActive, djNextUp) {
+        if (djActive) djNextUp.mapTo(HashSet()) { it.track.id } else emptySet()
+    }
+    val curIdx = currentIndex ?: queue.indexOfFirst { it.id == currentMediaId }.takeIf { it >= 0 }
+    val visibleQueue = remember(queue, curIdx, currentMediaId, djActive, nextUpIds) {
+        if (!djActive || nextUpIds.isEmpty()) queue.mapIndexed { idx, entry -> idx to entry }
+        else queue.mapIndexedNotNull { idx, entry ->
+            if (idx > (curIdx ?: -1) && entry.id in nextUpIds && entry.id != currentMediaId) null else idx to entry
+        }
+    }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(Modifier.widthIn(min=128.dp)) {
+            Column(Modifier.widthIn(min = 128.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = if (djActive) "Cola del DJ" else "Cola de reproducción",
+                        style = OtoType.section,
+                        color = Color.White,
+                    )
+                    if (djActive) {
+                        Text(
+                            text = "EN VIVO",
+                            style = OtoType.label.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                            color = palette.primary,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(palette.primary.copy(alpha = 0.16f))
+                                .border(1.dp, palette.primary.copy(alpha = 0.38f), CircleShape)
+                                .padding(horizontal = 7.dp, vertical = 2.dp),
+                        )
+                    }
+                }
                 Text(
-                    text = "Cola de reproducción",
-                    style = OtoType.section,
-                    color = Color.White,
-                )
-                Text(
-                    text = if (queue.isEmpty()) "Nada en cola" else "${queue.size} canciones en total",
+                    text = when {
+                        djActive && djNextUp.isNotEmpty() -> {
+                            val tandaPart = djMoodPillLabel(djTanda).takeIf { it != "Saltar mood" }?.let { "$it · " }.orEmpty()
+                            "$tandaPart${djNextUp.size} siguientes"
+                        }
+                        djActive -> {
+                            djMoodPillLabel(djTanda).takeIf { it != "Saltar mood" } ?: "Sesión inteligente"
+                        }
+                        queue.isEmpty() -> "Nada en cola"
+                        else -> "${queue.size} canciones en total"
+                    },
                     style = OtoType.rowSub,
-                    color = Color.White.copy(alpha = 0.62f),
+                    color = if (djActive) palette.primary.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.62f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (djActive && djMode == DjMode.Adhd && onPlayDjFullOnce != null) {
+                    MenuTabPill(
+                        label = if (djFullOnce) "Suena entera" else "Oír esta entera",
+                        selected = djFullOnce,
+                        accent = palette.primary,
+                        onClick = { if (!djFullOnce) onPlayDjFullOnce() },
+                    )
+                }
                 if (queue.size > 1) {
                     MenuTabPill(
                         label = "Vaciar",
@@ -4256,7 +4310,7 @@ internal fun QueuePane(
                 }
             }
         }
-        if (queue.isEmpty()) {
+        if (visibleQueue.isEmpty() && (!djActive || djNextUp.isEmpty())) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -4282,27 +4336,254 @@ internal fun QueuePane(
             }
         } else {
             val listState = rememberLazyListState()
-            val reorderState = rememberReorderableLazyListState(listState) { from, to -> onMove(from.index, to.index) }
+            val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+                val fromIdx = visibleQueue.getOrNull(from.index)?.first ?: return@rememberReorderableLazyListState
+                val toIdx = visibleQueue.getOrNull(to.index)?.first ?: return@rememberReorderableLazyListState
+                onMove(fromIdx, toIdx)
+            }
             val occurrences = mutableMapOf<String,Int>()
-            val keyedQueue = queue.map { entry -> val n=occurrences.getOrDefault(entry.id,0); occurrences[entry.id]=n+1; "${entry.id}#$n" to entry }
+            val keyedQueue = visibleQueue.map { (origIdx, entry) ->
+                val n = occurrences.getOrDefault(entry.id, 0)
+                occurrences[entry.id] = n + 1
+                Triple("${entry.id}#$n", origIdx, entry)
+            }
             LazyColumn(Modifier.weight(1f), state=listState, contentPadding=PaddingValues(top=16.dp,bottom=12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                itemsIndexed(keyedQueue, key = { _, item -> item.first }) { idx, item ->
-                    val entry=item.second
-                    ReorderableItem(reorderState,item.first) { dragging ->
-                    QueueRowDesktop(
-                        index = idx + 1,
-                        title = entry.title,
-                        subtitle = entry.artist,
-                        artwork = entry.artwork,
-                        isCurrent = if (currentIndex != null) idx == currentIndex else entry.id == currentMediaId,
-                        accent = palette.primary,
-                        dragModifier = Modifier.draggableHandle(),
-                        isDragging = dragging,
-                        onClick = { onSkipTo(idx) },
-                        onRemove = { onRemove(idx) },
-                    )
+                itemsIndexed(keyedQueue, key = { _, item -> item.first }) { _, item ->
+                    val (key, origIdx, entry) = item
+                    ReorderableItem(reorderState, key) { dragging ->
+                        QueueRowDesktop(
+                            index = origIdx + 1,
+                            title = entry.title,
+                            subtitle = entry.artist,
+                            artwork = entry.artwork,
+                            isCurrent = if (currentIndex != null) origIdx == currentIndex else entry.id == currentMediaId,
+                            accent = palette.primary,
+                            dragModifier = Modifier.draggableHandle(),
+                            isDragging = dragging,
+                            onClick = { onSkipTo(origIdx) },
+                            onRemove = { onRemove(origIdx) },
+                        )
                     }
                 }
+                if (djActive && djNextUp.isNotEmpty()) {
+                    item(key = "dj_nextup_header") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp, start = 4.dp, end = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(MobileIcons.graphicEq, null, tint = palette.primary, modifier = Modifier.size(15.dp))
+                            Text(
+                                text = "SIGUIENTES DEL DJ",
+                                style = OtoType.label.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
+                                color = Color.White.copy(alpha = 0.72f),
+                            )
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .height(1.dp)
+                                    .background(Color.White.copy(alpha = 0.12f)),
+                            )
+                            djMoodPillLabel(djTanda).takeIf { it != "Saltar mood" }?.let { tandaLabel ->
+                                Text(
+                                    text = tandaLabel,
+                                    style = OtoType.label.copy(fontSize = 11.sp),
+                                    color = palette.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier
+                                        .widthIn(max = 220.dp)
+                                        .clip(CircleShape)
+                                        .background(palette.primary.copy(alpha = 0.14f))
+                                        .border(1.dp, palette.primary.copy(alpha = 0.32f), CircleShape)
+                                        .padding(horizontal = 9.dp, vertical = 3.dp),
+                                )
+                            }
+                        }
+                    }
+                    itemsIndexed(djNextUp, key = { i, info -> "dj_nextup:${info.track.id}:$i" }) { i, info ->
+                        val skipIdx = queue.withIndex().firstOrNull { (qIdx, e) ->
+                            qIdx > (curIdx ?: -1) && e.id == info.track.id
+                        }?.index
+                        DjNextUpRowDesktop(
+                            offset = i + 1,
+                            info = info,
+                            accent = palette.primary,
+                            onClick = skipIdx?.let { { onSkipTo(it) } },
+                            onVeto = onVetoDjNextUp?.let { veto -> { veto(info.track.id) } },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun DjNextUpRowDesktop(
+    offset: Int,
+    info: DjPickInfo,
+    accent: Color,
+    onClick: (() -> Unit)?,
+    onVeto: (() -> Unit)?,
+) {
+    val track = info.track
+    var thumbBmp by remember(track.artwork) { mutableStateOf<ImageBitmap?>(null) }
+    var isHovered by remember { mutableStateOf(false) }
+    val hoverAmount by animateFloatAsState(if (isHovered) 1f else 0f, tween(160), label = "nextUpHover")
+
+    LaunchedEffect(track.artwork) {
+        if (!track.artwork.isNullOrBlank()) {
+            thumbBmp = ArtworkLoader.load(track.artwork).first
+        }
+    }
+
+    val kindLabel = when {
+        info.isBridge || info.kind == Kind.BRIDGE -> if (info.bridgeFrom != null && info.bridgeTo != null) "Puente ${info.bridgeFrom} → ${info.bridgeTo}" else "Puente"
+        info.kind == Kind.NEW -> "Descubrimiento"
+        info.kind == Kind.DEEP -> "De tus artistas"
+        else -> "Clásico"
+    }
+    val reasonText = info.reason.trim().let { r ->
+        if (r.isBlank() || r.equals(kindLabel, ignoreCase = true)) "" else r
+    }
+    val highlight = info.isBridge || info.kind == Kind.NEW
+    val shape = RoundedCornerShape(14.dp)
+    val bgBrush = if (highlight) {
+        Brush.horizontalGradient(
+            listOf(
+                accent.copy(alpha = 0.10f + 0.06f * hoverAmount),
+                Color.White.copy(alpha = 0.03f + 0.03f * hoverAmount),
+            ),
+        )
+    } else {
+        Brush.horizontalGradient(
+            listOf(
+                Color.White.copy(alpha = 0.035f + 0.065f * hoverAmount),
+                Color.White.copy(alpha = 0.02f + 0.025f * hoverAmount),
+            ),
+        )
+    }
+    val borderColor = if (highlight) {
+        accent.copy(alpha = 0.28f + 0.24f * hoverAmount)
+    } else {
+        Color.White.copy(alpha = 0.08f + 0.14f * hoverAmount)
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(bgBrush)
+            .border(1.dp, borderColor, shape)
+            .then(if (onClick != null) Modifier.pointerHoverIcon(PointerIcon.Hand).clickable(onClick = onClick) else Modifier)
+            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = "+$offset",
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = FontFamily.Monospace,
+            color = if (highlight) accent else Color.White.copy(alpha = 0.55f),
+            modifier = Modifier.width(24.dp),
+        )
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(Color.White.copy(alpha = 0.07f))
+                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(9.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (thumbBmp != null) {
+                Image(
+                    bitmap = thumbBmp!!,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Icon(
+                    imageVector = MobileIcons.libraryMusic,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.40f),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = track.title,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (track.artist.isNotBlank()) {
+                Text(
+                    text = track.artist,
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.65f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Row(
+                Modifier.padding(top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = kindLabel,
+                    style = OtoType.label.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                    color = if (highlight) accent else Color.White.copy(alpha = 0.78f),
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(if (highlight) accent.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.09f))
+                        .padding(horizontal = 7.dp, vertical = 2.dp),
+                )
+                if (reasonText.isNotEmpty()) {
+                    Text(
+                        text = reasonText,
+                        fontSize = 11.sp,
+                        color = Color.White.copy(alpha = 0.56f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
+            }
+        }
+        if (onVeto != null) {
+            Row(
+                Modifier
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.06f + 0.06f * hoverAmount))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(onClick = onVeto)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    imageVector = MobileIcons.refresh,
+                    contentDescription = "Cambiar ${track.title} por otra",
+                    tint = Color.White.copy(alpha = 0.75f),
+                    modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    text = "Otra",
+                    style = OtoType.label.copy(fontSize = 11.sp),
+                    color = Color.White.copy(alpha = 0.78f),
+                )
             }
         }
     }
