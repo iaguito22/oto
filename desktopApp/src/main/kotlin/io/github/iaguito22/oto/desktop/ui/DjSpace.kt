@@ -71,7 +71,7 @@ internal fun DjSpace(player: DesktopPlayerConnection, palette: ArtworkPalette, o
     val genre by player.djGenre.collectAsState()
     val tanda by player.djTanda.collectAsState()
     val fullOnce by player.djFullOnce.collectAsState()
-    val shownTanda = djMoodPillLabel(tanda).takeIf { it != "Saltar mood" }
+    val shownTanda = djMoodPillLabel(tanda).takeIf { it != "Otro ambiente" }
     val genres by produceState(emptyList<DjGenre>()) { player.djGenres { value = it } }
     val start = { m: DjMode -> player.playDj(m) { onFail(if (m == DjMode.Adhd) "No se pudo iniciar el DJ rápido" else "No se pudo iniciar el DJ") } }
     val modeLabel = if (mode == DjMode.Adhd) "DJ rápido" else "Normal"
@@ -199,7 +199,7 @@ internal fun DjSpace(player: DesktopPlayerConnection, palette: ArtworkPalette, o
                                 color = accent,
                             )
                             Text(
-                                text = shownTanda ?: "Mood actual",
+                                text = shownTanda ?: "Ambiente actual",
                                 style = OtoType.rowTitle,
                                 color = Color.White,
                                 maxLines = 1,
@@ -216,7 +216,7 @@ internal fun DjSpace(player: DesktopPlayerConnection, palette: ArtworkPalette, o
                                 if (!fullOnce) player.playDjFullOnce()
                             }
                         }
-                        DjButton("Saltar mood", MobileIcons.skipNext, accent, filled = false) { player.skipDjTanda() }
+                        DjButton("Otro ambiente", MobileIcons.skipNext, accent, filled = false) { player.skipDjTanda() }
                     }
                 }
             }
@@ -237,7 +237,7 @@ internal fun DjSpace(player: DesktopPlayerConnection, palette: ArtworkPalette, o
                 }
                 DjModeRow(
                     icon = MobileIcons.timer,
-                    title = "DJ rápido (ADHD)",
+                    title = "DJ rápido",
                     badge = "~1:30 · Al pulso",
                     body = "Entra justo antes de una parte cantada y mezcla al acabar un estribillo.",
                     selected = mode == DjMode.Adhd,

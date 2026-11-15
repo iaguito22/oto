@@ -40,8 +40,28 @@ internal fun optionsPosition(parent: Rectangle?, area: Rectangle, width:Int=270,
     return Point(x,y)
 }
 
-@Composable internal fun PlayerOptions(open:Boolean,dismiss:()->Unit,form:PlayerForm,choose:(PlayerForm)->Unit,volume:Float,setVolume:(Float)->Unit,devices:()->Unit,arrange:()->Unit,quit:()->Unit,parentBounds:()->Rectangle?={null},welcome:()->Unit={}) {
+@Composable internal fun PlayerOptions(
+    open:Boolean,
+    dismiss:()->Unit,
+    form:PlayerForm,
+    choose:(PlayerForm)->Unit,
+    volume:Float,
+    setVolume:(Float)->Unit,
+    devices:()->Unit,
+    arrange:()->Unit,
+    quit:()->Unit,
+    parentBounds:()->Rectangle?={null},
+    welcome:()->Unit={},
+    canStartDjHere:Boolean=false,
+    onStartDjHere:(()->Unit)?=null,
+    showFullOnce:Boolean=false,
+    fullOnceActive:Boolean=false,
+    onPlayFullOnce:(()->Unit)?=null,
+) {
     if(!open)return
+    val hasStartDj = canStartDjHere && onStartDjHere != null
+    val hasFullOnce = showFullOnce && onPlayFullOnce != null
+    val extraHeight = (if(hasStartDj) 44 else 0) + (if(hasFullOnce) 44 else 0)
     @Composable fun OptionsContent() {
         Surface(Modifier.width(270.dp).border(1.dp,Color.White.copy(alpha=.09f),RoundedCornerShape(20.dp)),shape=RoundedCornerShape(20.dp),color=Color(0xFF202520),shadowElevation=18.dp) {
             Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
@@ -65,15 +85,27 @@ internal fun optionsPosition(parent: Rectangle?, area: Rectangle, width:Int=270,
                     FineSlider(volume,setVolume,label="Volumen")
                 }
                 HorizontalDivider(color=Color.White.copy(alpha=.07f))
-                OptionLine(Icons.Rounded.Devices,"Dispositivos",devices)
-                OptionLine(MobileIcons.libraryMusic,"Organizar ventanas",arrange)
-                OptionLine(Icons.AutoMirrored.Rounded.HelpOutline,"Ver bienvenida",welcome)
-                OptionLine(MobileIcons.close,"Salir de Oto",quit)
+                if(showFullOnce && onPlayFullOnce != null) {
+                    OptionLine(
+                        MobileIcons.timer,
+                        if(fullOnceActive) "Esta canción suena entera" else "Oír esta canción entera",
+                        enabled=!fullOnceActive,
+                        tint=if(fullOnceActive) MaterialTheme.colorScheme.primary else null,
+                    ) { dismiss(); onPlayFullOnce() }
+                }
+                if(canStartDjHere && onStartDjHere != null) {
+                    OptionLine(MobileIcons.graphicEq,"Arrancar DJ desde aquí") { dismiss(); onStartDjHere() }
+                }
+                OptionLine(Icons.Rounded.Devices,"Dispositivos",click=devices)
+                OptionLine(MobileIcons.libraryMusic,"Organizar ventanas",click=arrange)
+                OptionLine(Icons.AutoMirrored.Rounded.HelpOutline,"Ver bienvenida",click=welcome)
+                OptionLine(MobileIcons.close,"Salir de Oto",click=quit)
             }
         }
     }
     if(form==PlayerForm.Horizontal) {
-        val position = remember {
+        val dialogHeight = 430 + extraHeight
+        val position = remember(dialogHeight) {
             val parent=parentBounds()
             val point = parent?.let { Point(it.x+it.width/2,it.y+it.height/2) } ?: MouseInfo.getPointerInfo()?.location
             val screens = GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices
@@ -82,10 +114,10 @@ internal fun optionsPosition(parent: Rectangle?, area: Rectangle, width:Int=270,
             val bounds = config.bounds
             val insets = Toolkit.getDefaultToolkit().getScreenInsets(config)
             val area=Rectangle(bounds.x+insets.left,bounds.y+insets.top,bounds.width-insets.left-insets.right,bounds.height-insets.top-insets.bottom)
-            val placed=optionsPosition(parent,area,height=430)
+            val placed=optionsPosition(parent,area,height=dialogHeight)
             WindowPosition(placed.x.dp,placed.y.dp)
         }
-        DialogWindow(onCloseRequest=dismiss,title="Opciones del reproductor",state=rememberDialogState(position=position,width=270.dp,height=430.dp),undecorated=true,transparent=true) {
+        DialogWindow(onCloseRequest=dismiss,title="Opciones del reproductor",state=rememberDialogState(position=position,width=270.dp,height=dialogHeight.dp),undecorated=true,transparent=true) {
         Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) {
             OptionsContent()
             var previous by remember { mutableStateOf<java.awt.Point?>(null) }
@@ -102,12 +134,12 @@ internal fun optionsPosition(parent: Rectangle?, area: Rectangle, width:Int=270,
     }
     else Popup(alignment=Alignment.TopEnd,offset=IntOffset(0,36),onDismissRequest=dismiss,properties=PopupProperties(focusable=true)) { OptionsContent() }
 }
-@Composable private fun OptionLine(icon:ImageVector,label:String,click:()->Unit) {
+@Composable private fun OptionLine(icon:ImageVector,label:String,enabled:Boolean=true,tint:Color?=null,click:()->Unit) {
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val scale by animateFloatAsState(if(hovered)1.1f else 1f,tween(160),label="optionHover")
-    Row(Modifier.fillMaxWidth().hoverable(interaction).clickable(interactionSource=interaction,indication=null,onClick=click).padding(vertical=5.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-        Box(Modifier.size(19.dp),contentAlignment=Alignment.Center) { Icon(icon,null,Modifier.size(17.dp*scale),tint=Color.White.copy(alpha=.4f)) }
-        Text(label,style=OtoType.rowSub.copy(fontSize=OtoType.rowSub.fontSize*scale),color=Color.White.copy(alpha=.8f),maxLines=1)
+    val scale by animateFloatAsState(if(hovered && enabled)1.1f else 1f,tween(160),label="optionHover")
+    Row(Modifier.fillMaxWidth().hoverable(interaction,enabled).clickable(interactionSource=interaction,indication=null,enabled=enabled,onClick=click).padding(vertical=5.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+        Box(Modifier.size(19.dp),contentAlignment=Alignment.Center) { Icon(icon,null,Modifier.size(17.dp*scale),tint=tint ?: Color.White.copy(alpha=.4f)) }
+        Text(label,style=OtoType.rowSub.copy(fontSize=OtoType.rowSub.fontSize*scale),color=tint ?: Color.White.copy(alpha=.8f),maxLines=1)
     }
 }

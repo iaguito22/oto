@@ -31,12 +31,31 @@ class DjPrefsTest {
             var prefs = createPrefs()
             // Defaults sensatos y compatibilidad con crossfade existente.
             assertEquals(DEFAULT_CROSSFADE, prefs.crossfade.first())
+            assertEquals(listOf(0, 5, 10, 15, 20), SMART_MIX_CHOICES)
             assertTrue(prefs.smartMix.first())
+            assertEquals(DEFAULT_SMART_MIX_SECONDS, prefs.smartMixChoice.first())
+            // Con la mezcla inteligente decide el DJ: la duración es solo una referencia.
+            assertEquals(DEFAULT_SMART_MIX_SECONDS, prefs.mixSeconds.first())
             assertEquals(DjMood.Auto, prefs.djMood.first())
             assertEquals(DjMode.Normal, prefs.djMode.first())
 
             prefs.setCrossfade(6)
-            prefs.setSmartMix(false)
+            prefs.setSmartMixChoice(15)
+            assertTrue(prefs.smartMix.first())
+            assertEquals(15, prefs.smartMixSeconds.first())
+            assertEquals(15, prefs.smartMixChoice.first())
+            assertEquals(DEFAULT_SMART_MIX_SECONDS, prefs.mixSeconds.first())
+            // Un valor guardado con las opciones antiguas (6 s) se lleva a la opción más cercana.
+            prefs.setSmartMixSeconds(6)
+            assertEquals(5, prefs.smartMixChoice.first())
+            assertEquals(DEFAULT_SMART_MIX_SECONDS, prefs.mixSeconds.first())
+
+            // Apagar mezcla inteligente funciona de verdad y pasa a usar el fundido clásico configurado.
+            prefs.setSmartMixChoice(0)
+            assertFalse(prefs.smartMix.first())
+            assertEquals(0, prefs.smartMixChoice.first())
+            assertEquals(6, prefs.mixSeconds.first())
+
             prefs.setDjMood(DjMood.Chill)
             prefs.setDjMode(DjMode.Adhd)
 

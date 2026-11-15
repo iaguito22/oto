@@ -50,6 +50,8 @@ class OtoApp : Application(), SingletonImageLoader.Factory {
     /** Lo que vas escuchando, para el DJ (lo escribe el servicio). */
     val plays by lazy { Plays(File(filesDir, "plays.jsonl")) }
     val djCatalog by lazy { YouTubeCatalog(File(cacheDir, "dj")) }
+    /** El género de tus canciones (de iTunes, guardado): los géneros del DJ. Lo comparten el servicio y la interfaz. */
+    val genres by lazy { io.github.iaguito22.oto.dj.GenreStore(File(filesDir, "dj-genres.json")) }
     val lyrics by lazy { LyricsStore(File(cacheDir, "lyrics")) }
     private val poToken by lazy {
         val gen = io.github.iaguito22.oto.playback.potoken.PoTokenGenerator(this)

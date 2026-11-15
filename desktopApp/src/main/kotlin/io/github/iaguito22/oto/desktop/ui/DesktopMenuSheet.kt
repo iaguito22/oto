@@ -5,6 +5,8 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -4209,6 +4211,8 @@ internal fun QueuePane(
     djNextUp: List<DjPickInfo> = emptyList(),
     onPlayDjFullOnce: (() -> Unit)? = null,
     onVetoDjNextUp: ((String) -> Unit)? = null,
+    nextMix: io.github.iaguito22.oto.desktop.playback.DesktopPlayerConnection.NextMix? = null,
+    onToggleAdhd: (() -> Unit)? = null,
 ) {
     val nextUpIds = remember(djActive, djNextUp) {
         if (djActive) djNextUp.mapTo(HashSet()) { it.track.id } else emptySet()
@@ -4249,11 +4253,11 @@ internal fun QueuePane(
                 Text(
                     text = when {
                         djActive && djNextUp.isNotEmpty() -> {
-                            val tandaPart = djMoodPillLabel(djTanda).takeIf { it != "Saltar mood" }?.let { "$it · " }.orEmpty()
+                            val tandaPart = djMoodPillLabel(djTanda).takeIf { it != "Otro ambiente" }?.let { "$it · " }.orEmpty()
                             "$tandaPart${djNextUp.size} siguientes"
                         }
                         djActive -> {
-                            djMoodPillLabel(djTanda).takeIf { it != "Saltar mood" } ?: "Sesión inteligente"
+                            djMoodPillLabel(djTanda).takeIf { it != "Otro ambiente" } ?: "Sesión inteligente"
                         }
                         queue.isEmpty() -> "Nada en cola"
                         else -> "${queue.size} canciones en total"
@@ -4265,9 +4269,18 @@ internal fun QueuePane(
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                // El DJ rápido se cambia aquí (en el reproductor ya no está).
+                if (djActive && onToggleAdhd != null) {
+                    MenuTabPill(
+                        label = "DJ rápido",
+                        selected = djMode == DjMode.Adhd,
+                        accent = palette.primary,
+                        onClick = onToggleAdhd,
+                    )
+                }
                 if (djActive && djMode == DjMode.Adhd && onPlayDjFullOnce != null) {
                     MenuTabPill(
-                        label = if (djFullOnce) "Suena entera" else "Oír esta entera",
+                        label = if (djFullOnce) "Esta suena entera" else "Oír esta entera",
                         selected = djFullOnce,
                         accent = palette.primary,
                         onClick = { if (!djFullOnce) onPlayDjFullOnce() },
@@ -4351,18 +4364,23 @@ internal fun QueuePane(
                 itemsIndexed(keyedQueue, key = { _, item -> item.first }) { _, item ->
                     val (key, origIdx, entry) = item
                     ReorderableItem(reorderState, key) { dragging ->
-                        QueueRowDesktop(
-                            index = origIdx + 1,
-                            title = entry.title,
-                            subtitle = entry.artist,
-                            artwork = entry.artwork,
-                            isCurrent = if (currentIndex != null) origIdx == currentIndex else entry.id == currentMediaId,
-                            accent = palette.primary,
-                            dragModifier = Modifier.draggableHandle(),
-                            isDragging = dragging,
-                            onClick = { onSkipTo(origIdx) },
-                            onRemove = { onRemove(origIdx) },
-                        )
+                        Column {
+                            QueueRowDesktop(
+                                index = origIdx + 1,
+                                title = entry.title,
+                                subtitle = entry.artist,
+                                artwork = entry.artwork,
+                                isCurrent = if (currentIndex != null) origIdx == currentIndex else entry.id == currentMediaId,
+                                accent = palette.primary,
+                                dragModifier = Modifier.draggableHandle(),
+                                isDragging = dragging,
+                                onClick = { onSkipTo(origIdx) },
+                                onRemove = { onRemove(origIdx) },
+                            )
+                            if (nextMix != null && curIdx != null && origIdx == curIdx + 1 && nextMix.nextId == entry.id) {
+                                MixBadgeDesktop(nextMix, palette.primary, Modifier.padding(start = 52.dp, top = 2.dp, bottom = 4.dp))
+                            }
+                        }
                     }
                 }
                 if (djActive && djNextUp.isNotEmpty()) {
@@ -4384,7 +4402,7 @@ internal fun QueuePane(
                                     .height(1.dp)
                                     .background(Color.White.copy(alpha = 0.12f)),
                             )
-                            djMoodPillLabel(djTanda).takeIf { it != "Saltar mood" }?.let { tandaLabel ->
+                            djMoodPillLabel(djTanda).takeIf { it != "Otro ambiente" }?.let { tandaLabel ->
                                 Text(
                                     text = tandaLabel,
                                     style = OtoType.label.copy(fontSize = 11.sp),
@@ -4411,11 +4429,45 @@ internal fun QueuePane(
                             accent = palette.primary,
                             onClick = skipIdx?.let { { onSkipTo(it) } },
                             onVeto = onVetoDjNextUp?.let { veto -> { veto(info.track.id) } },
+                            mix = nextMix?.takeIf { i == 0 && it.nextId == info.track.id },
                         )
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * Cómo entra la siguiente: mientras se prepara (bajarla y analizarla), «Preparando la mezcla» con un punto que late;
+ * lista, su estilo y «lista».
+ */
+@Composable
+private fun MixBadgeDesktop(
+    mix: io.github.iaguito22.oto.desktop.playback.DesktopPlayerConnection.NextMix,
+    accent: Color,
+    modifier: Modifier = Modifier,
+) {
+    val label = if (mix.ready) "${mix.style ?: "Mezcla"} · lista" else "Preparando la mezcla"
+    val fg by animateColorAsState(if (mix.ready) accent else Color.White.copy(alpha = 0.62f), tween(220), label = "mixBadgeFg")
+    val bg by animateColorAsState(if (mix.ready) accent.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.07f), tween(220), label = "mixBadgeBg")
+    Row(
+        modifier
+            .clip(CircleShape)
+            .background(bg)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .animateContentSize(spring(dampingRatio = 0.8f, stiffness = 500f)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        if (!mix.ready) {
+            val pulse = rememberInfiniteTransition(label = "mixPrep")
+            val a by pulse.animateFloat(0.25f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "mixPrepDot")
+            Box(Modifier.size(6.dp).graphicsLayer { alpha = a }.clip(CircleShape).background(accent))
+        } else {
+            Icon(MobileIcons.graphicEq, null, tint = fg, modifier = Modifier.size(11.dp))
+        }
+        Text(label, style = OtoType.label.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold), color = fg, maxLines = 1)
     }
 }
 
@@ -4427,6 +4479,7 @@ private fun DjNextUpRowDesktop(
     accent: Color,
     onClick: (() -> Unit)?,
     onVeto: (() -> Unit)?,
+    mix: io.github.iaguito22.oto.desktop.playback.DesktopPlayerConnection.NextMix? = null,
 ) {
     val track = info.track
     var thumbBmp by remember(track.artwork) { mutableStateOf<ImageBitmap?>(null) }
@@ -4560,6 +4613,7 @@ private fun DjNextUpRowDesktop(
                     )
                 }
             }
+            if (mix != null) MixBadgeDesktop(mix, accent, Modifier.padding(top = 4.dp))
         }
         if (onVeto != null) {
             Row(

@@ -54,6 +54,9 @@ sealed interface Page {
 
     /** «Tu resumen»: lo escuchado en este aparato, tal y como estaba al abrirlo. */
     data class Recap(val recap: io.github.iaguito22.oto.dj.Recap) : Page
+
+    /** El DJ como una lista: sus modos (normal y rápido), tus géneros y lo que pincha ahora. */
+    data object Dj : Page
 }
 
 data class MenuState(
@@ -177,6 +180,7 @@ open class MenuController(protected val scope: CoroutineScope) {
 
     fun openSmart(list: LocalPlaylist) = _state.update { it.copy(pages = it.pages + Page.Smart(list)) }
     fun openRecap(recap: io.github.iaguito22.oto.dj.Recap) = _state.update { it.copy(pages = it.pages + Page.Recap(recap)) }
+    fun openDj() = _state.update { it.copy(pages = it.pages + Page.Dj) }
 
     fun openFolder(name: String) = _state.update { it.copy(pages = it.pages + Page.Folder(name)) }
 

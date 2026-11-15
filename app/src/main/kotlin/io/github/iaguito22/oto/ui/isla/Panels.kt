@@ -1,15 +1,24 @@
 package io.github.iaguito22.oto.ui.isla
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,9 +37,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
+import io.github.iaguito22.oto.dj.DjBridgeStyle
 import io.github.iaguito22.oto.dj.DjMode
 import io.github.iaguito22.oto.dj.DjPickInfo
 import io.github.iaguito22.oto.dj.Kind
+import io.github.iaguito22.oto.playback.NextMix
 import io.github.iaguito22.oto.playback.QueueEntry
 import io.github.iaguito22.oto.ui.theme.Motion
 import io.github.iaguito22.oto.ui.theme.Radius
@@ -114,6 +125,8 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
         val source by connection.source.collectAsStateWithLifecycle()
         val nextUp by connection.djNextUp.collectAsStateWithLifecycle()
         val djTanda by connection.djTanda.collectAsStateWithLifecycle()
+        val nextTransitionStyle by connection.djNextTransitionStyle.collectAsStateWithLifecycle()
+        val nextMix by connection.djMix.collectAsStateWithLifecycle()
         val isDj = source?.kind == "DJ" && !connection.mirrored
         val nextUpById = remember(nextUp) { nextUp.associateBy { it.track.id } }
         val nextUpOrderById = remember(nextUp) { nextUp.withIndex().associate { (idx, it) -> it.track.id to (idx + 1) } }
@@ -175,6 +188,8 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
                                 artist = pick.track.artist,
                                 artwork = pick.track.artwork,
                                 pick = pick,
+                                transitionStyle = if (idx == 0 && !connection.mirrored) nextTransitionStyle else null,
+                                mix = nextMix.takeIf { idx == 0 && !connection.mirrored },
                                 onClick = {},
                                 onSwap = swap,
                             )
@@ -225,6 +240,7 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
                     if (i == border) item(key = WRAP_DIVIDER) { Divider("Y vuelve a empezar", Modifier.animateItem()) }
                     val key = keys[i]
                     val pick = if (isDj) nextUpById[e.id] else null
+                    val isNextTrack = i == 0 && !connection.mirrored
                     item(key = key) {
                         if (pick != null) {
                             val swap = {
@@ -238,6 +254,8 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
                                     artist = e.artist,
                                     artwork = e.artwork,
                                     pick = pick,
+                                    transitionStyle = if (isNextTrack) nextTransitionStyle else null,
+                                    mix = nextMix.takeIf { isNextTrack },
                                     onClick = { connection.skipTo(e.index); onClose() },
                                     onSwap = swap,
                                     modifier = Modifier.animateItem().padding(vertical = 3.dp),
@@ -288,6 +306,13 @@ fun QueueSheet(connection: PlayerConnection, onClose: () -> Unit) {
                                                 ),
                                         )
                                     }
+                                    if (isNextTrack && (nextTransitionStyle != null || nextMix != null)) {
+                                        MixTransitionBadge(
+                                            style = nextTransitionStyle,
+                                            mix = nextMix,
+                                            modifier = Modifier.padding(start = Space.md, top = 2.dp, bottom = 6.dp),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -318,15 +343,14 @@ private fun DjSkipMoodPill(onClick: () -> Unit, modifier: Modifier = Modifier) {
     Row(
         modifier
             .clip(CircleShape)
-            .background(c.accent.copy(alpha = 0.14f))
-            .border(1.dp, c.accent.copy(alpha = 0.36f), CircleShape)
+            .background(c.accent.copy(alpha = 0.16f))
             .clickable(remember { MutableInteractionSource() }, ripple(color = c.accent), onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        Icon(painterResource(R.drawable.ic_skip_next), contentDescription = "Saltar mood", modifier = Modifier.size(15.dp), tint = c.accent)
-        Text("Saltar mood", style = OtoType.label.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold), color = c.accent, maxLines = 1)
+        Icon(painterResource(R.drawable.ic_skip_next), contentDescription = "Otro ambiente", modifier = Modifier.size(15.dp), tint = c.accent)
+        Text("Otro ambiente", style = OtoType.label.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold), color = c.accent, maxLines = 1)
     }
 }
 
@@ -357,8 +381,7 @@ private fun DjQueueEmptyState() {
                 Modifier
                     .size(56.dp)
                     .clip(CircleShape)
-                    .background(c.accent.copy(alpha = 0.14f))
-                    .border(1.dp, c.accent.copy(alpha = 0.30f), CircleShape),
+                    .background(c.accent.copy(alpha = 0.16f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(painterResource(R.drawable.ic_graphic_eq), contentDescription = null, modifier = Modifier.size(26.dp), tint = c.accent)
@@ -391,6 +414,8 @@ private fun DjNextUpRow(
     artist: String,
     artwork: String?,
     pick: DjPickInfo,
+    transitionStyle: DjBridgeStyle? = null,
+    mix: NextMix? = null,
     onClick: () -> Unit,
     onSwap: () -> Unit,
     modifier: Modifier = Modifier,
@@ -400,15 +425,13 @@ private fun DjNextUpRow(
     val reason = remember(pick, category) { djReasonText(pick, category) }
     val highlight = pick.isBridge || pick.kind == Kind.NEW
     val shape = RoundedCornerShape(Radius.lg)
-    val cardBg = if (highlight) c.accent.copy(alpha = 0.11f) else c.field.copy(alpha = 0.50f)
-    val cardBorder = if (highlight) c.accent.copy(alpha = 0.32f) else c.line
+    val cardBg = if (highlight) c.accent.copy(alpha = 0.11f) else c.field
     Row(
         modifier
             .fillMaxWidth()
             .padding(horizontal = Space.xs)
             .clip(shape)
             .background(cardBg)
-            .border(1.dp, cardBorder, shape)
             .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
             .padding(horizontal = Space.md, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -458,13 +481,19 @@ private fun DjNextUpRow(
                     }
                 }
             }
+            if (transitionStyle != null || mix != null) {
+                MixTransitionBadge(
+                    style = transitionStyle,
+                    mix = mix,
+                    modifier = Modifier.padding(top = 5.dp),
+                )
+            }
         }
         Spacer(Modifier.width(Space.sm))
         Row(
             Modifier
                 .clip(CircleShape)
                 .background(c.field)
-                .border(1.dp, c.line, CircleShape)
                 .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onSwap)
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -472,6 +501,64 @@ private fun DjNextUpRow(
         ) {
             Icon(painterResource(R.drawable.ic_refresh), contentDescription = "Cambiar por otra", modifier = Modifier.size(13.dp), tint = c.textMuted)
             Text("Otra", style = OtoType.label.copy(fontSize = 11.sp), color = c.textMuted)
+        }
+    }
+}
+
+/**
+ * Cómo entra la siguiente: mientras el puente se prepara, «Preparando la mezcla» con un punto que late; lista, su
+ * estilo y «lista»; sin puente (en vivo), solo el estilo.
+ */
+@Composable
+private fun MixTransitionBadge(
+    style: DjBridgeStyle?,
+    mix: NextMix?,
+    modifier: Modifier = Modifier,
+) {
+    val c = Oto.colors
+    val preparing = mix?.preparing == true
+    val ready = mix?.ready == true
+    val label = when {
+        preparing -> "Preparando la mezcla"
+        ready && style != null -> "${style.label} · lista"
+        ready -> "Mezcla lista"
+        style != null -> style.label
+        else -> return
+    }
+    val fg by animateColorAsState(if (ready) c.accent else c.textMuted, tween(Motion.EFFECTS), label = "mixBadgeFg")
+    val bg by animateColorAsState(if (ready) c.accent.copy(alpha = 0.16f) else c.field, tween(Motion.EFFECTS), label = "mixBadgeBg")
+    Row(
+        modifier
+            .clip(CircleShape)
+            .background(bg)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .animateContentSize(spring(dampingRatio = 0.8f, stiffness = 500f)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        if (preparing) {
+            val pulse = rememberInfiniteTransition(label = "mixPrep")
+            val a by pulse.animateFloat(
+                0.25f, 1f,
+                infiniteRepeatable(tween(700, easing = Motion.Standard), RepeatMode.Reverse),
+                label = "mixPrepDot",
+            )
+            Box(Modifier.size(6.dp).graphicsLayer { alpha = a }.clip(CircleShape).background(c.accent))
+        } else {
+            Icon(painterResource(R.drawable.ic_transition_fade), contentDescription = null, modifier = Modifier.size(11.dp), tint = fg)
+        }
+        AnimatedContent(
+            targetState = label,
+            transitionSpec = { fadeIn(tween(Motion.EFFECTS, delayMillis = 60)) togetherWith fadeOut(tween(Motion.EFFECTS_FAST)) using SizeTransform(clip = false) },
+            label = "mixBadgeText",
+        ) { text ->
+            Text(
+                text,
+                style = OtoType.label.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                color = fg,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -510,7 +597,11 @@ private fun Removable(onRemove: () -> Unit, content: @Composable () -> Unit) {
     ) { content() }
 }
 
-/** Controles en vivo del DJ dentro de la cola: modo rápido (ADHD), oír entera esta y tus géneros. */
+/**
+ * Controles en vivo del DJ dentro de la cola: modo rápido, oír entera esta y tus géneros. En varias líneas, todo a la
+ * vista: antes era una fila con scroll lateral y los géneros quedaban fuera de la pantalla.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DjQueueControls(connection: PlayerConnection) {
     val haptics = LocalHapticFeedback.current
@@ -519,13 +610,11 @@ private fun DjQueueControls(connection: PlayerConnection) {
     val mode by connection.djMode.collectAsStateWithLifecycle()
     val fullOnce by connection.djFullOnce.collectAsStateWithLifecycle()
     val adhd = mode == DjMode.Adhd
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = Space.lg),
-        horizontalArrangement = Arrangement.spacedBy(Space.xs),
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(bottom = Space.md),
+    Column(
+        Modifier.padding(start = Space.lg, end = Space.lg, bottom = Space.md).animateContentSize(spring(dampingRatio = 0.85f, stiffness = 400f)),
+        verticalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
-        item(key = "adhd") {
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.xs), verticalAlignment = Alignment.CenterVertically) {
             QueueChip(
                 label = "DJ rápido",
                 selected = adhd,
@@ -535,11 +624,9 @@ private fun DjQueueControls(connection: PlayerConnection) {
                     connection.setDjMode(if (adhd) DjMode.Normal else DjMode.Adhd)
                 },
             )
-        }
-        if (adhd) {
-            item(key = "fullOnce") {
+            if (adhd) {
                 QueueChip(
-                    label = if (fullOnce) "Entera esta" else "Oír esta entera",
+                    label = if (fullOnce) "Esta suena entera" else "Oír esta entera",
                     selected = fullOnce,
                     icon = if (fullOnce) R.drawable.ic_check else null,
                     onClick = {
@@ -551,16 +638,10 @@ private fun DjQueueControls(connection: PlayerConnection) {
                 )
             }
         }
-        item(key = "sep") {
-            Box(
-                Modifier
-                    .padding(horizontal = 3.dp)
-                    .width(1.dp)
-                    .height(18.dp)
-                    .background(Oto.colors.line),
-            )
-        }
-        item(key = "genre:all") {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(Space.xs),
+            verticalArrangement = Arrangement.spacedBy(Space.xs),
+        ) {
             QueueChip(
                 label = "Todo",
                 selected = genre == null,
@@ -569,16 +650,16 @@ private fun DjQueueControls(connection: PlayerConnection) {
                     connection.setDjGenre(null)
                 },
             )
-        }
-        items(genres, key = { "genre:" + it.name }) { g ->
-            QueueChip(
-                label = g.name,
-                selected = g.name == genre,
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                    connection.setDjGenre(g.name)
-                },
-            )
+            genres.forEach { g ->
+                QueueChip(
+                    label = g.name,
+                    selected = g.name == genre,
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                        connection.setDjGenre(g.name)
+                    },
+                )
+            }
         }
     }
 }
@@ -586,14 +667,12 @@ private fun DjQueueControls(connection: PlayerConnection) {
 @Composable
 private fun QueueChip(label: String, selected: Boolean, onClick: () -> Unit, icon: Int? = null) {
     val c = Oto.colors
-    val bg by animateColorAsState(if (selected) c.accent.copy(alpha = 0.18f) else c.field, tween(Motion.EFFECTS), label = "qChipBg")
-    val border by animateColorAsState(if (selected) c.accent.copy(alpha = 0.45f) else c.line, tween(Motion.EFFECTS), label = "qChipBorder")
+    val bg by animateColorAsState(if (selected) c.accent.copy(alpha = 0.20f) else c.field, tween(Motion.EFFECTS), label = "qChipBg")
     val fg by animateColorAsState(if (selected) c.accent else c.textMuted, tween(Motion.EFFECTS), label = "qChipFg")
     Row(
         Modifier
             .clip(CircleShape)
             .background(bg)
-            .border(1.dp, border, CircleShape)
             .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,

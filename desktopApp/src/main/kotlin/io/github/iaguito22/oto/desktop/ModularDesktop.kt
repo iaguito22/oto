@@ -177,7 +177,11 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     val loopMode by player.loopMode.collectAsState()
     val djActive by player.djActive.collectAsState()
     val djMode by player.djMode.collectAsState()
-    val djMood by player.djMood.collectAsState()
+    val djTanda by player.djTanda.collectAsState()
+    val djFullOnce by player.djFullOnce.collectAsState()
+    val djNextUp by player.djNextUp.collectAsState()
+    val mixing by player.mixing.collectAsState()
+    val nextMix by player.nextMix.collectAsState()
     val lyrics by player.lyrics.collectAsState()
     val lyricsLoading by player.lyricsLoading.collectAsState()
     val volume by player.volume.collectAsState()
@@ -282,7 +286,18 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             SmallAction(Icons.Rounded.MoreHoriz,"Opciones") { setOpen(!open); docking.trace("options=${!open}") }
             PlayerOptions(open,{setOpen(false)},form,::changeForm,volume,{player.adjustVolume(it-volume)},
                 {setOpen(false);devicesOpen=true},
-                {setOpen(false);docking.layout.organize(desktopArea())},quit, { playerFrame?.bounds }, welcome = {setOpen(false);welcomeOpen=true})
+                {setOpen(false);docking.layout.organize(desktopArea())},quit, { playerFrame?.bounds }, welcome = {setOpen(false);welcomeOpen=true},
+                canStartDjHere = mirrored == null && nowPlaying.id != null,
+                onStartDjHere = nowPlaying.id?.let { id ->
+                    {
+                        player.playDjFrom(
+                            Heard(id, nowPlaying.title, nowPlaying.artist, nowPlaying.artwork, nowPlaying.artists.firstOrNull()?.second).toSong(),
+                        )
+                    }
+                },
+                showFullOnce = djActive && mirrored == null && djMode == io.github.iaguito22.oto.dj.DjMode.Adhd,
+                fullOnceActive = djFullOnce,
+                onPlayFullOnce = player::playDjFullOnce)
         }
     }
     DisposableEffect(shortcut) {
@@ -322,14 +337,21 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
                 io.github.iaguito22.oto.LoopMode.One -> io.github.iaguito22.oto.LoopMode.Off }) },
             djActive = djActive && m == null,
             djMode = djMode,
-            djMood = djMood,
-            onDjMood = player::setDjMood,
+            djTanda = djTanda,
+            djFullOnce = djFullOnce && m == null,
+            mixing = mixing && m == null,
+            mix = nextMix?.takeIf { m == null && nowPlaying.durationMs > 0L }?.let { nm ->
+                val start = nm.startMs ?: return@let null
+                MixMark(start.toFloat() / nowPlaying.durationMs, (nm.switchMs ?: start).toFloat() / nowPlaying.durationMs, nm.ready)
+            },
+            onSkipTanda = player::skipDjTanda,
             onToggleAdhd = {
                 player.setDjMode(
                     if (djMode == io.github.iaguito22.oto.dj.DjMode.Adhd) io.github.iaguito22.oto.dj.DjMode.Normal
                     else io.github.iaguito22.oto.dj.DjMode.Adhd
                 )
             },
+            onPlayDjFullOnce = player::playDjFullOnce,
             verticalPin =if(playerSolo && form==PlayerForm.Vertical) ({
                 HoverAction(pinIcon(pinned),if(pinned) "Desfijar" else "Fijar sobre otras ventanas",enabled=chrome,
                     onClick={pinned=!pinned;kv.putString("pinned",pinned.toString())},
@@ -365,7 +387,28 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         }
     }
     ModuleWindow("Cola", queueWindow, queueOpen && !windowsHidden, { queueOpen = false }, dock=docking, dockId=DockId.Queue, keys = ::shortcuts, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity) {
-        Box(Modifier.fillMaxSize().padding(start=20.dp,end=20.dp,bottom=20.dp,top=4.dp)) { QueuePane(queue, localNow.id, shuffle, loop, palette, { player.setShuffle(!shuffle) }, { player.cycleLoop() }, player::move, player::remove, player::clearQueue, player::skipTo, currentIndex = localNow.index, loopMode = loopMode) }
+        Box(Modifier.fillMaxSize().padding(start=20.dp,end=20.dp,bottom=20.dp,top=4.dp)) {
+            QueuePane(
+                queue, localNow.id, shuffle, loop, palette,
+                { player.setShuffle(!shuffle) }, { player.cycleLoop() },
+                player::move, player::remove, player::clearQueue, player::skipTo,
+                currentIndex = localNow.index, loopMode = loopMode,
+                djActive = djActive && mirrored == null,
+                djMode = djMode,
+                djTanda = djTanda,
+                djFullOnce = djFullOnce && mirrored == null,
+                djNextUp = if (mirrored == null) djNextUp else emptyList(),
+                onPlayDjFullOnce = player::playDjFullOnce,
+                onVetoDjNextUp = player::vetoDjNextUp,
+                nextMix = if (mirrored == null) nextMix else null,
+                onToggleAdhd = {
+                    player.setDjMode(
+                        if (djMode == io.github.iaguito22.oto.dj.DjMode.Adhd) io.github.iaguito22.oto.dj.DjMode.Normal
+                        else io.github.iaguito22.oto.dj.DjMode.Adhd
+                    )
+                },
+            )
+        }
     }
     ModuleWindow("Tu música", libraryWindow, menuOpen && !windowsHidden, {closePrimary(DockId.Library)}, dock=docking, dockId=DockId.Library, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity,
         extra={

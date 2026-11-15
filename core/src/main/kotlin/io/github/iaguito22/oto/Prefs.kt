@@ -48,8 +48,10 @@ private val LOOP = booleanPreferencesKey("loop")
 private val PLAYLIST_MODES = stringPreferencesKey("playlist_modes")
 private val CROSSFADE = intPreferencesKey("crossfade")
 private val SMART_MIX = booleanPreferencesKey("smart_mix")
+private val SMART_MIX_SECONDS = intPreferencesKey("smart_mix_seconds")
 private val DJ_MOOD = stringPreferencesKey("dj_mood")
 private val DJ_MODE = stringPreferencesKey("dj_mode")
+private val DJ_GENRE = stringPreferencesKey("dj_genre")
 private val ROMANIZE = booleanPreferencesKey("romanize")
 private val DROP_STYLE = stringPreferencesKey("drop_style")
 private val COVER_BEAT = booleanPreferencesKey("cover_beat")
@@ -66,8 +68,17 @@ const val LIKED_ID = "liked"
 const val DEFAULT_CROSSFADE = 3
 /** Mezcla inteligente activada por defecto (curva equal-power y transición de EQ cuando hay fundido). */
 const val DEFAULT_SMART_MIX = true
+/** Lo que dura la mezcla inteligente si no se toca, y entre qué valores se elige (deslizador de Ajustes). */
+const val DEFAULT_SMART_MIX_SECONDS = 10
+val SMART_MIX_RANGE = 2..20
 /** Lo que se puede elegir en Ajustes. */
 val CROSSFADE_CHOICES = listOf(0, 3, 6, 10)
+/** Opciones de la mezcla inteligente en Ajustes (0 = desactivada): más largas que el fundido, como un DJ. */
+val SMART_MIX_CHOICES = listOf(0, 5, 10, 15, 20)
+
+/** La opción de [SMART_MIX_CHOICES] más cercana a [seconds] (para valores guardados con las opciones antiguas). */
+private fun nearestSmartMix(seconds: Int): Int =
+    SMART_MIX_CHOICES.filter { it > 0 }.minByOrNull { kotlin.math.abs(it - seconds) } ?: DEFAULT_SMART_MIX_SECONDS
 
 /** Una canción oída o guardada. Lo justo para enseñarla y volver a ponerla. */
 data class Heard(val id: String, val title: String, val artist: String, val artwork: String?, val artistId: String? = null)
@@ -158,12 +169,52 @@ class Prefs(
         store.edit { it[CROSSFADE] = seconds }
     }
 
-    /** Mezcla inteligente tipo Apple Music: curva equal-power y cruce progresivo de graves/EQ durante el fundido. */
+    /**
+     * Mezcla inteligente tipo Apple Music: curva en S y cruce progresivo de graves. Va aparte del fundido: si está
+     * activada manda ella, con su propia duración ([smartMixSeconds]); si no, se usa el fundido normal ([crossfade]).
+     */
     val smartMix: Flow<Boolean> = store.data.map { it[SMART_MIX] ?: DEFAULT_SMART_MIX }.distinctUntilChanged()
 
     suspend fun setSmartMix(on: Boolean) {
         store.edit { it[SMART_MIX] = on }
     }
+
+    /** Lo que dura la mezcla inteligente, en segundos ([SMART_MIX_RANGE]). */
+    val smartMixSeconds: Flow<Int> = store.data
+        .map { (it[SMART_MIX_SECONDS] ?: DEFAULT_SMART_MIX_SECONDS).coerceIn(SMART_MIX_RANGE) }
+        .distinctUntilChanged()
+
+    suspend fun setSmartMixSeconds(seconds: Int) {
+        store.edit { it[SMART_MIX_SECONDS] = seconds.coerceIn(SMART_MIX_RANGE) }
+    }
+
+    /** Selector equivalente al de fundido ([SMART_MIX_CHOICES]): `0` si está apagada, si no su duración en segundos. */
+    val smartMixChoice: Flow<Int> = store.data.map { p ->
+        if (p[SMART_MIX] == false) 0
+        else nearestSmartMix((p[SMART_MIX_SECONDS] ?: DEFAULT_SMART_MIX_SECONDS).coerceIn(SMART_MIX_RANGE))
+    }.distinctUntilChanged()
+
+    /** Activa/desactiva la mezcla inteligente con el mismo selector de tiempos (`0` = No, `>0` = segundos). */
+    suspend fun setSmartMixChoice(seconds: Int) {
+        if (seconds <= 0) {
+            store.edit { it[SMART_MIX] = false }
+        } else {
+            val clamped = seconds.coerceIn(SMART_MIX_RANGE)
+            store.edit {
+                it[SMART_MIX] = true
+                it[SMART_MIX_SECONDS] = clamped
+            }
+        }
+    }
+
+    /**
+     * Lo que se solapan dos canciones: con la mezcla inteligente decide el DJ en cada mezcla (esto es solo una
+     * referencia, [DEFAULT_SMART_MIX_SECONDS]); si no, el fundido configurado ([crossfade], 0: nada).
+     */
+    val mixSeconds: Flow<Int> = store.data.map { p ->
+        val smart = p[SMART_MIX] ?: DEFAULT_SMART_MIX
+        if (smart) DEFAULT_SMART_MIX_SECONDS else (p[CROSSFADE] ?: DEFAULT_CROSSFADE)
+    }.distinctUntilChanged()
 
     /** Mood activo del DJ (ver [DjMood]). */
     val djMood: Flow<DjMood> = store.data
@@ -172,6 +223,13 @@ class Prefs(
 
     suspend fun setDjMood(mood: DjMood) {
         store.edit { it[DJ_MOOD] = mood.name }
+    }
+
+    /** Género al que se ciñe el DJ (ver [io.github.iaguito22.oto.dj.GenreStore.top]); null: todo lo tuyo. */
+    val djGenre: Flow<String?> = store.data.map { it[DJ_GENRE]?.ifEmpty { null } }.distinctUntilChanged()
+
+    suspend fun setDjGenre(name: String?) {
+        store.edit { it[DJ_GENRE] = name.orEmpty() }
     }
 
     /** Modo de sesión del DJ: normal o DJ rápido (ADHD) por segmentos cortos. */

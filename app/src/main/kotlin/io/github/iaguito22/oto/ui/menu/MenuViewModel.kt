@@ -26,6 +26,7 @@ class MenuViewModel : ViewModel() {
     fun openLists(arranging: Boolean = false) = controller.openLists(arranging)
     fun openSmart(list: LocalPlaylist) = controller.openSmart(list)
     fun openRecap(recap: io.github.iaguito22.oto.dj.Recap) = controller.openRecap(recap)
+    fun openDj() = controller.openDj()
     fun openFolder(name: String) = controller.openFolder(name)
     fun renameFolder(old: String, name: String) = controller.renameFolder(old, name)
     fun closeDetail() = controller.closeDetail()

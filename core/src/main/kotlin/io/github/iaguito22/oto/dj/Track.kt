@@ -39,9 +39,31 @@ data class Track(
 }
 
 private val BRACKETS = Regex("""[(\[][^)\]]*[)\]]""")
+private val FEAT_REGEX = Regex("""(?:feat\.?|ft\.?|con)\s+([^()\[\]\-–]+)""", RegexOption.IGNORE_CASE)
 
 /** Un artista por su nombre: «Bad Bunny», «BAD BUNNY» y «Bad Bunny & Feid» son el mismo. */
 fun artistKey(name: String) = Matcher.norm(name.substringBefore(',').substringBefore(" & ").substringBefore(" x "))
+
+/** Claves de todos los artistas y colaboradores de la pista (de `artists` y de posibles `feat.` en el título). */
+fun collaboratorKeys(track: Track): Set<String> {
+    val out = HashSet<String>()
+    for (raw in track.artists) {
+        val parts = raw.split(',', '&').map { it.trim() }.filter { it.isNotEmpty() }
+        for (p in parts) {
+            val k = Matcher.norm(p)
+            if (k.isNotEmpty()) out += k
+        }
+        val primary = artistKey(raw)
+        if (primary.isNotEmpty()) out += primary
+    }
+    FEAT_REGEX.findAll(track.title).forEach { m ->
+        m.groupValues[1].split(',', '&', 'y').forEach { part ->
+            val k = artistKey(part.trim())
+            if (k.isNotEmpty()) out += k
+        }
+    }
+    return out
+}
 
 fun Heard.toTrack() = Track(id, title, artist.split(", ").filter { it.isNotBlank() }.ifEmpty { listOf(artist) }, listOf(artistId), artwork)
 

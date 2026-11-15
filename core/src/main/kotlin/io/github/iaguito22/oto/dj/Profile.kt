@@ -24,6 +24,7 @@ class Profile(
     plays: List<Play>,
     val now: Long,
     val zone: ZoneId = ZoneId.systemDefault(),
+    private val analysisCache: AudioAnalysisCache? = null,
 ) {
     class Artist(val key: String) {
         var name = ""
@@ -178,31 +179,45 @@ class Profile(
                 val dayShare = a.dayOrganic / todTotal
                 v = v.blend(VibeScore(energy = 0.25 + 0.55 * dayShare, chill = 0.25 + 0.55 * nightShare, focus = 0.5), 0.25)
             }
+            if (analysisCache != null && a.songs.isNotEmpty()) {
+                val audioVibes = a.songs.values.mapNotNull { analysisCache.get(it.id)?.toVibeScore(v.tags) }
+                if (audioVibes.isNotEmpty()) {
+                    val avgAudio = VibeScore(
+                        energy = audioVibes.map { it.energy }.average(),
+                        chill = audioVibes.map { it.chill }.average(),
+                        focus = audioVibes.map { it.focus }.average(),
+                        tags = v.tags,
+                    )
+                    v = v.blend(avgAudio, 0.55)
+                }
+            }
             a.vibe = v
         }
         core = artists.values.filter { it.songs.isNotEmpty() || it.organic > 0.5 }.sortedByDescending { it.affinity }
     }
 
-    /** Vibe estimado de una pista combinando su historial en listas, su título y los artistas/vías asociados. */
-    fun vibeOf(track: Track, vias: Set<String> = emptySet()): VibeScore {
-        songVibes[track.key]?.let { return it }
-        var v = VibeAnalyzer.fromText("${track.title} ${track.artists.joinToString(" ")}", track.seconds)
-        val own = find(track.artistId, track.artist)
-        if (own != null) {
-            v = v.blend(own.vibe, 0.55)
-        } else if (vias.isNotEmpty()) {
-            val viaVibes = vias.mapNotNull { artists[it]?.vibe }
-            if (viaVibes.isNotEmpty()) {
-                val avg = VibeScore(
-                    energy = viaVibes.map { it.energy }.average(),
-                    chill = viaVibes.map { it.chill }.average(),
-                    focus = viaVibes.map { it.focus }.average(),
-                    tags = viaVibes.flatMapTo(HashSet()) { it.tags },
-                )
-                v = v.blend(avg, 0.45)
+    /** Vibe estimado de una pista combinando su historial en listas, su título, sus artistas/vías y su análisis de audio si existe. */
+    fun vibeOf(track: Track, vias: Set<String> = emptySet(), audio: AudioMetrics? = analysisCache?.get(track.id)): VibeScore {
+        val base = songVibes[track.key] ?: run {
+            var v = VibeAnalyzer.fromText("${track.title} ${track.artists.joinToString(" ")}", track.seconds)
+            val own = find(track.artistId, track.artist)
+            if (own != null) {
+                v = v.blend(own.vibe, 0.55)
+            } else if (vias.isNotEmpty()) {
+                val viaVibes = vias.mapNotNull { artists[it]?.vibe }
+                if (viaVibes.isNotEmpty()) {
+                    val avg = VibeScore(
+                        energy = viaVibes.map { it.energy }.average(),
+                        chill = viaVibes.map { it.chill }.average(),
+                        focus = viaVibes.map { it.focus }.average(),
+                        tags = viaVibes.flatMapTo(HashSet()) { it.tags },
+                    )
+                    v = v.blend(avg, 0.45)
+                }
             }
+            v
         }
-        return v
+        return if (audio != null) base.blend(audio.toVibeScore(base.tags), 0.62) else base
     }
 
     /** Preferencia horaria de un artista según tus escuchas previas: > 0 favorece noche, < 0 favorece día. */

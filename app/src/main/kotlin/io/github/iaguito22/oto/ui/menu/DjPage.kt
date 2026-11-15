@@ -3,7 +3,6 @@ package io.github.iaguito22.oto.ui.menu
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -32,8 +31,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
@@ -51,8 +48,7 @@ import io.github.iaguito22.oto.ui.theme.Radius
 import io.github.iaguito22.oto.ui.theme.Space
 
 /**
- * La entrada al DJ: cabecera con el vinilo y el estado de la sesión, tarjeta de tanda actual si está pinchando,
- * selector de modo y parrilla de tus géneros más escuchados.
+ * La entrada al DJ: cabecera con el vinilo sin cajas ni bordes recargados, selector de modo y géneros.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -78,7 +74,7 @@ internal fun DjPage(
     ) {
         item(key = "topBar") {
             Row(
-                Modifier.fillMaxWidth().padding(bottom = Space.sm),
+                Modifier.fillMaxWidth().padding(bottom = Space.md),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
@@ -88,138 +84,73 @@ internal fun DjPage(
         }
 
         item(key = "hero") {
-            val heroBorder by animateColorAsState(
-                if (playing) c.accent.copy(alpha = 0.34f) else c.line,
-                tween(Motion.EFFECTS),
-                label = "djHeroBorder",
-            )
-            Column(
+            Row(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(Radius.xl))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(
-                                c.accent.copy(alpha = if (playing) 0.20f else 0.11f),
-                                c.field,
-                            ),
-                        ),
-                    )
-                    .border(1.dp, heroBorder, RoundedCornerShape(Radius.xl))
-                    .padding(Space.lg),
+                    .padding(horizontal = Space.sm, vertical = Space.xs),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(Radius.md + 2.dp))
-                            .border(1.dp, c.accent.copy(alpha = if (playing) 0.35f else 0.14f), RoundedCornerShape(Radius.md + 2.dp)),
-                    ) {
-                        DjArt(112.dp, playing)
-                    }
-                    Spacer(Modifier.width(Space.lg))
-                    Column(Modifier.weight(1f)) {
-                        Text("DJ", style = OtoType.display.copy(fontSize = 30.sp, lineHeight = 34.sp), color = c.text)
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            if (playing) {
-                                buildString {
-                                    append("Pinchando · ")
-                                    append(moodGenre ?: modeLabel)
-                                }
-                            } else {
-                                "Lo tuyo por tandas, con algo nuevo entre medias"
-                            },
-                            style = OtoType.rowSub,
-                            color = c.textMuted,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(Modifier.height(Space.md))
-                        Pill(
-                            text = if (playing) "Empezar de nuevo" else "Empezar",
-                            onClick = {
-                                haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                                onStart(mode)
-                            },
-                            icon = R.drawable.ic_play_arrow,
-                        )
-                    }
+                DjArt(112.dp, playing)
+                Spacer(Modifier.width(Space.lg))
+                Column(Modifier.weight(1f)) {
+                    Text("DJ", style = OtoType.title, color = c.text)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        if (playing) {
+                            buildString {
+                                append("Pinchando · ")
+                                append(moodGenre ?: modeLabel)
+                            }
+                        } else {
+                            "Lo tuyo por tandas, con algo nuevo entre medias"
+                        },
+                        style = OtoType.rowSub,
+                        color = c.textMuted,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(Space.md))
+                    Pill(
+                        text = if (playing) "Empezar de nuevo" else "Empezar",
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                            onStart(mode)
+                        },
+                        icon = R.drawable.ic_play_arrow,
+                    )
                 }
             }
         }
 
-        if (playing) {
-            item(key = "now") {
+        if (playing && mode == DjMode.Adhd) {
+            item(key = "fullOnce") {
                 Spacer(Modifier.height(Space.md))
-                Column(
+                Row(
                     Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(Radius.lg))
-                        .background(c.field)
-                        .border(1.dp, c.line, RoundedCornerShape(Radius.lg))
-                        .padding(Space.md),
-                    verticalArrangement = Arrangement.spacedBy(Space.sm),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.md)) {
-                        Box(
-                            Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(c.accent.copy(alpha = 0.16f)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(painterResource(R.drawable.ic_graphic_eq), null, Modifier.size(18.dp), tint = c.accent)
-                        }
-                        Column(Modifier.weight(1f)) {
-                            Text("TANDA ACTUAL", style = OtoType.label.copy(fontSize = 10.5.sp), color = c.textMuted)
-                            Text(
-                                moodGenre ?: "Mezcla variada",
-                                style = OtoType.rowTitle,
-                                color = c.text,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        Pill(
-                            text = "Saltar mood",
-                            onClick = {
+                        .background(if (fullOnce) c.accent.copy(alpha = 0.16f) else c.field)
+                        .clickable(remember { MutableInteractionSource() }, ripple(color = c.text)) {
+                            if (!fullOnce) {
                                 haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                                connection.skipDjTanda()
-                            },
-                            filled = false,
-                            icon = R.drawable.ic_skip_next,
-                        )
-                    }
-                    if (mode == DjMode.Adhd) {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(Radius.md))
-                                .background(if (fullOnce) c.accent.copy(alpha = 0.14f) else c.base.copy(alpha = 0.35f))
-                                .border(1.dp, if (fullOnce) c.accent.copy(alpha = 0.38f) else c.line, RoundedCornerShape(Radius.md))
-                                .clickable(remember { MutableInteractionSource() }, ripple(color = c.text)) {
-                                    if (!fullOnce) {
-                                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                                        connection.playDjFullOnce()
-                                    }
-                                }
-                                .padding(horizontal = Space.md, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(Space.sm),
-                        ) {
-                            Icon(
-                                painterResource(if (fullOnce) R.drawable.ic_check else R.drawable.ic_timer),
-                                null,
-                                Modifier.size(16.dp),
-                                tint = if (fullOnce) c.accent else c.textMuted,
-                            )
-                            Text(
-                                if (fullOnce) "Esta canción sonará entera" else "Oír esta canción entera (solo esta vez)",
-                                style = OtoType.rowSub,
-                                color = if (fullOnce) c.accent else c.textMuted,
-                            )
+                                connection.playDjFullOnce()
+                            }
                         }
-                    }
+                        .padding(horizontal = Space.md, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                ) {
+                    Icon(
+                        painterResource(if (fullOnce) R.drawable.ic_check else R.drawable.ic_timer),
+                        null,
+                        Modifier.size(18.dp),
+                        tint = if (fullOnce) c.accent else c.textMuted,
+                    )
+                    Text(
+                        if (fullOnce) "Esta canción sonará entera" else "Oír esta canción entera (solo esta vez)",
+                        style = OtoType.rowSub,
+                        color = if (fullOnce) c.accent else c.textMuted,
+                    )
                 }
             }
         }
@@ -232,7 +163,7 @@ internal fun DjPage(
                 icon = R.drawable.ic_play_arrow,
                 title = "Normal",
                 badge = "Temas enteros",
-                body = "Canciones completas por tandas de artistas que encajan entre sí.",
+                body = "Canciones enteras, por tandas de artistas que encajan entre sí.",
                 selected = mode == DjMode.Normal,
             ) {
                 haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
@@ -244,8 +175,8 @@ internal fun DjPage(
             ModeCard(
                 icon = R.drawable.ic_timer,
                 title = "DJ rápido",
-                badge = "~1:30 · Al pulso",
-                body = "Entra antes de cantar y mezcla al acabar el estribillo para mantener el ritmo.",
+                badge = "Trozos de ~1:30",
+                body = "Lo mejor de cada canción: entra justo antes de la voz y mezcla al acabar el estribillo.",
                 selected = mode == DjMode.Adhd,
             ) {
                 haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
@@ -277,8 +208,7 @@ internal fun DjPage(
                     Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(Radius.lg))
-                        .background(c.field.copy(alpha = 0.6f))
-                        .border(1.dp, c.line, RoundedCornerShape(Radius.lg))
+                        .background(c.field)
                         .padding(Space.md),
                 ) {
                     Text(
@@ -327,12 +257,10 @@ internal fun DjPage(
 private fun LiveBadge(playing: Boolean, label: String) {
     val c = Oto.colors
     val bg by animateColorAsState(if (playing) c.accent.copy(alpha = 0.16f) else c.field, tween(Motion.EFFECTS), label = "liveBg")
-    val border by animateColorAsState(if (playing) c.accent.copy(alpha = 0.36f) else c.line, tween(Motion.EFFECTS), label = "liveBorder")
     Row(
         Modifier
             .clip(CircleShape)
             .background(bg)
-            .border(1.dp, border, CircleShape)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -350,19 +278,17 @@ private fun LiveBadge(playing: Boolean, label: String) {
     }
 }
 
-/** Tarjeta selectora para un modo del DJ: mantiene el comportamiento de fila interactiva con más jerarquía visual. */
+/** Tarjeta selectora sin bordes para un modo del DJ: superficie tonal limpia. */
 @Composable
 private fun ModeCard(icon: Int, title: String, badge: String, body: String, selected: Boolean, onClick: () -> Unit) {
     val c = Oto.colors
-    val bg by animateColorAsState(if (selected) c.accent.copy(alpha = 0.15f) else c.field.copy(alpha = 0.55f), tween(Motion.EFFECTS), label = "modeBg")
-    val border by animateColorAsState(if (selected) c.accent.copy(alpha = 0.48f) else c.line, tween(Motion.EFFECTS), label = "modeBorder")
-    val iconBg by animateColorAsState(if (selected) c.accent.copy(alpha = 0.22f) else c.base.copy(alpha = 0.35f), tween(Motion.EFFECTS), label = "modeIconBg")
+    val bg by animateColorAsState(if (selected) c.accent.copy(alpha = 0.15f) else c.field, tween(Motion.EFFECTS), label = "modeBg")
+    val iconBg by animateColorAsState(if (selected) c.accent.copy(alpha = 0.22f) else c.field, tween(Motion.EFFECTS), label = "modeIconBg")
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(Radius.lg))
             .background(bg)
-            .border(1.dp, border, RoundedCornerShape(Radius.lg))
             .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
             .padding(horizontal = Space.md, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -386,7 +312,7 @@ private fun ModeCard(icon: Int, title: String, badge: String, body: String, sele
                     color = if (selected) c.accent else c.textMuted,
                     modifier = Modifier
                         .clip(CircleShape)
-                        .background(if (selected) c.accent.copy(alpha = 0.16f) else c.base.copy(alpha = 0.35f))
+                        .background(if (selected) c.accent.copy(alpha = 0.16f) else c.field)
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                 )
             }
@@ -397,8 +323,7 @@ private fun ModeCard(icon: Int, title: String, badge: String, body: String, sele
             Modifier
                 .size(22.dp)
                 .clip(CircleShape)
-                .background(if (selected) c.accent else Color.Transparent)
-                .border(1.5.dp, if (selected) c.accent else c.textFaint.copy(alpha = 0.45f), CircleShape),
+                .background(if (selected) c.accent else c.field),
             contentAlignment = Alignment.Center,
         ) {
             if (selected) Icon(painterResource(R.drawable.ic_check), "Elegido", Modifier.size(14.dp), tint = c.onAccent)
@@ -409,14 +334,12 @@ private fun ModeCard(icon: Int, title: String, badge: String, body: String, sele
 @Composable
 private fun DjGenreChip(label: String, count: Int?, selected: Boolean, onClick: () -> Unit) {
     val c = Oto.colors
-    val bg by animateColorAsState(if (selected) c.accent.copy(alpha = 0.22f) else c.field.copy(alpha = 0.72f), tween(Motion.EFFECTS), label = "djGenreBg")
-    val border by animateColorAsState(if (selected) c.accent.copy(alpha = 0.50f) else c.line, tween(Motion.EFFECTS), label = "djGenreBorder")
+    val bg by animateColorAsState(if (selected) c.accent.copy(alpha = 0.22f) else c.field, tween(Motion.EFFECTS), label = "djGenreBg")
     val fg by animateColorAsState(if (selected) c.accent else c.text, tween(Motion.EFFECTS), label = "djGenreFg")
     Row(
         Modifier
             .clip(CircleShape)
             .background(bg)
-            .border(1.dp, border, CircleShape)
             .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,

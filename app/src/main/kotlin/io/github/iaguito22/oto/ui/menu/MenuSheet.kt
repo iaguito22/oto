@@ -28,12 +28,10 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -449,7 +447,7 @@ fun MenuSheet(
                             dj = source?.kind == "DJ" && np.playing,
                             djMood = djMood,
                             djMode = djMode,
-                            onDj = { launchDj(DjMode.Normal) },
+                            onDj = vm::openDj,
                             onDjAdhd = { launchDj(DjMode.Adhd) },
                             onDjMood = { m -> haptics.performHapticFeedback(HapticFeedbackType.SegmentTick); connection.setDjMood(m) },
                             onListMenu = { listMenu = it },
@@ -547,6 +545,15 @@ fun MenuSheet(
                             onDoneArranging = { vm.openLists(arranging = false) },
                             onMove = { ids -> scope.launch { prefs.orderLists(ids) } },
                         )
+                        is Page.Dj -> DjPage(
+                            connection,
+                            playing = source?.kind == "DJ" && np.playing,
+                            onBack = vm::closeDetail,
+                            onStart = { mode ->
+                                if (playlists.orEmpty().all { it.songs.isEmpty() } && liked?.songs.isNullOrEmpty()) say("El DJ aprende de tus listas: guarda algo primero")
+                                else { connection.playDj(mode, onFail = { say("El DJ no ha podido empezar") }); onClose() }
+                            },
+                        )
                         null -> Unit
                     }
                     View.Settings -> Settings(connection = connection, onBack = { settings = false }, onTutorial = onTutorial, onImport = { importing = true }, onAccount = { accounting = true })
@@ -587,6 +594,11 @@ fun MenuSheet(
                     connection.playNext(h.song)
                     say("«${h.song.title}» va después de esta")
                     held = null
+                },
+                onStartDj = {
+                    held = null
+                    connection.playDjFrom(h.song, onFail = { say("El DJ no ha podido empezar") })
+                    onClose()
                 },
                 onSave = { held = null; saving = Saving(h.song.toHeard()) },
                 onRemoteQueue = if (remoteDevice != null) ({
@@ -630,7 +642,7 @@ fun MenuSheet(
             )
         }
         Floating(djMenu.takeIf { it }, onDismiss = { djMenu = false }) {
-            val djSub = if (djMode == DjMode.Adhd) "DJ rápido (ADHD) · ${djMood.label}" else "Mezcla para ti · ${djMood.label}"
+            val djSub = if (djMode == DjMode.Adhd) "DJ rápido" else "Mezcla para ti"
             val startFromMenu: (DjMode) -> Unit = { mode ->
                 djMenu = false
                 if (playlists.orEmpty().all { it.songs.isEmpty() } && liked?.songs.isNullOrEmpty()) say("El DJ aprende de tus listas: guarda algo primero")
@@ -638,16 +650,8 @@ fun MenuSheet(
             }
             FloatHeader({ DjArt(48.dp, source?.kind == "DJ" && np.playing) }, "DJ", djSub)
             ActionRow(R.drawable.ic_play_arrow, "Iniciar DJ normal") { startFromMenu(DjMode.Normal) }
-            ActionRow(R.drawable.ic_timer, "Iniciar DJ rápido (ADHD)", trailing = { Text("45-75 s", style = OtoType.rowSub, color = Oto.colors.textMuted) }) { startFromMenu(DjMode.Adhd) }
-            Text("MOOD EN VIVO", style = OtoType.label, color = Oto.colors.textMuted, modifier = Modifier.padding(start = Space.md, top = Space.sm, bottom = Space.xs))
-            LazyRow(contentPadding = PaddingValues(horizontal = Space.md), horizontalArrangement = Arrangement.spacedBy(Space.xs), modifier = Modifier.padding(bottom = Space.xs)) {
-                items(DjMood.entries, key = { it.name }) { m ->
-                    Chip(m.label, m == djMood) {
-                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                        connection.setDjMood(m)
-                    }
-                }
-            }
+            ActionRow(R.drawable.ic_timer, "Iniciar DJ rápido", trailing = { Text("~1:30", style = OtoType.rowSub, color = Oto.colors.textMuted) }) { startFromMenu(DjMode.Adhd) }
+            ActionRow(R.drawable.ic_graphic_eq, "Modos y géneros") { djMenu = false; vm.openDj() }
             ActionRow(R.drawable.ic_swap_horiz, "Mover") { djMenu = false; arranging = true }
         }
         Floating(listMenu, onDismiss = { listMenu = null }) { list ->
@@ -838,7 +842,7 @@ private fun SearchField(query: String, searching: Boolean, onQuery: (String) -> 
 }
 
 @Composable
-private fun SectionTitle(text: String, modifier: Modifier = Modifier) {
+internal fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(
         text, style = OtoType.section, color = Oto.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
         modifier = modifier.padding(start = Space.lg, end = Space.lg, top = Space.lg, bottom = Space.sm),
@@ -985,7 +989,7 @@ private fun Filters(selected: Filter, onSelect: (Filter) -> Unit) {
 
 /** Una píldora que se elige: los filtros de la búsqueda, los ánimos de Explorar, los de Tus listas. */
 @Composable
-private fun Chip(label: String, on: Boolean, onClick: () -> Unit) {
+internal fun Chip(label: String, on: Boolean, onClick: () -> Unit) {
     val c = Oto.colors
     val bg by animateColorAsState(if (on) c.accent.copy(alpha = 0.22f) else c.field, tween(Motion.EFFECTS), label = "chipBg")
     val fg by animateColorAsState(if (on) c.accent else c.textMuted, tween(Motion.EFFECTS), label = "chipFg")
@@ -1501,10 +1505,9 @@ private fun Settings(connection: PlayerConnection, onBack: () -> Unit, onTutoria
             SettingRow(R.drawable.ic_playlist_add, "Importar de Spotify", importSummary(state), onImport)
             SettingRow(R.drawable.ic_account_circle, "Dispositivos", "Conectar con Oto Desktop en la red local") { app.startActivity(android.content.Intent(app, io.github.iaguito22.oto.remote.DevicesActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
             AudioSettings(app.prefs)
-            CrossfadeRow(app.prefs)
             SmartMixRow(app.prefs)
+            CrossfadeRow(app.prefs)
             PlaybackSettings(app.prefs)
-            DjSettings(connection)
             ScreenSettings(app.prefs)
             SpaceRow(app)
             SettingRow(R.drawable.ic_swipe_up, "Ver los gestos otra vez", "El tutorial del principio", onTutorial)
@@ -1598,6 +1601,21 @@ private fun AudioSettings(prefs: Prefs) {
     }
 }
 
+/** Mezcla inteligente: curvas al ritmo, cruce de graves y transiciones inteligentes entre canciones. */
+@Composable
+private fun SmartMixRow(prefs: Prefs) {
+    val scope = rememberCoroutineScope()
+    val smart by prefs.smartMix.collectAsStateWithLifecycle(initialValue = null)
+    val on = smart ?: return
+    ToggleRow(
+        R.drawable.ic_graphic_eq,
+        "Mezcla inteligente",
+        if (on) "Transiciones inteligentes con filtro, cruce de graves y cuadre de ritmo entre canciones."
+        else "Desactivada: usa solo el fundido clásico de abajo (o ningún fundido si está en No).",
+        on,
+    ) { scope.launch { prefs.setSmartMix(!on) } }
+}
+
 /** Cuántos segundos se funden una canción y la siguiente (ver [io.github.iaguito22.oto.playback.Crossfade]). */
 @Composable
 private fun CrossfadeRow(prefs: Prefs) {
@@ -1605,6 +1623,7 @@ private fun CrossfadeRow(prefs: Prefs) {
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val secs by prefs.crossfade.collectAsStateWithLifecycle(initialValue = null)
+    val smart by prefs.smartMix.collectAsStateWithLifecycle(initialValue = true)
     val now = secs ?: return
     val at by animateFloatAsState(CROSSFADE_CHOICES.indexOf(now).coerceAtLeast(0).toFloat(), spring(dampingRatio = 0.8f, stiffness = 500f), label = "crossfade")
     Row(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.md)) {
@@ -1613,8 +1632,12 @@ private fun CrossfadeRow(prefs: Prefs) {
         Column(Modifier.weight(1f)) {
             Text("Fundido entre canciones", style = OtoType.rowTitle, color = c.text)
             Text(
-                if (now == 0) "Cada canción acaba del todo antes de que empiece la siguiente."
-                else "Los últimos $now segundos de una canción suenan a la vez que el principio de la siguiente. Solo cuando acaba sola, no al pasarla tú.",
+                when {
+                    smart -> if (now == 0) "Con mezcla inteligente apagada: acabarán del todo antes de seguir."
+                    else "Con mezcla inteligente apagada: fundido clásico de $now s."
+                    now == 0 -> "Cada canción acaba del todo antes de que empiece la siguiente."
+                    else -> "Los últimos $now segundos de una canción suenan a la vez que el principio de la siguiente. Solo cuando acaba sola, no al pasarla tú."
+                },
                 style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.padding(top = 2.dp, bottom = Space.sm),
             )
             // Como el de la calidad: el indicador se desliza a lo elegido.
@@ -1647,59 +1670,6 @@ private fun CrossfadeRow(prefs: Prefs) {
             }
         }
     }
-}
-
-/** Mezcla inteligente tipo Apple Music: curva S de potencia constante y cruce de graves durante el fundido. */
-@Composable
-private fun SmartMixRow(prefs: Prefs) {
-    val scope = rememberCoroutineScope()
-    val smart by prefs.smartMix.collectAsStateWithLifecycle(initialValue = null)
-    val on = smart ?: return
-    ToggleRow(
-        R.drawable.ic_graphic_eq,
-        "Mezcla inteligente",
-        if (on) "Curva suave y cruce progresivo de graves entre canciones para que no choquen los bombos."
-        else "Fundido clásico por volumen sin filtro de graves.",
-        on,
-    ) { scope.launch { prefs.setSmartMix(!on) } }
-}
-
-/** Mood activo del DJ y modo rápido (ADHD) por segmentos cortos. */
-@Composable
-private fun DjSettings(connection: PlayerConnection) {
-    val c = Oto.colors
-    val haptics = LocalHapticFeedback.current
-    val mood by connection.djMood.collectAsStateWithLifecycle()
-    val mode by connection.djMode.collectAsStateWithLifecycle()
-    val adhd = mode == DjMode.Adhd
-    Row(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.md)) {
-        SettingIcon(R.drawable.ic_graphic_eq)
-        Spacer(Modifier.width(Space.md))
-        Column(Modifier.weight(1f)) {
-            Text("Mood del DJ", style = OtoType.rowTitle, color = c.text)
-            Text(
-                "Adapta energía, continuidad y descubrimiento al instante, incluso mientras pincha.",
-                style = OtoType.rowSub,
-                color = c.textMuted,
-                modifier = Modifier.padding(top = 2.dp, bottom = Space.sm),
-            )
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
-                items(DjMood.entries, key = { it.name }) { m ->
-                    Chip(m.label, m == mood) {
-                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                        connection.setDjMood(m)
-                    }
-                }
-            }
-        }
-    }
-    ToggleRow(
-        R.drawable.ic_timer,
-        "DJ rápido (ADHD)",
-        if (adhd) "Salta la intro y mezcla cada canción tras unos 45-75 segundos."
-        else "Las canciones del DJ suenan enteras. Puedes lanzar el modo rápido aparte desde Tu música.",
-        adhd,
-    ) { connection.setDjMode(if (adhd) DjMode.Normal else DjMode.Adhd) }
 }
 
 /**
@@ -1870,27 +1840,13 @@ private fun YourMusic(
             }
         }
         val djSub = when {
-            dj && djMode == DjMode.Adhd -> "Modo ADHD · ${djMood.label}"
-            dj -> "Pinchando · ${djMood.label}"
+            dj && djMode == DjMode.Adhd -> "DJ rápido"
+            dj -> "Pinchando"
             else -> "Mezcla para ti"
         }
         item(key = "pinned") {
             ShelfRow(top, arranging, onMove = reorder, onOpen = open, onMenu = menu, dj = dj, djSubtitle = djSub) {
                 if (playlists.isEmpty()) item(key = "new") { NewListCard(onNew) }
-            }
-        }
-        if (!arranging) item(key = "djQuick") {
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = Space.lg),
-                horizontalArrangement = Arrangement.spacedBy(Space.xs),
-                modifier = Modifier.padding(top = Space.sm),
-            ) {
-                item(key = "adhdLaunch") {
-                    Chip("DJ rápido (ADHD)", dj && djMode == DjMode.Adhd, onClick = onDjAdhd)
-                }
-                items(DjMood.entries, key = { it.name }) { m ->
-                    Chip(m.label, m == djMood) { onDjMood(m) }
-                }
             }
         }
         // Con muchas listas, un segundo carrusel no se acababa nunca. Seis a la vista; todas, con su orden y sus filtros,
@@ -2477,6 +2433,7 @@ private fun ActionRow(icon: Int, text: String, tint: Color = Oto.colors.text, tr
 private fun ColumnScope.SongActions(
     h: Held,
     onNext: () -> Unit,
+    onStartDj: () -> Unit,
     onSave: () -> Unit,
     onRemoteQueue: (() -> Unit)?,
     download: Boolean?,
@@ -2491,6 +2448,7 @@ private fun ColumnScope.SongActions(
     FloatHeader({ Art(song.thumbnail, 48.dp, Radius.sm) }, song.title, song.artists.joinToString { it.name })
     Spacer(Modifier.height(Space.xs))
     ActionRow(R.drawable.ic_queue_music, "Reproducir a continuación", onClick = onNext)
+    ActionRow(R.drawable.ic_graphic_eq, "Arrancar DJ desde aquí", onClick = onStartDj)
     if (onRemoteQueue != null) ActionRow(R.drawable.ic_link_devices, "Añadir a la cola del ordenador", onClick = onRemoteQueue)
     ActionRow(R.drawable.ic_add, "Guardar en…", onClick = onSave)
     if (download != null) ActionRow(if (download) R.drawable.ic_download else R.drawable.ic_close, if (download) "Descargar" else "Quitar la descarga", onClick = onDownload)

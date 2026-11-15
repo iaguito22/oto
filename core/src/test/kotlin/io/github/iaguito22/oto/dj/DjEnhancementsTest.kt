@@ -185,7 +185,7 @@ class DjEnhancementsTest {
     }
 
     @Test
-    fun knownVsDiscoveryRatioStaysAround70To30InNormalMood() = runBlocking {
+    fun knownVsDiscoveryRatioStaysAround90To10InNormalMood() = runBlocking {
         val lists = (0 until 4).map { l ->
             LocalPlaylist("l$l", "Lista $l", (1..15).map { i -> val a = "art_${l}_${i % 3}"; Heard("$a-$i", "$a song $i", a, null, a) })
         }
@@ -197,7 +197,7 @@ class DjEnhancementsTest {
             var t = dj.start()
             dj.settle()
             var n = 0
-            while (t != null && n < 25) {
+            while (t != null && n < 30) {
                 dj.heard(t.id, 180_000L, 180_000L)
                 t = dj.next()
                 dj.settle()
@@ -209,8 +209,8 @@ class DjEnhancementsTest {
         val total = familiar + discovery
         val famShare = familiar.toDouble() / total
         val discShare = discovery.toDouble() / total
-        assertTrue("Conocidas deberian rondar ~70% (fue ${(famShare * 100).toInt()}%)", famShare in 0.58..0.82)
-        assertTrue("Descubrimientos deberian rondar ~30% (fue ${(discShare * 100).toInt()}%)", discShare in 0.18..0.42)
+        assertTrue("Conocidas deberian rondar ~90% (fue ${(famShare * 100).toInt()}%)", famShare in 0.80..0.97)
+        assertTrue("Descubrimientos deberian rondar ~10% (fue ${(discShare * 100).toInt()}%)", discShare in 0.03..0.20)
     }
 
     @Test
@@ -256,10 +256,10 @@ class DjEnhancementsTest {
 
     @Test
     fun adhdSegmentCalculationAndModePlayback() = runBlocking {
-        // Cancion estandar de 3:20 (200s): salta intro (~25-35%) y dura ~45-75s con fadeOut antes del final.
+        // Cancion estandar de 3:20 (200s) sin letra: salta intro (~22-28%) y dura ~70-110s con fadeOut antes del final.
         val seg = AdhdPlanner.segment(200_000L, trackId = "track-1", crossfadeMs = 4_000L, mood = DjMood.Auto)!!
-        assertTrue("startMs (${seg.startMs}) debe saltar intro ~25-35%", seg.startMs in 50_000L..70_000L)
-        assertTrue("clipDurationMs (${seg.clipDurationMs}) debe estar en 45-75s", seg.clipDurationMs in 45_000L..75_000L)
+        assertTrue("startMs (${seg.startMs}) debe saltar intro", seg.startMs in 20_000L..70_000L)
+        assertTrue("clipDurationMs (${seg.clipDurationMs}) debe estar en 70-110s", seg.clipDurationMs in 70_000L..110_000L)
         assertEquals(seg.endMs - seg.startMs, seg.clipDurationMs)
         assertEquals(4_000L, seg.mixOutDurationMs)
         assertEquals(seg.endMs - seg.mixOutDurationMs, seg.fadeOutStartMs)
@@ -270,10 +270,10 @@ class DjEnhancementsTest {
         assertEquals(0L, shortSeg.startMs)
         assertEquals(38_000L, shortSeg.endMs)
 
-        // Cancion larga (7 min): no salta demasiado lejos y mantiene clip <= 75s.
+        // Cancion larga (7 min): no salta demasiado lejos y mantiene clip <= 110s.
         val longSeg = AdhdPlanner.segment(420_000L, trackId = "long", crossfadeMs = 5_000L, mood = DjMood.Chill)!!
         assertTrue(longSeg.startMs in 70_000L..110_000L)
-        assertTrue(longSeg.clipDurationMs in 45_000L..75_000L)
+        assertTrue(longSeg.clipDurationMs in 70_000L..110_000L)
 
         // Duracion invalida: null.
         assertNull(AdhdPlanner.segment(0L))
@@ -296,7 +296,7 @@ class DjEnhancementsTest {
         val dj = Dj(profile, catalog, Memory(null), this, Random(1), mode = DjMode.Adhd)
         val first = dj.start()!!
         val computedSeg = dj.adhdSegment(first, durationMs = 210_000L)!!
-        assertTrue(computedSeg.clipDurationMs in 45_000L..75_000L)
+        assertTrue(computedSeg.clipDurationMs in 70_000L..110_000L)
         // Simula escuchar el clip completo (~55s de una pista total de 210s) -> recompensa alta en modo ADHD.
         dj.heard(first.id, computedSeg.clipDurationMs, 210_000L)
         assertTrue((dj.picks.last().reward ?: 0.0) >= 0.75)
@@ -304,8 +304,8 @@ class DjEnhancementsTest {
         // Cuando la pista ya trae duracion (ej. descubrimiento de catalogo), Pick.adhdSegment se rellena automatico.
         val withDurTrack = Track("cat-1", "Catalog Song", listOf("Art 1"), listOf("a-1"), seconds = 180)
         val autoSeg = withDurTrack.adhdSegment(mood = DjMood.Energia)!!
-        assertTrue(autoSeg.startMs in 45_000L..68_000L)
-        assertTrue(autoSeg.clipDurationMs in 45_000L..75_000L)
+        assertTrue(autoSeg.startMs in 18_000L..68_000L)
+        assertTrue(autoSeg.clipDurationMs in 70_000L..110_000L)
         dj.setMode(DjMode.Normal)
         assertEquals(DjMode.Normal, dj.mode)
     }

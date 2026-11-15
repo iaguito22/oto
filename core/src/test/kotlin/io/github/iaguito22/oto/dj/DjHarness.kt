@@ -50,7 +50,7 @@ class DjHarness {
             val build = System.currentTimeMillis() - t0
             val memory = Memory(File(dir, "dj.json"))
             out.appendLine("## Día ${day + 1} (perfil en $build ms, ${profile.core.size} artistas)")
-            val dj = Dj(profile, catalog, memory, this, random) { out.appendLine("  · $it") }
+            val dj = Dj(profile, catalog, memory, this, random, log = { out.appendLine("  · $it") })
             var t = dj.start()
             var i = 0
             val listener = Random(day * 7919 + 1)

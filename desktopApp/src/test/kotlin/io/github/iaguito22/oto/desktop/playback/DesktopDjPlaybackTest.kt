@@ -2,6 +2,8 @@ package io.github.iaguito22.oto.desktop.playback
 
 import io.github.iaguito22.oto.dj.AdhdPlanner
 import io.github.iaguito22.oto.dj.AdhdSegment
+import io.github.iaguito22.oto.dj.DjTransitionPlan
+import io.github.iaguito22.oto.dj.DjTransitionStyle
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -141,5 +143,66 @@ class DesktopDjPlaybackTest {
             startOffsetMs = 45_000L,
         )
         assertEquals(60_000L, fullClip)
+    }
+
+    @Test
+    fun transitionPlanDrivesBeatSnappedCrossfadeStartAndEchoOut() {
+        val plan = DjTransitionPlan(
+            style = DjTransitionStyle.BeatMatchLongMix,
+            fadeDurationMs = 7_500L,
+            incomingTempoNudge = 1.03,
+            outgoingFadeStartMs = 171_200L,
+            incomingStartMs = 1_200L,
+            incomingGainMatch = 0.92f,
+            useBassSwap = true,
+        )
+        val beforeSnap = DesktopTransitionPlanner.evaluate(
+            positionMs = 171_000L,
+            durationMs = 180_000L,
+            playing = true,
+            buffering = false,
+            configuredFadeSeconds = 6,
+            ramSaver = false,
+            crossfadeSupported = true,
+            nextReady = true,
+            adhdSegment = null,
+            plan = plan,
+        )
+        assertEquals(TransitionAction.None, beforeSnap)
+
+        val atSnap = DesktopTransitionPlanner.evaluate(
+            positionMs = 171_250L,
+            durationMs = 180_000L,
+            playing = true,
+            buffering = false,
+            configuredFadeSeconds = 6,
+            ramSaver = false,
+            crossfadeSupported = true,
+            nextReady = true,
+            adhdSegment = null,
+            plan = plan,
+        )
+        assertEquals(TransitionAction.StartCrossfade(7_500L, plan), atSnap)
+
+        val echoPlan = plan.copy(
+            style = DjTransitionStyle.EchoOutFilterSweep,
+            fadeDurationMs = 2_800L,
+            outgoingFadeStartMs = 98_000L,
+            useHighPassSweep = true,
+            echoOutWet = 0.55f,
+        )
+        val adhdEcho = DesktopTransitionPlanner.evaluate(
+            positionMs = 98_100L,
+            durationMs = 210_000L,
+            playing = true,
+            buffering = false,
+            configuredFadeSeconds = 4,
+            ramSaver = false,
+            crossfadeSupported = true,
+            nextReady = true,
+            adhdSegment = sampleSegment,
+            plan = echoPlan,
+        )
+        assertEquals(TransitionAction.StartCrossfade(2_800L, echoPlan), adhdEcho)
     }
 }

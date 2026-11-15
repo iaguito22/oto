@@ -40,7 +40,8 @@ internal enum class PlayerForm(val label:String, val width:Int, val height:Int) 
 
 /** Barra de 2 px, área táctil amplia y sin pomo permanente, como la del móvil. */
 @Composable
-internal fun FineSlider(value:Float, onChange:(Float)->Unit, modifier:Modifier=Modifier, label:String="Posición", onFinish:()->Unit={}, expanded:Boolean=false) {
+internal fun FineSlider(value:Float, onChange:(Float)->Unit, modifier:Modifier=Modifier, label:String="Posición", onFinish:()->Unit={}, expanded:Boolean=false,
+    mix:MixMark?=null) {
     val current by rememberUpdatedState(onChange)
     val finish by rememberUpdatedState(onFinish)
     val fraction by rememberUpdatedState(value.coerceIn(0f,1f))
@@ -48,7 +49,12 @@ internal fun FineSlider(value:Float, onChange:(Float)->Unit, modifier:Modifier=M
     val hovered by interaction.collectIsHoveredAsState()
     var dragging by remember { mutableStateOf(false) }
     val emphasis by animateFloatAsState(if(expanded || hovered || dragging) 1f else 0f,tween(160),label="sliderHover")
-    Canvas(modifier.height(22.dp).fillMaxWidth().hoverable(interaction).semantics {
+    // La mezcla entra sin saltos en cuanto se sabe dónde va a ser, y se queda dibujada mientras se desvanece.
+    var lastMix by remember { mutableStateOf(mix) }
+    if(mix != null) lastMix = mix
+    val mixAlpha by animateFloatAsState(if(mix != null) 1f else 0f,tween(220),label="mixMark")
+    // Capa propia: la muesca de la mezcla se recorta de la barra y deja ver el fondo.
+    Canvas(modifier.height(22.dp).fillMaxWidth().graphicsLayer { compositingStrategy=CompositingStrategy.Offscreen }.hoverable(interaction).semantics {
         contentDescription=label;progressBarRangeInfo=ProgressBarRangeInfo(fraction,0f..1f)
         setProgress { current(it.coerceIn(0f,1f));finish();true }
     }.pointerInput(Unit) {
@@ -59,9 +65,23 @@ internal fun FineSlider(value:Float, onChange:(Float)->Unit, modifier:Modifier=M
         val y=size.height/2
         drawLine(Color.White.copy(alpha=.13f),Offset(0f,y),Offset(size.width,y),(2.dp + 2.dp * emphasis).toPx(),StrokeCap.Round)
         if(fraction>0)drawLine(Color.White.copy(alpha=.85f),Offset(0f,y),Offset(size.width*fraction,y),(2.dp + 2.dp * emphasis).toPx(),StrokeCap.Round)
+        val m=lastMix
+        if(m != null && mixAlpha>0f) {
+            // Dentro de la barra y sin sobresalir: un tramo apenas más claro hasta que pasa a oírse la siguiente y
+            // una muesca fina donde empieza la mezcla.
+            val stroke=(2.dp + 2.dp * emphasis).toPx()
+            val mx=size.width*m.start.coerceIn(0f,1f)
+            val sx=size.width*m.switch.coerceIn(0f,1f)
+            if(sx>mx) drawLine(Color.White.copy(alpha=.16f*mixAlpha*(if(m.ready) 1f else .6f)),Offset(mx,y),Offset(sx,y),stroke)
+            val gap=1.5.dp.toPx()
+            drawRect(Color.Black.copy(alpha=mixAlpha),Offset(mx-gap/2f,y-stroke),Size(gap,stroke*2f),blendMode=BlendMode.DstOut)
+        }
         if(emphasis>0f) drawCircle(Color.White.copy(alpha=emphasis),radius=(4.dp * emphasis).toPx(),center=Offset(size.width*fraction,y))
     }
 }
+
+/** Dónde empieza la mezcla y dónde pasa a oírse la siguiente, en fracción de la canción. */
+internal data class MixMark(val start:Float, val switch:Float, val ready:Boolean)
 
 @Composable
 internal fun MinimalPlayback(playing:Boolean, toggle:()->Unit, modifier:Modifier=Modifier, controlSize:Dp=42.dp) {
@@ -116,8 +136,9 @@ internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:Imag
     qualityLabel:String? = null, verticalPin:(@Composable () -> Unit)? = null,
     shuffle:Boolean=false, loopMode:io.github.iaguito22.oto.LoopMode=io.github.iaguito22.oto.LoopMode.Off,
     onShuffle:(()->Unit)?=null, onLoop:(()->Unit)?=null,
-    djActive:Boolean=false, djMode:DjMode=DjMode.Normal, djMood:DjMood=DjMood.Auto,
-    onDjMood:((DjMood)->Unit)?=null, onToggleAdhd:(()->Unit)?=null) {
+    djActive:Boolean=false, djMode:DjMode=DjMode.Normal, djTanda:String?=null,
+    djFullOnce:Boolean=false, mixing:Boolean=false, mix:MixMark?=null,
+    onSkipTanda:(()->Unit)?=null, onToggleAdhd:(()->Unit)?=null, onPlayDjFullOnce:(()->Unit)?=null) {
     val pulse = rememberCoverPulse(np.playing,beatEnabled,beat)
     val controls by animateFloatAsState(if(chrome)1f else 0f,tween(180),label="playerChrome")
     // Sentido del último salto: «Anterior» desliza hacia la derecha; el resto, hacia la izquierda.
@@ -215,14 +236,14 @@ internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:Imag
                     Text(source.title,style=OtoType.rowTitle.copy(fontSize=OtoType.rowTitle.fontSize * scale),maxLines=1,overflow=TextOverflow.Ellipsis)
                 }
             }
-            if(djActive && np.id != null && onDjMood != null && onToggleAdhd != null) {
+            // El DJ rápido se cambia en la cola; aquí solo el ambiente que suena (tocarlo lo salta).
+            if(djActive && np.id != null && onSkipTanda != null) {
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    DjMoodSelector(djMood, MaterialTheme.colorScheme.primary, onDjMood)
-                    DjAdhdTogglePill(djMode == DjMode.Adhd, MaterialTheme.colorScheme.primary, onToggleAdhd)
+                    DjTandaPill(djTanda, MaterialTheme.colorScheme.primary, onSkipTanda, Modifier.weight(1f, fill = false))
                 }
             }
             Spacer(Modifier.weight(1f))
@@ -257,7 +278,15 @@ internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:Imag
             LaunchedEffect(np.buffering) { if(np.buffering) { delay(600); slowBuffering=true } else slowBuffering=false }
             val notice=if(np.error != null) "No se pudo reproducir · reintentar" else if(slowBuffering) "Preparando canción…" else null
             Box {
-                PlayerProgress(np.id,position,np.durationMs,showRemaining,onSeek)
+                androidx.compose.animation.AnimatedVisibility(
+                    visible=mixing && notice==null,
+                    modifier=Modifier.align(Alignment.TopCenter).offset(y=(-6).dp),
+                    enter=fadeIn(tween(200)),
+                    exit=fadeOut(tween(180)),
+                ) {
+                    Text("Mezclando",style=OtoType.rowSub.copy(fontSize=11.sp),color=MaterialTheme.colorScheme.primary.copy(alpha=.92f),maxLines=1)
+                }
+                PlayerProgress(np.id,position,np.durationMs,showRemaining,onSeek,mix=mix)
                 androidx.compose.animation.AnimatedVisibility(notice!=null,Modifier.align(Alignment.BottomCenter),enter=fadeIn(tween(200)),exit=fadeOut(tween(160))) {
                     var shown by remember { mutableStateOf(notice ?: "") }
                     if(notice!=null) shown=notice
@@ -282,7 +311,7 @@ internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:Imag
                 }
                 Transport(reveal=true)
             }
-            PlayerProgress(np.id,position,np.durationMs,showRemaining,onSeek,Modifier.align(Alignment.BottomCenter),compact=true)
+            PlayerProgress(np.id,position,np.durationMs,showRemaining,onSeek,Modifier.align(Alignment.BottomCenter),compact=true,mixing=mixing,mix=mix)
         }
         PlayerForm.Vertical -> Column(Modifier.fillMaxSize().padding(start=8.dp,end=8.dp,top=34.dp,bottom=8.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(6.dp)) {
             Box(Modifier.fillMaxWidth(),contentAlignment=Alignment.Center) {
@@ -303,7 +332,7 @@ internal fun PlayerSurface(np:NowPlaying, position:StateFlow<Long>, artwork:Imag
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 private fun PlayerProgress(id:String?,position:StateFlow<Long>,duration:Long,showRemaining:Boolean,onSeek:(Long)->Unit,
-    modifier:Modifier=Modifier,compact:Boolean=false) {
+    modifier:Modifier=Modifier,compact:Boolean=false,mixing:Boolean=false,mix:MixMark?=null) {
     val elapsed by position.collectAsState()
     var seek by remember(id) { mutableStateOf<Float?>(null) }
     val fraction=seek ?: (elapsed.toFloat()/duration.coerceAtLeast(1)).coerceIn(0f,1f)
@@ -313,12 +342,20 @@ private fun PlayerProgress(id:String?,position:StateFlow<Long>,duration:Long,sho
         val alpha by animateFloatAsState(if(hovered || seek!=null) 1f else 0f,tween(160),label="progressDetails")
         Box(modifier.fillMaxWidth().height(30.dp).onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Enter) { hovered=true }
             .onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Exit) { hovered=false }) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible=mixing && !hovered && seek==null,
+                modifier=Modifier.align(Alignment.TopCenter),
+                enter=fadeIn(tween(200)),
+                exit=fadeOut(tween(160)),
+            ) {
+                Text("Mezclando",style=OtoType.rowSub.copy(fontSize=11.sp),color=MaterialTheme.colorScheme.primary.copy(alpha=.92f),maxLines=1)
+            }
             ProgressTimes((if(seek!=null) (fraction*duration).toLong() else elapsed)/1000*1000,duration,false,
                 Modifier.align(Alignment.TopCenter).graphicsLayer { this.alpha=alpha },.75f)
-            FineSlider(fraction,{seek=it},Modifier.align(Alignment.BottomCenter),onFinish=finish,expanded=hovered || seek!=null)
+            FineSlider(fraction,{seek=it},Modifier.align(Alignment.BottomCenter),onFinish=finish,expanded=hovered || seek!=null,mix=mix)
         }
     } else Column(modifier,verticalArrangement=Arrangement.spacedBy(8.dp)) {
-        FineSlider(fraction,{seek=it},label="Tiempo de la canción",onFinish=finish)
+        FineSlider(fraction,{seek=it},label="Tiempo de la canción",onFinish=finish,mix=mix)
         ProgressTimes(elapsed/1000*1000,duration,showRemaining)
     }
 }

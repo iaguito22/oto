@@ -151,13 +151,14 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     // «Tu resumen»: lo escuchado en este ordenador (ver Recap).
     var recap by remember {mutableStateOf<io.github.iaguito22.oto.dj.Recap?>(null)}
     var recapOpen by remember {mutableStateOf(false)}
+    var djOpen by remember {mutableStateOf(false)}
     LaunchedEffect(lists,liked,history) {
         kotlinx.coroutines.delay(400)
         val plays=player.allPlays()
         smart=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { io.github.iaguito22.oto.dj.Smart.lists(lists,liked.songs,history,plays,System.currentTimeMillis()) }.getOrDefault(emptyList()) }
         recap=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { io.github.iaguito22.oto.dj.Recap.of(plays) }.getOrNull() }
     }
-    fun home(name:String) { section=name;local=null;folder=null;smartOpen=null;recapOpen=false;recentsOpen=false;menu.onQuery("");while(menu.state.value.pages.isNotEmpty())menu.closeDetail() }
+    fun home(name:String) { section=name;local=null;folder=null;smartOpen=null;recapOpen=false;djOpen=false;recentsOpen=false;menu.onQuery("");while(menu.state.value.pages.isNotEmpty())menu.closeDetail() }
     LaunchedEffect(navigation.first) {if(navigation.first>0)home(if(navigation.second==1)"Explorar" else "Tu música")}
     LaunchedEffect(jump.version) { if(jump.version>0) { home("Tu música"); when { jump.item!=null -> menu.open(jump.item); jump.local==DOWNLOADS_ID -> home("Descargas"); jump.local?.startsWith(FOLDER_PREFIX)==true -> folder=jump.local.removePrefix(FOLDER_PREFIX); jump.local!=null -> local=jump.local; jump.artistId!=null -> menu.openArtist(jump.artistId,jump.artistName) } } }
     fun openItem(item:YTItem) {if(item is SongItem)player.play(item) else {local=null;menu.onQuery("");menu.open(item)}}
@@ -280,7 +281,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 val selected=(if(local==LIKED_ID)liked else lists.firstOrNull{it.id==local})
                 val title=when {state.query.isNotBlank()->"Resultados";page!=null->page.item.title;selected!=null->selected.name;folder!=null->folder!!;else->section}
                 val showRecents=recentsOpen && state.query.isBlank()
-                if(selected==null && smartOpen==null && !recapOpen && !showRecents && page?.item !is ArtistItem && page?.item !is AlbumItem && page?.item !is PlaylistItem) Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                if(selected==null && smartOpen==null && !recapOpen && !djOpen && !showRecents && page?.item !is ArtistItem && page?.item !is AlbumItem && page?.item !is PlaylistItem) Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                     if(local!=null||page!=null||folder!=null)IconButton(onClick={local=null;folder=null;if(page!=null)menu.closeDetail()}){Icon(MobileIcons.arrowBack,"Volver",Modifier.size(20.dp))}
                     Text(title,style=OtoType.display,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f))
                     if(section=="Tu música"&&selected==null&&page==null&&state.query.isBlank()){
@@ -305,7 +306,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         (fadeIn(tween(260)) + slideInVertically(spring(dampingRatio=.8f,stiffness=280f)) { direction * it / 5 }) togetherWith
                             (fadeOut(tween(160)) + slideOutVertically(tween(200)) { -direction * it / 8 })
                     }, label="librarySection") { animatedSection ->
-                    CascadeScope(listOf(animatedSection,showRecents,state.query.isNotBlank(),smartOpen,recapOpen,selected?.id,page?.item,folder)) {
+                    CascadeScope(listOf(animatedSection,showRecents,state.query.isNotBlank(),smartOpen,recapOpen,djOpen,selected?.id,page?.item,folder)) {
                     when {
                         showRecents -> Box(Modifier.fillMaxSize().onPointerEvent(PointerEventType.Press,pass=androidx.compose.ui.input.pointer.PointerEventPass.Initial){pressingRecents=true}.onPointerEvent(PointerEventType.Release,pass=androidx.compose.ui.input.pointer.PointerEventPass.Final){scope.launch{kotlinx.coroutines.delay(80);pressingRecents=false;if(!searchHasFocus)recentsOpen=false}}) { RecentSearches(recents,onPick={ r ->
                             scope.launch { memory.remember(r) }
@@ -314,6 +315,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                             if(item==null) menu.onQuery(r.title) else { focusManager.clearFocus();openItem(item) }
                         },onForget={ r -> scope.launch { memory.forget(r) } }) }
                         state.query.isNotBlank() -> SearchSpace(state,lists,np.id,player,menu,prefs,palette,onSave,onOpen=::openItem,onLocal={local=it;menu.onQuery("")},onArtist=::openArtist,onRemember=::rememberSearch)
+                        djOpen -> DjSpace(player,palette,onBack={djOpen=false},onFail={ m -> scope.launch{snackbar.showSnackbar(m)} })
                         recapOpen && recap!=null -> {
                             val art=remember(lists,liked,history) { (history+liked.songs+lists.flatMap{it.songs}).filter{it.artwork!=null}.associate{it.id to it.artwork} }
                             RecapSpace(recap!!,palette,{ art[it] },onPlay={ s -> player.play(Heard(s.id,s.title,s.artist,art[s.id],s.artistId).toSong()) },onArtist={id,name->recapOpen=false;openArtist(id,name)},onBack={recapOpen=false})
@@ -386,14 +388,14 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                 when {
                                     e.special=="dj" -> PlaylistCard(
                                         "DJ",
-                                        if(djActive && djMode==DjMode.Normal) "Pinchando · ${djMood.label}" else "Mezcla para ti",
+                                        when { djActive && djMode==DjMode.Adhd -> "DJ rápido"; djActive -> "Pinchando"; else -> "Modos y géneros" },
                                         null,
                                         modifier,
                                         special="dj",
                                         accent=palette.primary,
                                         lifted=dragging,
                                         onPlay={player.playDj(DjMode.Normal) {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ")}}}
-                                    ) {player.playDj(DjMode.Normal) {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ")}}}
+                                    ) {djOpen=true}
                                     e.special!=null -> PlaylistContextMenu(listOf(ContextMenuItem(if(LIKED_ID in wanted) "Quitar la descarga" else "Descargar") {scope.launch { prefs.setDownloadList(LIKED_ID,LIKED_ID !in wanted) }})) {
                                         PlaylistCard("Me gusta","${liked.songs.size} canciones",null,modifier,special="liked",accent=palette.primary,lifted=dragging,onPlay=if(liked.songs.isNotEmpty()){{player.playLocal(liked,null,true)}}else null) {local=LIKED_ID}
                                     }
@@ -411,24 +413,12 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                     Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
                                         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                                             Text("Tus listas",style=OtoType.section,modifier=Modifier.weight(1f))
-                                            DjMoodSelector(djMood,palette.primary,player::setDjMood)
                                         }
                                         LazyRow(state=pinnedRow,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
                                             items(topOrder,key={it.key}) { e ->
                                                 ReorderableItem(pinnedReorder,e.key) { dragging ->
                                                     ShelvedCard(e,Modifier.width(featuredWidth).longPressDraggableHandle(enabled=e.movable,onDragStopped={saveTop()}),dragging)
                                                 }
-                                            }
-                                            item(key="dj_adhd") {
-                                                PlaylistCard(
-                                                    "DJ rápido (ADHD)",
-                                                    if(djActive && djMode==DjMode.Adhd) "Pinchando · ${djMood.label}" else "Saltando intros · ~1 min",
-                                                    null,
-                                                    Modifier.width(featuredWidth),
-                                                    special="dj_adhd",
-                                                    accent=palette.primary,
-                                                    onPlay={player.playAdhdDj {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ rápido")}}}
-                                                ) {player.playAdhdDj {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ rápido")}}}
                                             }
                                         }
                                     }

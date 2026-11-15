@@ -19,7 +19,12 @@ import kotlinx.coroutines.flow.first
  * listas, en el orden de la app) y lo oído hace poco. Una canción tocada dentro de una lista lleva la lista en su id
  * ([inList]), para que suene la lista entera desde ella y no solo esa.
  */
-class Library(private val prefs: Prefs, private val context: Context) {
+class Library(
+    private val prefs: Prefs,
+    private val context: Context,
+    /** Tus géneros para el DJ, de más a menos escuchado (ver [io.github.iaguito22.oto.dj.GenreStore.top]). */
+    private val djGenres: suspend () -> List<String> = { emptyList() },
+) {
     fun root(): MediaItem = browsable(ROOT, "Oto")
 
     suspend fun children(parent: String): List<MediaItem> = when {
@@ -28,10 +33,8 @@ class Library(private val prefs: Prefs, private val context: Context) {
             browsable(RECENT, "Oído hace poco"),
         )
         parent == MUSIC -> buildList {
-            add(MediaItem.Builder().setMediaId(DJ).setMediaMetadata(
-                MediaMetadata.Builder().setTitle("DJ").setSubtitle("Mezcla para ti").setIsPlayable(true).setIsBrowsable(false)
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST).build(),
-            ).build())
+            // El DJ, como en la app: una carpeta con sus modos y tus géneros.
+            add(browsable(DJ_MENU, "DJ", "Modos y géneros"))
             val liked = prefs.liked.first()
             add(browsable(LIST + LIKED_ID, "Me gusta", count(liked.size), liked.firstOrNull { it.artwork != null }?.artwork))
             val lists = prefs.playlists.first()
@@ -44,6 +47,11 @@ class Library(private val prefs: Prefs, private val context: Context) {
             }
             val (top, rest) = shelf.partition { it.first in pinned }
             addAll((top + rest).map { it.second })
+        }
+        parent == DJ_MENU -> buildList {
+            add(djItem(DJ, "Mezcla para ti", "Lo tuyo, por tandas, canciones enteras"))
+            add(djItem(DJ_ADHD, "DJ rápido", "Minuto y medio de cada canción"))
+            djGenres().forEach { g -> add(djItem(DJ_GENRE + g, g, "DJ de $g")) }
         }
         parent == RECENT -> prefs.history.first().map { song(it, RECENT_ID) }
         parent.startsWith(FOLDER) -> prefs.playlists.first().filter { it.folder == parent.removePrefix(FOLDER) }.map(::list)
@@ -81,6 +89,11 @@ class Library(private val prefs: Prefs, private val context: Context) {
         return base.buildUpon().setMediaId(IN + listId + SEP + h.id).build()
     }
 
+    private fun djItem(id: String, title: String, subtitle: String) = MediaItem.Builder().setMediaId(id).setMediaMetadata(
+        MediaMetadata.Builder().setTitle(title).setSubtitle(subtitle).setIsPlayable(true).setIsBrowsable(false)
+            .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST).build(),
+    ).build()
+
     private fun action(id: String, shuffle: Boolean) = MediaItem.Builder()
         .setMediaId((if (shuffle) SHUFFLE else PLAY) + id)
         .setMediaMetadata(MediaMetadata.Builder().setTitle(if (shuffle) "Reproducir en aleatorio" else "Reproducir")
@@ -113,6 +126,9 @@ class Library(private val prefs: Prefs, private val context: Context) {
         const val MUSIC = "music"
         const val RECENT = "recent"
         const val DJ = "dj"
+        private const val DJ_MENU = "djmenu"
+        private const val DJ_ADHD = "dj|adhd"
+        private const val DJ_GENRE = "dj|g|"
         private const val LIST = "list:"
         private const val FOLDER = "folder:"
         private const val IN = "in|"
@@ -121,6 +137,14 @@ class Library(private val prefs: Prefs, private val context: Context) {
         private const val SEP = "|"
         private const val RECENT_ID = "recent"
         private const val SEARCH_MAX = 30
+
+        /** Lo que pide una entrada del DJ: rápido o no, y el género (null: todo). null si no es del DJ. */
+        fun djRequest(mediaId: String): Pair<Boolean, String?>? = when {
+            mediaId == DJ -> false to null
+            mediaId == DJ_ADHD -> true to null
+            mediaId.startsWith(DJ_GENRE) && mediaId.length > DJ_GENRE.length -> false to mediaId.removePrefix(DJ_GENRE)
+            else -> null
+        }
 
         fun listAction(mediaId: String): Pair<String, Boolean>? = when {
             mediaId.startsWith(PLAY) && mediaId.length > PLAY.length -> mediaId.removePrefix(PLAY) to false

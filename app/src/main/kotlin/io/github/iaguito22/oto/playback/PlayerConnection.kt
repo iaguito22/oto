@@ -20,8 +20,10 @@ import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.LoopMode
 import io.github.iaguito22.oto.PlaylistMode
 import io.github.iaguito22.oto.Prefs
+import io.github.iaguito22.oto.dj.DjBridgeStyle
 import io.github.iaguito22.oto.dj.DjMode
 import io.github.iaguito22.oto.dj.DjMood
+import io.github.iaguito22.oto.dj.DjPickInfo
 import io.github.iaguito22.oto.dj.DjReaction
 import io.github.iaguito22.oto.dj.Plays
 import io.github.iaguito22.oto.dj.Smart
@@ -115,6 +117,30 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     val djMode: StateFlow<DjMode> = _djMode.asStateFlow()
     private val _smartMix = MutableStateFlow(DEFAULT_SMART_MIX)
     val smartMix: StateFlow<Boolean> = _smartMix.asStateFlow()
+    /** El género al que se ciñe el DJ (null: todo lo tuyo). */
+    private val _djGenre = MutableStateFlow<String?>(null)
+    val djGenre: StateFlow<String?> = _djGenre.asStateFlow()
+    /** La tanda que pincha el DJ en la canción que suena (p. ej. «Duki · Urbano latino»); null si no es del DJ. */
+    private val _djTanda = MutableStateFlow<String?>(null)
+    val djTanda: StateFlow<String?> = _djTanda.asStateFlow()
+    /** Si el usuario pidió oír entera la canción actual en DJ rápido (ADHD). */
+    private val _djFullOnce = MutableStateFlow(false)
+    val djFullOnce: StateFlow<Boolean> = _djFullOnce.asStateFlow()
+    /** Próximos 2–3 temas reales preparados por el DJ (NextUp) para previsualizar o vetar. */
+    private val _djNextUp = MutableStateFlow<List<DjPickInfo>>(emptyList())
+    val djNextUp: StateFlow<List<DjPickInfo>> = _djNextUp.asStateFlow()
+    /** Si hay un cruce/fundido activo ahora mismo entre dos canciones. */
+    private val _mixing = MutableStateFlow(false)
+    val mixing: StateFlow<Boolean> = _mixing.asStateFlow()
+    /**
+     * La próxima mezcla en la que suena: dónde empieza y dónde pasa a oírse la siguiente (ms), y si está preparándose,
+     * lista o se hará en vivo. Se sabe en cuanto hay plan, antes de que esté lista. null sin mezcla prevista.
+     */
+    private val _djMix = MutableStateFlow<NextMix?>(null)
+    val djMix: StateFlow<NextMix?> = _djMix.asStateFlow()
+    /** Estilo de transición previsto/listo para el salto hacia la siguiente canción. */
+    private val _djNextTransitionStyle = MutableStateFlow<DjBridgeStyle?>(null)
+    val djNextTransitionStyle: StateFlow<DjBridgeStyle?> = _djNextTransitionStyle.asStateFlow()
 
     // Lo que el aleatorio tiene en cuenta, siempre a mano: lo que te gusta y cuándo sonó de verdad cada una.
     @Volatile private var liked = emptySet<String>()
@@ -154,6 +180,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
             }
         }
         scope.launch { prefs.smartMix.collect { _smartMix.value = it } }
+        scope.launch { prefs.djGenre.collect { _djGenre.value = it } }
         scope.launch { prefs.likedIds.collect { liked = it } }
         // El historial cambia con cada canción: es cuando el diario de escuchas tiene algo nuevo.
         scope.launch {
@@ -166,7 +193,9 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     fun connect() {
         if (future != null) return
         val token = SessionToken(context, ComponentName(context, PlaybackService::class.java))
-        val f = MediaController.Builder(context, token).buildAsync()
+        val f = MediaController.Builder(context, token)
+            .setListener(controllerListener)
+            .buildAsync()
         future = f
         f.addListener({
             val c = runCatching { f.get() }.getOrNull() ?: return@addListener
@@ -174,6 +203,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
             c.addListener(listener)
             publish(c)
             publishQueue(c)
+            applyDjSessionExtras(c.sessionExtras)
             pending.forEach { it(c) }
             pending.clear()
         }, ContextCompat.getMainExecutor(context))
@@ -477,6 +507,71 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         controller?.sendCustomCommand(SessionCommand(DJ_MODE_COMMAND, Bundle.EMPTY), Bundle().apply { putString(EXTRA_DJ_MODE, mode.name) })
     }
 
+    /** Se ciñe a un género tuyo (null: todo). Si el DJ ya suena, la próxima ya es de él. */
+    fun setDjGenre(name: String?) {
+        _djGenre.value = name
+        scope.launch { prefs.setDjGenre(name) }
+        if (mirror != null) return
+        controller?.sendCustomCommand(SessionCommand(DJ_GENRE_COMMAND, Bundle.EMPTY), Bundle().apply { putString(EXTRA_DJ_GENRE, name.orEmpty()) })
+    }
+
+    /** Salta el ambiente que pincha el DJ: pasa ya a una canción de otra tanda, lejos de esta. */
+    fun skipDjTanda() {
+        if (mirror != null || _source.value?.kind != "DJ") return
+        controller?.sendCustomCommand(SessionCommand(DJ_SKIP_COMMAND, Bundle.EMPTY), Bundle.EMPTY)
+    }
+
+    /** Anula el recorte ADHD solo para la canción que está sonando («Oír esta entera»). */
+    fun playDjFullOnce() {
+        if (mirror != null || _source.value?.kind != "DJ") return
+        _djFullOnce.value = true
+        controller?.sendCustomCommand(SessionCommand(DJ_FULL_ONCE_COMMAND, Bundle.EMPTY), Bundle.EMPTY)
+    }
+
+    /** Veta un tema en NextUp del DJ y lo reemplaza al instante en cola y en la lista. */
+    fun vetoDjNextUp(trackId: String) {
+        if (mirror != null || _source.value?.kind != "DJ" || trackId.isBlank()) return
+        controller?.sendCustomCommand(
+            SessionCommand(DJ_VETO_COMMAND, Bundle.EMPTY),
+            Bundle().apply { putString(EXTRA_DJ_TRACK_ID, trackId) },
+        )
+    }
+
+    /** Arranca el DJ usando [song] como semilla inicial («Arrancar DJ desde aquí»). */
+    fun playDjFrom(song: SongItem, mode: DjMode = _djMode.value, onFail: () -> Unit = {}) {
+        mirror?.let { return it.send("dj") }
+        _djMode.value = mode
+        scope.launch { prefs.setDjMode(mode) }
+        withController { c ->
+            shuffling?.cancel()
+            val before = _source.value
+            val beforeId = currentListId
+            currentListId = null
+            _source.value = djSource(mode)
+            original = null
+            _loopMode.value = LoopMode.Off
+            c.repeatMode = Player.REPEAT_MODE_OFF
+            val args = Bundle().apply {
+                putString(EXTRA_DJ_TRACK_ID, song.id)
+                putString(EXTRA_DJ_TITLE, song.title)
+                putString(EXTRA_DJ_ARTIST, song.artists.joinToString(", ") { it.name })
+                putStringArrayList(EXTRA_DJ_ARTISTS, ArrayList(song.artists.map { it.name }))
+                putStringArrayList(EXTRA_DJ_ARTIST_IDS, ArrayList(song.artists.map { it.id.orEmpty() }))
+                song.thumbnail.takeIf { it.isNotBlank() }?.let { putString(EXTRA_DJ_ARTWORK, it) }
+                song.duration?.let { putInt(EXTRA_DJ_SECONDS, it) }
+                putString(EXTRA_DJ_MODE, mode.name)
+            }
+            val result = c.sendCustomCommand(SessionCommand(DJ_START_FROM_COMMAND, Bundle.EMPTY), args)
+            result.addListener({
+                if (runCatching { result.get().resultCode }.getOrNull() != SessionResult.RESULT_SUCCESS) {
+                    currentListId = beforeId
+                    _source.value = before
+                    onFail()
+                }
+            }, ContextCompat.getMainExecutor(context))
+        }
+    }
+
     fun reactDj(trackId: String, reaction: DjReaction) {
         if (mirror != null || _source.value?.kind != "DJ" || trackId.isBlank()) return
         controller?.sendCustomCommand(
@@ -488,7 +583,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         )
     }
 
-    private fun djSource(mode: DjMode) = Source("DJ", if (mode == DjMode.Adhd) "Modo rápido (ADHD)" else "Mezcla para ti")
+    private fun djSource(mode: DjMode) = Source("DJ", if (mode == DjMode.Adhd) "DJ rápido" else "Mezcla para ti")
 
     private fun playDjHere(mode: DjMode, onFail: () -> Unit) = withController { c ->
         shuffling?.cancel()
@@ -589,11 +684,28 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         controller?.let(action) ?: run { pending += action; connect() }
     }
 
+    private val controllerListener = object : MediaController.Listener {
+        override fun onExtrasChanged(controller: MediaController, extras: Bundle) {
+            applyDjSessionExtras(extras)
+        }
+    }
+
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             publish(player)
             if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_REPEAT_MODE_CHANGED)) publishQueue(player)
         }
+    }
+
+    private fun applyDjSessionExtras(extras: Bundle) {
+        val sessionTanda = extras.getString(SESSION_DJ_TANDA)
+        val itemTanda = controller?.currentMediaItem?.mediaMetadata?.extras?.getString(DJ_TANDA)
+        _djTanda.value = itemTanda ?: sessionTanda
+        _djFullOnce.value = extras.getBoolean(SESSION_DJ_FULL_ONCE, false)
+        _djNextUp.value = DjSessionCodec.decodeNextUp(extras.getString(SESSION_DJ_NEXT_UP))
+        _mixing.value = extras.getBoolean(SESSION_DJ_MIXING, false)
+        _djMix.value = NextMix.from(extras)
+        _djNextTransitionStyle.value = DjBridgeStyle.fromId(extras.getString(SESSION_DJ_NEXT_STYLE))
     }
 
     private fun publish(p: Player) {
@@ -619,6 +731,17 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
             index = p.currentMediaItemIndex,
             error = p.playerError?.errorCodeName,
         )
+        val sessionExtras = (p as? MediaController)?.sessionExtras ?: controller?.sessionExtras
+        val itemTanda = item?.mediaMetadata?.extras?.getString(DJ_TANDA)
+        val sessionTanda = sessionExtras?.getString(SESSION_DJ_TANDA)
+        _djTanda.value = itemTanda ?: sessionTanda
+        _mixing.value = sessionExtras?.getBoolean(SESSION_DJ_MIXING, false) ?: false
+        _djMix.value = sessionExtras?.let(NextMix::from)
+        _djNextTransitionStyle.value = DjBridgeStyle.fromId(sessionExtras?.getString(SESSION_DJ_NEXT_STYLE))
+        _djFullOnce.value = sessionExtras?.getBoolean(SESSION_DJ_FULL_ONCE, false) ?: false
+        if (_djTanda.value == null && sessionExtras == null) {
+            _djNextUp.value = emptyList()
+        }
         if (mirror == null) _state.value = _localState.value
     }
 
@@ -648,3 +771,20 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
 
 /** Pasado esto, «anterior» vuelve al principio de la que suena en vez de cambiar de canción. */
 private const val RESTART_MS = 3_000L
+
+/** Lo que la interfaz sabe de la próxima mezcla (ver [PlayerConnection.djMix]). */
+data class NextMix(val startMs: Long, val switchMs: Long, val state: MixUiState?) {
+    val ready: Boolean get() = state == MixUiState.Ready
+    val preparing: Boolean get() = state == MixUiState.Preparing
+
+    companion object {
+        fun from(extras: Bundle): NextMix? {
+            val state = MixUiState.fromId(extras.getString(SESSION_DJ_MIX_STATE))
+            // «Preparando» sin plan aún: sin marca en la barra (inicio -1), pero el aviso de la cola sí.
+            val start = extras.getLong(SESSION_DJ_MIX_START_MS, -1L).takeIf { it >= 0L }
+                ?: return if (state == MixUiState.Preparing) NextMix(-1L, -1L, state) else null
+            val switch = extras.getLong(SESSION_DJ_MIX_SWITCH_MS, -1L).takeIf { it >= start } ?: start
+            return NextMix(start, switch, state)
+        }
+    }
+}

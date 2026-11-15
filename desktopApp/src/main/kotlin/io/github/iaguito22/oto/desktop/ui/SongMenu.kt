@@ -41,6 +41,7 @@ internal fun rememberSongActions(
         { h: Heard, listId: String? ->
             buildList {
                 add(ContextMenuItem("Reproducir a continuación") { player.playNext(h.toSong()) })
+                add(ContextMenuItem("Arrancar DJ desde aquí") { player.playDjFrom(h.toSong()) })
                 add(ContextMenuItem("Guardar en…") { save(h) })
                 val downloaded = h.id in requestedIds
                 add(ContextMenuItem(if (downloaded) "Quitar la descarga" else "Descargar") { scope.launch { prefs.setDownloadSong(h, !downloaded) } })

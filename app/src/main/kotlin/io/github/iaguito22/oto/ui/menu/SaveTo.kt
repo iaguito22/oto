@@ -52,7 +52,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -99,13 +98,14 @@ data class Saving(val songs: List<Heard>, val title: String, val sub: String, va
  * Con varias, la marca solo sale si están todas; tocar añade las que falten (o, si están todas, las quita).
  */
 @Composable
-fun ColumnScope.SaveTo(what: Saving, onDone: () -> Unit) {
+fun ColumnScope.SaveTo(what: Saving, onDone: () -> Unit, onStartDj: (() -> Unit)? = null) {
     val c = Oto.colors
     val app = LocalContext.current.applicationContext as OtoApp
     val prefs = app.prefs
     val liked by prefs.likedIds.collectAsStateWithLifecycle(initialValue = null)
     val playlists by prefs.playlists.collectAsStateWithLifecycle(initialValue = null)
-    val scope = rememberCoroutineScope()
+    val scope = app.scope
+    val newList = remember { NewListState(if (what.songs.size > 1) what.title else "") }
     val haptics = LocalHapticFeedback.current
     val tick: (Boolean) -> Unit = { on -> haptics.performHapticFeedback(if (on) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff) }
     val songs = what.songs
@@ -141,14 +141,38 @@ fun ColumnScope.SaveTo(what: Saving, onDone: () -> Unit) {
             }
         }
         // Una canción suelta empieza sin nombre; un álbum propone el suyo.
-        NewListRow(suggested = if (songs.size > 1) what.title else "", onCreate = { name ->
+        NewListRow(suggested = if (songs.size > 1) what.title else "", state = newList, onCreate = { name ->
             tick(true)
             songs.forEach { app.player.reactDj(it.id, io.github.iaguito22.oto.dj.DjReaction.Save) }
             scope.launch { prefs.createPlaylist(name, songs) }
         })
     }
+    if (onStartDj != null) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(Radius.lg))
+                .clickable(remember { MutableInteractionSource() }, ripple(color = c.text), onClick = onStartDj)
+                .padding(horizontal = Space.sm, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(40.dp).clip(RoundedCornerShape(Radius.md)).background(c.field), contentAlignment = Alignment.Center) {
+                Icon(painterResource(R.drawable.ic_graphic_eq), null, Modifier.size(20.dp), tint = c.accent)
+            }
+            Spacer(Modifier.width(Space.md))
+            Text("Arrancar DJ desde aquí", style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
     Row(Modifier.fillMaxWidth().padding(horizontal = Space.sm, vertical = Space.sm), horizontalArrangement = Arrangement.End) {
-        Pill("Listo", onDone, icon = R.drawable.ic_check)
+        Pill("Listo", {
+            if (newList.naming && newList.name.text.isNotBlank()) {
+                val name = newList.name.text
+                newList.naming = false
+                songs.forEach { app.player.reactDj(it.id, io.github.iaguito22.oto.dj.DjReaction.Save) }
+                scope.launch { prefs.createPlaylist(name, songs) }
+            }
+            onDone()
+        }, icon = R.drawable.ic_check)
     }
 }
 
@@ -197,10 +221,15 @@ internal fun Check(on: Boolean) {
 }
 
 /** «Nueva lista…» se convierte en el campo del nombre sin salir de la tarjeta. */
+class NewListState(suggested: String) {
+    var naming by mutableStateOf(false)
+    var name by mutableStateOf(TextFieldValue(suggested, TextRange(suggested.length)))
+}
+
 @Composable
-fun NewListRow(suggested: String, label: String = "Nueva lista…", icon: Int = R.drawable.ic_add, onCreate: (String) -> Unit) {
+fun NewListRow(suggested: String, label: String = "Nueva lista…", icon: Int = R.drawable.ic_add, state: NewListState = remember { NewListState(suggested) }, onCreate: (String) -> Unit) {
     val c = Oto.colors
-    var naming by remember { mutableStateOf(false) }
+    var naming by remember { state::naming }
     AnimatedContent(
         targetState = naming,
         transitionSpec = { fadeIn(tween(Motion.EFFECTS, delayMillis = 40)) togetherWith fadeOut(tween(Motion.EFFECTS_FAST)) using SizeTransform(clip = false) },
@@ -221,7 +250,7 @@ fun NewListRow(suggested: String, label: String = "Nueva lista…", icon: Int = 
             Text(label, style = OtoType.rowTitle, color = c.accent)
         } else {
             // Con nombre propuesto, el cursor al final: lo normal es dejarlo o añadirle algo.
-            var name by remember { mutableStateOf(TextFieldValue(suggested, TextRange(suggested.length))) }
+            var name by remember { state::name }
             val focus = remember { FocusRequester() }
             LaunchedEffect(Unit) { delay(120); focus.requestFocus() }
             val ok = name.text.isNotBlank()

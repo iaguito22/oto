@@ -2,10 +2,11 @@ package io.github.iaguito22.oto.desktop.playback
 
 import io.github.iaguito22.oto.dj.AdhdPlanner
 import io.github.iaguito22.oto.dj.AdhdSegment
+import io.github.iaguito22.oto.dj.DjTransitionPlan
 
 internal sealed interface TransitionAction {
     data object None : TransitionAction
-    data class StartCrossfade(val durationMs: Long) : TransitionAction
+    data class StartCrossfade(val durationMs: Long, val plan: DjTransitionPlan? = null) : TransitionAction
     data object FinishTrackNow : TransitionAction
 }
 
@@ -30,8 +31,18 @@ internal object DesktopTransitionPlanner {
         crossfadeSupported: Boolean,
         nextReady: Boolean,
         adhdSegment: AdhdSegment?,
+        plan: DjTransitionPlan? = null,
     ): TransitionAction {
         if (!playing || buffering) return TransitionAction.None
+        if (plan != null && crossfadeSupported && !ramSaver && nextReady && plan.fadeDurationMs > 0L) {
+            if (positionMs >= plan.outgoingFadeStartMs) {
+                return TransitionAction.StartCrossfade(plan.fadeDurationMs, plan)
+            }
+            if (adhdSegment != null && positionMs >= adhdSegment.endMs) {
+                return TransitionAction.FinishTrackNow
+            }
+            return TransitionAction.None
+        }
         if (adhdSegment != null) {
             val canMix = crossfadeSupported && !ramSaver && nextReady
             if (canMix && positionMs >= adhdSegment.fadeOutStartMs) {
@@ -47,6 +58,26 @@ internal object DesktopTransitionPlanner {
         if (durationMs < fadeMs * 3L) return TransitionAction.None
         if (durationMs - positionMs <= fadeMs) return TransitionAction.StartCrossfade(fadeMs)
         return TransitionAction.None
+    }
+
+    /**
+     * Dónde empezará la mezcla y cuánto durará, con las mismas reglas que [evaluate]: el plan si lo hay, si no el
+     * trozo del DJ rápido, si no el fundido al final. null si no habrá mezcla.
+     */
+    fun mixWindow(
+        durationMs: Long,
+        configuredFadeSeconds: Int,
+        ramSaver: Boolean,
+        crossfadeSupported: Boolean,
+        adhdSegment: AdhdSegment?,
+        plan: DjTransitionPlan?,
+    ): Pair<Long, Long>? {
+        if (!crossfadeSupported || ramSaver) return null
+        if (plan != null && plan.fadeDurationMs > 0L) return plan.outgoingFadeStartMs to plan.fadeDurationMs
+        if (adhdSegment != null) return adhdSegment.fadeOutStartMs to adhdSegment.mixOutDurationMs
+        val fadeMs = configuredFadeSeconds.coerceAtLeast(0) * 1000L
+        if (fadeMs <= 0L || durationMs < fadeMs * 3L) return null
+        return (durationMs - fadeMs) to fadeMs
     }
 
     fun listenedDurationMs(

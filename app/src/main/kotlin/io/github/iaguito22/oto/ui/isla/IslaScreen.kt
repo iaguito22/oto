@@ -2,8 +2,12 @@ package io.github.iaguito22.oto.ui.isla
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import com.metrolist.innertube.models.Artist
+import com.metrolist.innertube.models.SongItem
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.composed
 import androidx.compose.ui.text.LinkAnnotation
@@ -336,7 +340,35 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
         Floating(
             saving, onDismiss = { saving = null },
             cardModifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime)),
-        ) { song -> SaveTo(Saving(song), onDone = { saving = null }) }
+        ) { song ->
+            SaveTo(
+                Saving(song),
+                onDone = { saving = null },
+                onStartDj = if (!connection.mirrored) ({
+                    val seed = if (np.id == song.id) {
+                        SongItem(
+                            id = song.id,
+                            title = np.title.ifBlank { song.title },
+                            artists = np.artists.filter { it.first.isNotBlank() }.ifEmpty { listOf(song.artist to song.artistId) }
+                                .map { Artist(it.first, it.second) },
+                            thumbnail = np.artwork ?: song.artwork.orEmpty(),
+                            duration = (np.durationMs / 1000L).toInt().takeIf { it > 0 },
+                        )
+                    } else {
+                        SongItem(
+                            id = song.id,
+                            title = song.title,
+                            artists = listOf(Artist(song.artist, song.artistId)),
+                            thumbnail = song.artwork.orEmpty(),
+                        )
+                    }
+                    saving = null
+                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                    connection.playDjFrom(seed, onFail = { flash = CueLabel(R.drawable.ic_graphic_eq, "El DJ no ha podido empezar") })
+                    flash = CueLabel(R.drawable.ic_graphic_eq, "DJ desde «${seed.title}»")
+                }) else null,
+            )
+        }
         SheetHost(sheet, { dropCenter }, dropRadius, warm = SheetKind.Menu) { kind ->
             when (kind) {
                 // Cerrado sigue montado (ver [SheetHost]): sus barras de «sonando» no se mueven donde no se ven.
@@ -460,8 +492,7 @@ private fun Stage(
     val paused by animateFloatAsState(if (np.id != null && !np.playing && !np.buffering) 1f else 0f, spring(dampingRatio = 0.62f, stiffness = 300f), label = "paused")
     val beat by (LocalContext.current.applicationContext as OtoApp).prefs.coverBeat.collectAsStateWithLifecycle(initialValue = true)
     val source by connection.source.collectAsStateWithLifecycle()
-    val djMood by connection.djMood.collectAsStateWithLifecycle()
-    val djMode by connection.djMode.collectAsStateWithLifecycle()
+    val mixing by connection.mixing.collectAsStateWithLifecycle()
     val next by connection.queue.collectAsStateWithLifecycle()
     val previous by connection.previousEntry.collectAsStateWithLifecycle()
     // Tirar hacia abajo del origen o de la carátula abre de dónde viene lo que suena.
@@ -479,9 +510,6 @@ private fun Stage(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(SOURCE_TOP))
             SourceHeader(source.takeIf { np.id != null }, pull, onCenter = { sourceCenter = it }, onOpen = { onSource(sourceCenter) })
-            if (source?.kind == "DJ" && np.id != null && !connection.mirrored) {
-                DjLiveBar(djMood, djMode, connection, onFlash)
-            }
         }
         BoxWithConstraints(Modifier.padding(horizontal = 36.dp), contentAlignment = Alignment.Center) {
             val side = minOf(maxWidth, 340.dp, (maxHeight - LYRICS_EXTRA).coerceAtLeast(COVER_MIN))
@@ -564,7 +592,7 @@ private fun Stage(
                 Artists(song, onArtist)
             }
         }
-        StatusLine(np)
+        StatusLine(np, mixing && !connection.mirrored)
         Spacer(Modifier.height(10.dp))
         if (np.id != null) Progress(np, connection, Modifier.padding(horizontal = 36.dp))
         else Spacer(Modifier.height(PROGRESS_H))
@@ -623,51 +651,6 @@ private fun SourceHeader(source: Source?, pull: Animatable<Float, *>, onCenter: 
         Text(
             s.title, style = OtoType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 48.dp),
-        )
-    }
-}
-
-/** Pastillas discretas en vivo para cambiar de mood y alternar DJ rápido (ADHD) sin salir del reproductor. */
-@Composable
-private fun DjLiveBar(mood: DjMood, mode: DjMode, connection: PlayerConnection, onFlash: (CueLabel) -> Unit) {
-    val c = Oto.colors
-    val haptics = LocalHapticFeedback.current
-    val adhd = mode == DjMode.Adhd
-    Row(
-        Modifier.padding(top = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            "Mood: ${mood.label}",
-            style = OtoType.label.copy(fontSize = 11.sp),
-            color = if (mood != DjMood.Auto) c.accent else c.textMuted,
-            modifier = Modifier
-                .clip(CircleShape)
-                .background(if (mood != DjMood.Auto) c.accent.copy(alpha = 0.20f) else c.field)
-                .clickable(remember { MutableInteractionSource() }, null) {
-                    val entries = DjMood.entries
-                    val next = entries[(entries.indexOf(mood) + 1) % entries.size]
-                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                    connection.setDjMood(next)
-                    onFlash(CueLabel(R.drawable.ic_graphic_eq, "Mood: ${next.label}"))
-                }
-                .padding(horizontal = 12.dp, vertical = 5.dp),
-        )
-        Text(
-            "DJ rápido (ADHD)",
-            style = OtoType.label.copy(fontSize = 11.sp),
-            color = if (adhd) c.accent else c.textMuted,
-            modifier = Modifier
-                .clip(CircleShape)
-                .background(if (adhd) c.accent.copy(alpha = 0.20f) else c.field)
-                .clickable(remember { MutableInteractionSource() }, null) {
-                    val next = if (adhd) DjMode.Normal else DjMode.Adhd
-                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                    connection.setDjMode(next)
-                    onFlash(CueLabel(R.drawable.ic_timer, if (next == DjMode.Adhd) "DJ rápido (ADHD)" else "DJ normal"))
-                }
-                .padding(horizontal = 12.dp, vertical = 5.dp),
         )
     }
 }
@@ -901,12 +884,13 @@ private fun dim(saturation: Float, brightness: Float) = ColorMatrix().apply {
 }
 
 @Composable
-private fun StatusLine(np: NowPlaying) {
+private fun StatusLine(np: NowPlaying, mixing: Boolean) {
     val c = Oto.colors
     val text = when {
         np.error != null -> "No se pudo reproducir"
         np.buffering -> "Cargando"
         np.id != null && !np.playing -> "En pausa"
+        mixing && np.id != null -> "Mezclando"
         else -> null
     }
     Box(Modifier.height(30.dp), contentAlignment = Alignment.Center) {
@@ -929,6 +913,13 @@ private fun Progress(np: NowPlaying, connection: PlayerConnection, modifier: Mod
     val scope = rememberCoroutineScope()
     val prefs = (LocalContext.current.applicationContext as OtoApp).prefs
     val remaining by prefs.showRemaining.collectAsStateWithLifecycle(initialValue = false)
+    val nextMix by connection.djMix.collectAsStateWithLifecycle()
+    // Sale en cuanto se sabe dónde va a ser el cambio (aunque la mezcla aún se prepare) y entra sin saltos.
+    val shownMix = nextMix?.takeIf { !connection.mirrored && np.durationMs > 0L && it.startMs in 1L until np.durationMs }
+    var lastMix by remember { mutableStateOf(shownMix) }
+    if (shownMix != null) lastMix = shownMix
+    val mixAlpha by animateFloatAsState(if (shownMix != null) 1f else 0f, tween(Motion.EFFECTS), label = "mixMark")
+    val mixZone by animateFloatAsState(if (shownMix?.ready == true) 1f else 0.6f, tween(Motion.EFFECTS), label = "mixZone")
     val pos = remember { mutableLongStateOf(0L) }
     var drag by remember { mutableStateOf<Float?>(null) }
     val dur = np.durationMs
@@ -960,12 +951,35 @@ private fun Progress(np: NowPlaying, connection: PlayerConnection, modifier: Mod
                     drag?.let(seek)
                     drag = null
                 })
+                // Capa propia: la muesca de la mezcla se recorta de la barra y deja ver el fondo.
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                 .drawBehind {
                     val f = drag ?: if (dur > 0) (pos.longValue.toFloat() / dur).coerceIn(0f, 1f) else 0f
                     val h = lerp(4.dp.toPx(), 8.dp.toPx(), thick)
                     val y = (size.height - h) / 2
                     drawRoundRect(Color.White.copy(alpha = 0.16f), Offset(0f, y), Size(size.width, h), CornerRadius(h / 2))
                     if (f > 0f) drawRoundRect(c.accent, Offset(0f, y), Size(maxOf(h, size.width * f), h), CornerRadius(h / 2))
+                    // La mezcla, dentro de la barra y sin sobresalir: un tramo apenas más claro desde que empieza hasta
+                    // que pasa a oírse la siguiente, y una muesca fina donde empieza.
+                    val mix = lastMix
+                    if (mix != null && mixAlpha > 0f && dur > 0L) {
+                        val mx = size.width * (mix.startMs.toFloat() / dur).coerceIn(0f, 1f)
+                        val sx = size.width * (mix.switchMs.toFloat() / dur).coerceIn(0f, 1f)
+                        if (sx > mx) {
+                            drawRect(
+                                Color.White.copy(alpha = 0.13f * mixZone * mixAlpha),
+                                Offset(mx, y),
+                                Size(sx - mx, h),
+                            )
+                        }
+                        val gap = 1.5.dp.toPx()
+                        drawRect(
+                            Color.Black.copy(alpha = mixAlpha),
+                            Offset(mx - gap / 2f, y - 1f),
+                            Size(gap, h + 2f),
+                            blendMode = BlendMode.DstOut,
+                        )
+                    }
                 },
         )
         val style = OtoType.label.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.sp, fontFeatureSettings = "tnum")
