@@ -59,7 +59,7 @@ jobs:
             check_log oto-linux-single.log
             kill $app_pid 2>/dev/null || true
             wait $app_pid 2>/dev/null || true
-            pkill -f "/opt/oto/runtime" 2>/dev/null || true
+            pkill -f "[/]opt/oto/runtime/bin/java" 2>/dev/null || true
             sleep 2
 
             # 2. Varias ventanas, elegidas en Ajustes: bienvenida y reproductor.
