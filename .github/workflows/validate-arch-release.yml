@@ -22,7 +22,9 @@ jobs:
       - name: Instalar con pacman en Arch Linux
         run: |
           docker run --rm -v "$PWD/packages:/packages:ro" archlinux:base bash -euc '
-            pacman -Sy --noconfirm
+            # Actualización completa: con solo -Sy, las dependencias nuevas chocan con paquetes viejos de la imagen
+            # (p. ej. openssl-3 frente a openssl).
+            pacman -Syu --noconfirm
             pacman -U --noconfirm /packages/*.pkg.tar.zst
             /opt/oto/runtime/bin/java -version
             test -x /opt/oto/bin/Oto

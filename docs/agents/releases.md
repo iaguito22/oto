@@ -2,6 +2,13 @@
 
 Índice en `AGENTS.md`. Estados de 03–05/11/2026; contrastar con `git log` y GitHub.
 
+## Release 2.2.0 — 18/11/2026
+
+- https://github.com/iaguito22/oto/releases/tag/v2.2.0, etiqueta → `9c79677` en `main`. Instalador `Oto-2.2.0-Setup.exe`, `Oto-2.2.0-windows-x64.msi` (con CDS), DEB, Arch, APK pública (`io.github.iaguito22.oto`, firma 4043c8…, versionCode 16), Android 12 (`.android12`, misma firma) y SHA256SUMS. Sin APK phone.
+- Copias y notas: `C:\Users\iago\Documents\Codex\2026-11-18\release-2.2.0`. Android 12: rama local `android12` rebasada sobre `main` (`25478ce`), sin subir.
+- `prepare-cds.ps1` espera ahora «Oto» (Una ventana) o «Oto · Reproductor». Pruebas antes de publicar: core 264 (7 omitidas), escritorio 137 (9), Android 114 (1), 0 fallos.
+- No instalada todavía en el PC ni en el móvil de Iago.
+
 ## Release 2.1.1 — 07/11/2026 (solo Windows)
 
 - https://github.com/iaguito22/oto/releases/tag/v2.1.1: solo `Oto-2.1.1-windows-x64.msi` (con CDS y FFmpeg) y SHA256SUMS. Linux y Android siguen en la 2.1.0 (este PC, `igl20`, no tiene SDK de Android ni la firma). Solo sube `packageVersion` del escritorio; Android sigue en 2.1.0 / versionCode 15.

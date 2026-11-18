@@ -39,7 +39,33 @@ jobs:
           xvfb-run -a bash -euc '
             openbox > /tmp/openbox.log 2>&1 &
             sleep 2
-            export XDG_DATA_HOME="$RUNNER_TEMP/oto-data" XDG_CACHE_HOME="$RUNNER_TEMP/oto-cache" SKIKO_RENDER_API=SOFTWARE_FAST
+            export SKIKO_RENDER_API=SOFTWARE_FAST
+            check_log() {
+              if grep -E "UnsatisfiedLinkError|NoClassDefFoundError|Exception in thread|No se pudo abrir la bienvenida" "$1"; then exit 1; fi
+            }
+
+            # 1. Primer arranque: «Una ventana», la interfaz predeterminada desde la 2.2.0 (ventana «Oto», sin bienvenida).
+            export XDG_DATA_HOME="$RUNNER_TEMP/oto-single-data" XDG_CACHE_HOME="$RUNNER_TEMP/oto-single-cache"
+            oto > oto-linux-single.log 2>&1 &
+            app_pid=$!
+            for attempt in $(seq 1 60); do
+              if xdotool search --onlyvisible --name "^Oto$" >/dev/null 2>&1; then break; fi
+              sleep 1
+            done
+            xdotool search --onlyvisible --name "^Oto$"
+            if xdotool search --onlyvisible --name "Oto · Bienvenida" >/dev/null 2>&1; then echo "Una ventana no debe abrir la bienvenida"; exit 1; fi
+            sleep 4
+            python3 tools/check-desktop-session.py "$XDG_DATA_HOME/oto" "^Oto$"
+            check_log oto-linux-single.log
+            kill $app_pid 2>/dev/null || true
+            wait $app_pid 2>/dev/null || true
+            pkill -f "/opt/oto/runtime" 2>/dev/null || true
+            sleep 2
+
+            # 2. Varias ventanas, elegidas en Ajustes: bienvenida y reproductor.
+            export XDG_DATA_HOME="$RUNNER_TEMP/oto-data" XDG_CACHE_HOME="$RUNNER_TEMP/oto-cache"
+            mkdir -p "$XDG_DATA_HOME/oto"
+            printf "%s" "{\"shell_mode\":\"docking\"}" > "$XDG_DATA_HOME/oto/modular_windows.json"
             oto > oto-linux.log 2>&1 &
             app_pid=$!
             trap "kill $app_pid 2>/dev/null || true" EXIT
@@ -58,7 +84,7 @@ jobs:
             xdotool search --onlyvisible --name "Oto · Reproductor"
             if xdotool search --name "Oto · Tu música" >/dev/null 2>&1; then echo "La biblioteca no debe abrir en el primer arranque"; exit 1; fi
             python3 tools/check-desktop-session.py "$XDG_DATA_HOME/oto"
-            if grep -E "UnsatisfiedLinkError|NoClassDefFoundError|Exception in thread|No se pudo abrir la bienvenida" oto-linux.log; then exit 1; fi
+            check_log oto-linux.log
           '
       - uses: actions/upload-artifact@v4
         if: always()
@@ -66,5 +92,6 @@ jobs:
           name: comprobacion-linux
           path: |
             oto-linux.log
+            oto-linux-single.log
             arch-files.txt
             hs_err_pid*.log

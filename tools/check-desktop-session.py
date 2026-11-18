@@ -8,6 +8,8 @@ import time
 import urllib.request
 
 data = Path(sys.argv[1])
+# Ventana que debe ocultarse y volver: «Oto · Reproductor» (varias ventanas) o «^Oto$» (Una ventana).
+window = sys.argv[2] if len(sys.argv) > 2 else 'Oto · Reproductor'
 show = json.loads((data / 'desktop_access.json').read_text())['url']
 assert show.startswith('http://127.0.0.1:') and show.endswith('/show')
 hide = show[:-len('/show')]
@@ -17,7 +19,7 @@ def request(url):
         assert response.status == 204
 
 def player_visible():
-    return subprocess.run(['xdotool','search','--onlyvisible','--name','Oto · Reproductor'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode == 0
+    return subprocess.run(['xdotool','search','--onlyvisible','--name',window],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode == 0
 
 for _ in range(3):
     request(hide)
