@@ -8,6 +8,7 @@
 - Copias y notas: `C:\Users\iago\Documents\Codex\2026-11-18\release-2.2.0`. Android 12: rama local `android12` rebasada sobre `main` (`25478ce`), sin subir.
 - `prepare-cds.ps1` espera ahora «Oto» (Una ventana) o «Oto · Reproductor». Pruebas antes de publicar: core 264 (7 omitidas), escritorio 137 (9), Android 114 (1), 0 fallos.
 - Actions sobre el borrador: «Comprobar paquete Arch» 44413915364 (con `pacman -Syu`) y «Comprobar paquetes Linux» 44414147375 (Una ventana y Varias ventanas), correctas.
+- **19/11 ~00:25, archivos SUSTITUIDOS (`--clobber`) por petición de Iago** con `926ac19` («Preparando» sin mezcla en el PC y consenso de LRCLIB). La etiqueta `v2.2.0` sigue en `9c79677` (no se reescriben etiquetas publicadas): los archivos son posteriores a ella. Notas con «Actualización del 19/11». Reinstalada en el PC (desinstalar + MSI, JAR `597A8E21…FAF8`) y en el móvil (phone, SHA-256 `7e6d0242…b14d`). Pruebas: core 267 (7), escritorio 139 (9), Android 114 (1), 0 fallos.
 - INSTALADA el 18/11 ~23:45. PC: MSI encima de la 2.1.1, código 0, una sola entrada «Oto 2.2.0», JAR igual al compilado (`CB14A99E…1B02`), abierta con el perfil real sin errores nuevos. Móvil: APK phone 2.2.0/16 (`install -r`, firma 717d8f…, SHA-256 `2f83222d…b586` local e instalada); la cola en memoria se pierde al reinstalar.
 
 ## Release 2.1.1 — 07/11/2026 (solo Windows)

@@ -4,6 +4,7 @@ Actualizado: 18/11/2026. Actualizar tras cambios importantes. Distinguir impleme
 
 ## Estado actual
 
+- **19/11 ~00:25, archivos de la v2.2.0 SUSTITUIDOS e INSTALADOS en PC y móvil** (`926ac19`). PC: `nextMixState` ya no deja «Preparando» si el plan preparado no mezcla (fundido 0 o enlace al final). Letras: `LyricsSource.pickLrclib` usa el consenso de las versiones de LRCLIB (la exacta de «Faint» iba 1,5 s tarde: 30,58 → 29,04 s, comprobado contra LRCLIB real); las sincronizadas de LRCLIB con `matchVersion` 2 se vuelven a pedir (`MATCH_VERSION` 3). Sin oír. Android no revisado para el aviso «Preparando».
 - **18/11 ~23:45, release v2.2.0 PUBLICADA** (detalle en `docs/agents/releases.md`). Etiqueta en `9c79677`; después solo CI y notas. INSTALADA en el PC (MSI, `%LOCALAPPDATA%\Oto Desktop`) y en el Nothing (phone 2.2.0/16). `scratchpad/` y `app/src/debug/assets/` quedan fuera del repo (`.gitignore`).
 - **18/11 ~23:30, revisión previa a la release y calidad tras un cuadre de beats. IMPLEMENTADO y PROBADO en tests, incluido en la 2.2.0. Sin oír.**
   - Iago notó pérdida de calidad/distorsión en la canción que entra tras un cuadre (PC, dos temas de Katsuo Ohno a las 22:49 en `plays.jsonl`).
