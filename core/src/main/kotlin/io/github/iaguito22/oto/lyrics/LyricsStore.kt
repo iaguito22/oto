@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap
  * «No hay letra» también se guarda, pero solo unos días: las fuentes la van teniendo con el tiempo.
  */
 class LyricsStore(private val dir: File) {
+    private data class Cached(val lyrics: Lyrics, val refreshSpacing: Boolean = false)
     private val memory = MemCache<String, Lyrics>(64)
     private val romMemory = MemCache<String, Map<String, String>>(64)
     private val running = ConcurrentHashMap<String, CompletableDeferred<LyricsSource.Fetched>>()
@@ -27,7 +28,7 @@ class LyricsStore(private val dir: File) {
 
     suspend fun get(q: LyricsQuery): LyricsSource.Fetched {
         memory.get(q.id)?.let { return LyricsSource.Fetched(it, true) }
-        read(q.id)?.let { memory.put(q.id, it); return LyricsSource.Fetched(it, true) }
+        read(q.id)?.lyrics?.let { memory.put(q.id, it); return LyricsSource.Fetched(it, true) }
         val mine = CompletableDeferred<LyricsSource.Fetched>()
         val other = running.putIfAbsent(q.id, mine)
         if (other != null) return other.await()
@@ -50,6 +51,22 @@ class LyricsStore(private val dir: File) {
         write(id, lyrics)
     }
 
+    /** Migra una letra afectada sin retrasar ni ocultar la versión guardada mientras se abre la vista. */
+    suspend fun repairNetEaseSpacing(q: LyricsQuery, current: Lyrics?): Lyrics.Synced? {
+        if (current !is Lyrics.Synced || !missingLatinWordSpaces(current)) return null
+        val cached = read(q.id) ?: return null
+        val old = cached.lyrics as? Lyrics.Synced ?: return null
+        if (!cached.refreshSpacing) return old.takeUnless(::missingLatinWordSpaces)
+        val fresh = LyricsSource.fetch(q).lyrics as? Lyrics.Synced
+        if (fresh != null && fresh.wordByWord && !missingLatinWordSpaces(fresh)) {
+            put(q.id, fresh)
+            return fresh
+        }
+        val latest = memory.get(q.id) ?: read(q.id)?.lyrics
+        if (latest == old) write(q.id, old, retrySpacingAt = System.currentTimeMillis() + SPACING_RETRY_MS)
+        return null
+    }
+
     /** La pronunciación de una letra (japonés, chino, coreano, cirílico), también guardada. */
     suspend fun romanized(id: String, lyrics: Lyrics.Synced): Map<String, String>? {
         romMemory.get(id)?.let { return it }
@@ -63,21 +80,24 @@ class LyricsStore(private val dir: File) {
         return r
     }
 
-    private suspend fun read(id: String): Lyrics? = withContext(Dispatchers.IO) {
+    private suspend fun read(id: String): Cached? = withContext(Dispatchers.IO) {
         val file = File(dir, "$id.json")
         if (!file.exists()) return@withContext null
         runCatching {
             val o = JSONObject(file.readText())
             if (o.optInt("matchVersion") != 2) return@runCatching null
             when (o.getString("t")) {
-                "missing" -> Lyrics.Missing.takeIf { System.currentTimeMillis() - file.lastModified() < MISSING_MS }
-                "plain" -> Lyrics.Plain(o.getJSONArray("l").strings(), o.getString("src"))
-                else -> Lyrics.Synced(o.getJSONArray("l").objects().map(::line), o.getString("src"), o.optString("lang").ifEmpty { null })
+                "missing" -> Cached(Lyrics.Missing).takeIf { System.currentTimeMillis() - file.lastModified() < MISSING_MS }
+                "plain" -> Cached(Lyrics.Plain(o.getJSONArray("l").strings(), o.getString("src")))
+                else -> {
+                    val lyrics = Lyrics.Synced(o.getJSONArray("l").objects().map(::line), o.getString("src"), o.optString("lang").ifEmpty { null })
+                    Cached(lyrics, o.optLong("retrySpacingAt") <= System.currentTimeMillis() && missingLatinWordSpaces(lyrics))
+                }
             }
         }.onFailure { Timber.w(it, "Letra guardada ilegible: %s", id) }.getOrNull()
     }
 
-    private suspend fun write(id: String, l: Lyrics) = withContext(Dispatchers.IO) {
+    private suspend fun write(id: String, l: Lyrics, retrySpacingAt: Long? = null) = withContext(Dispatchers.IO) {
         val o = when (l) {
             Lyrics.Missing -> JSONObject().put("t", "missing")
             is Lyrics.Plain -> JSONObject().put("t", "plain").put("l", JSONArray(l.lines)).put("src", l.source)
@@ -86,9 +106,22 @@ class LyricsStore(private val dir: File) {
         runCatching {
             dir.mkdirs()
             o.put("matchVersion", 2)
-            File(dir, "$id.json").writeText(o.toString())
+            val file = File(dir, "$id.json")
+            if (l is Lyrics.Synced && missingLatinWordSpaces(l)) {
+                val retry = retrySpacingAt ?: runCatching { JSONObject(file.readText()).optLong("retrySpacingAt") }.getOrDefault(0L)
+                if (retry > 0) o.put("retrySpacingAt", retry)
+            }
+            file.writeText(o.toString())
             trim()
         }.onFailure { Timber.w(it, "No se pudo guardar la letra") }
+    }
+
+    private fun missingLatinWordSpaces(lyrics: Lyrics.Synced): Boolean {
+        if (lyrics.source != "NetEase" || !lyrics.wordByWord) return false
+        val lines = lyrics.lines.filter { line ->
+            line.words.size >= 3 && line.words.all { word -> word.text.all { it in ' '..'~' || it == '’' } }
+        }
+        return lines.size >= 3 && lines.count { line -> line.words.dropLast(1).none { it.space } } * 3 >= lines.size * 2
     }
 
     /** Las más viejas fuera cuando pasan de [MAX_FILES]: unos pocos MB como mucho. */
@@ -121,6 +154,7 @@ class LyricsStore(private val dir: File) {
 
     private companion object {
         const val MISSING_MS = 3 * 24 * 3600_000L
+        const val SPACING_RETRY_MS = 24 * 3600_000L
         const val MAX_FILES = 1500
     }
 }

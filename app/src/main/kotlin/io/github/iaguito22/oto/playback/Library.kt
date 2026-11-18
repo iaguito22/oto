@@ -91,7 +91,7 @@ class Library(
 
     private fun djItem(id: String, title: String, subtitle: String) = MediaItem.Builder().setMediaId(id).setMediaMetadata(
         MediaMetadata.Builder().setTitle(title).setSubtitle(subtitle).setIsPlayable(true).setIsBrowsable(false)
-            .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST).build(),
+            .setArtworkUri(CarArtworkProvider.djUri(context)).setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST).build(),
     ).build()
 
     private fun action(id: String, shuffle: Boolean) = MediaItem.Builder()
@@ -106,7 +106,7 @@ class Library(
             MediaMetadata.Builder()
                 .setTitle(title)
                 .setSubtitle(subtitle)
-                .setArtworkUri(art?.let { CarArtworkProvider.uri(context, it) })
+                .setArtworkUri(if (id == DJ_MENU) CarArtworkProvider.djUri(context) else art?.let { CarArtworkProvider.uri(context, it) })
                 .setIsBrowsable(true)
                 .setIsPlayable(false)
                 .setMediaType(if (id.startsWith(FOLDER) || id == MUSIC || id == RECENT || id == ROOT) MediaMetadata.MEDIA_TYPE_FOLDER_MIXED else MediaMetadata.MEDIA_TYPE_PLAYLIST)

@@ -4,16 +4,34 @@
 
 ## Windows
 
-JDK 21, WiX 3.11/3.14 y FFmpeg. Configurar `WIX_TOOLSET_DIR` y `OTO_FFMPEG_DIR` cuando las herramientas no estén en PATH.
+JDK 21, WiX 3.11/3.14, .NET Framework 4.8 y FFmpeg. Configurar `WIX_TOOLSET_DIR` y `OTO_FFMPEG_DIR` cuando las herramientas no estén en PATH.
 
 ```powershell
 ./gradlew.bat :core:test :desktopApp:test --no-configuration-cache
 ./desktopApp/package-windows.ps1
 ```
 
-El MSI se genera en `desktopApp/build/dist`, con panel y cabecera propios de Oto. La instalación es por usuario y conserva las preferencias fuera de la carpeta de la app. Incrementar la versión para permitir actualización normal. El UUID de actualización permanece estable.
+El instalador para Windows es `Oto-<versión>-Setup.exe`. Incluye el MSI y muestra la instalación, el progreso y el resultado en una sola ventana. Los dos archivos se generan en `desktopApp/build/dist`. El MSI también está disponible para instalación administrada. La instalación es por usuario y conserva las preferencias fuera de la carpeta de la app. Incrementar la versión para permitir la actualización y mantener el UUID de actualización del MSI.
 
-El diseño no concede reputación de seguridad. Para distribución firmada hace falta una identidad Authenticode válida, consistente y con sellado de tiempo; no se incluye ninguna clave en este repositorio. No crear exclusiones de antivirus ni desactivar SmartScreen. Microsoft explica las diferencias entre firma, reputación y avisos en https://learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation.
+Para revisar únicamente el diseño, generar una vista previa sin carga instalable:
+
+```powershell
+./desktopApp/packaging/windows/build-setup.ps1 -Version 2.2.0 -Destination "$env:TEMP/oto-setup-preview" -Preview
+```
+
+### SmartScreen («Windows protegió tu PC»)
+
+Al abrir el instalador sin firma Authenticode, Windows puede mostrar un aviso de reputación.
+
+**Cómo saltárselo** (el usuario final):
+1. Aparece la pantalla «Windows protegió tu PC» con el botón **Ejecutar de todas formas** oculto.
+2. Hacer clic en **Más información** (enlace gris, parte superior).
+3. El botón **Ejecutar de todas formas** queda visible → hacer clic.
+
+**Por qué aparece:**
+SmartScreen requiere reputación acumulada (descargas + tiempo) o firma con un certificado Authenticode de confianza emitida por una CA comercial (DigiCert, Sectigo…). Sin firma, cada nueva versión empieza desde cero.
+
+**Para que desaparezca** el ejecutable tiene que acumular reputación con descargas y tiempo. Firmarlo con un certificado Authenticode ayuda a que esa reputación se conserve entre versiones; desde 2024 ni siquiera un certificado EV la da al instante. No incluir claves ni contraseñas en el repositorio.
 
 ## Ubuntu y Arch Linux
 
@@ -31,4 +49,4 @@ La clave de `phone` puede indicarse con `OTO_PHONE_KEYSTORE`; el resto de creden
 
 ## Release
 
-Publicar una etiqueta `v<versión>` que apunte al commit probado de `main`. Adjuntar MSI de Windows, DEB de Ubuntu, paquete Arch y APK identificado; incluir `SHA256SUMS.txt` y explicar cualquier limitación de firma. Las fuentes incluyen la bienvenida; las grabaciones originales y los perfiles de prueba quedan fuera.
+Publicar una etiqueta `v<versión>` que apunte al commit probado de `main`. Adjuntar el instalador EXE de Windows, el MSI, el DEB de Ubuntu, el paquete Arch y el APK identificado. Incluir `SHA256SUMS.txt` y explicar cualquier limitación de firma. Las fuentes incluyen la bienvenida. Las grabaciones originales y los perfiles de prueba quedan fuera.

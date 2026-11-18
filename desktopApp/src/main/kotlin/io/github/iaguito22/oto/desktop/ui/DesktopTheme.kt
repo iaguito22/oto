@@ -19,7 +19,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
-/** El acento de reserva del móvil mientras no hay carátula (o si no tiene color). */
+/** El acento de reserva mientras no hay una carátula disponible. */
 val DefaultAccent = Color(0xFF8FD3DB)
 
 /** El rojo suave del móvil para borrar y para los avisos de error. */
@@ -107,7 +107,7 @@ object ArtworkLoader {
         }
     }
 
-    private fun extractPalette(bmp: ImageBitmap): ArtworkPalette {
+    internal fun extractPalette(bmp: ImageBitmap): ArtworkPalette {
         val w = bmp.width
         val h = bmp.height
         if (w <= 0 || h <= 0) return ArtworkPalette()
@@ -122,12 +122,15 @@ object ArtworkLoader {
         val binB = LongArray(numBins)
         val binCount = IntArray(numBins)
 
-        var totalR = 0L; var totalG = 0L; var totalB = 0L; var totalCount = 0
+        var sampleCount = 0
+        var chromaticCount = 0
         val step = max(1, (w * h) / 1600)
         var i = 0
 
         while (i < pixels.size) {
             val px = pixels[i]
+            i += step
+            if ((px ushr 24) < 128) continue
             val r = (px shr 16) and 0xFF
             val g = (px shr 8) and 0xFF
             val b = px and 0xFF
@@ -140,10 +143,11 @@ object ArtworkLoader {
             val lum = (mx + mn) / 2f
             val sat = if (delta < 0.001f) 0f else delta / (1f - abs(2f * lum - 1f))
 
-            totalR += r; totalG += g; totalB += b; totalCount++
+            sampleCount++
 
             // Buscamos colores vivos con presencia cromática (descartando blancos quemados o negros puros)
-            if (lum in 0.12f..0.88f && sat > 0.18f) {
+            if (lum in 0.12f..0.88f && sat > 0.18f && delta >= 0.10f) {
+                chromaticCount++
                 val hue = when {
                     delta < 0.001f -> 0f
                     mx == rf -> 60f * (((gf - bf) / delta) % 6f)
@@ -160,8 +164,9 @@ object ArtworkLoader {
                 binB[bin] += b
                 binCount[bin]++
             }
-            i += step
         }
+
+        if (sampleCount == 0) return ArtworkPalette()
 
         // Ordenamos las cubetas por peso acumulado
         val sortedBins = (0 until numBins)
@@ -191,12 +196,14 @@ object ArtworkLoader {
             return hslToColor(hue, finalSat, targetLightness)
         }
 
-        val primaryBin = sortedBins.firstOrNull()
+        // El color debe ocupar una parte visible de la portada. Los detalles de
+        // color aislados en una imagen casi monocroma no determinan el acento.
+        val primaryBin = sortedBins.firstOrNull()?.takeIf { chromaticCount >= sampleCount * 0.08f }
         // Como en el móvil: el acento tiene que leerse sobre el fondo oscuro, claro y con color si la portada lo tiene.
         val accent = if (primaryBin != null) {
             binToColor(primaryBin, targetLightness = 0.70f, targetSatFloor = 0.38f)
         } else {
-            DefaultAccent
+            Color.White
         }
         return ArtworkPalette(primary = accent, secondary = accent, tertiary = accent, deep = Color(0xFF0B0B0B))
     }

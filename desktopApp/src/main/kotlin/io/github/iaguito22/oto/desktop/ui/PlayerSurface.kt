@@ -41,7 +41,7 @@ internal enum class PlayerForm(val label:String, val width:Int, val height:Int) 
 /** Barra de 2 px, área táctil amplia y sin pomo permanente, como la del móvil. */
 @Composable
 internal fun FineSlider(value:Float, onChange:(Float)->Unit, modifier:Modifier=Modifier, label:String="Posición", onFinish:()->Unit={}, expanded:Boolean=false,
-    mix:MixMark?=null) {
+    mix:MixMark?=null,activeColor:Color=Color.White.copy(alpha=.85f),bottomAligned:Boolean=false) {
     val current by rememberUpdatedState(onChange)
     val finish by rememberUpdatedState(onFinish)
     val fraction by rememberUpdatedState(value.coerceIn(0f,1f))
@@ -62,9 +62,9 @@ internal fun FineSlider(value:Float, onChange:(Float)->Unit, modifier:Modifier=M
     }.pointerInput(Unit) {
         detectDragGestures(onDragStart={dragging=true},onDragEnd={dragging=false;finish()},onDragCancel={dragging=false;finish()}) { change,_ -> change.consume();current((change.position.x/size.width).coerceIn(0f,1f)) }
     }) {
-        val y=size.height/2
-        drawLine(Color.White.copy(alpha=.13f),Offset(0f,y),Offset(size.width,y),(2.dp + 2.dp * emphasis).toPx(),StrokeCap.Round)
-        if(fraction>0)drawLine(Color.White.copy(alpha=.85f),Offset(0f,y),Offset(size.width*fraction,y),(2.dp + 2.dp * emphasis).toPx(),StrokeCap.Round)
+        val y=if(bottomAligned)size.height-(1.dp + 1.dp * emphasis).toPx() else size.height/2
+        drawLine(Color.White.copy(alpha=if(bottomAligned).25f else .13f),Offset(0f,y),Offset(size.width,y),(2.dp + 2.dp * emphasis).toPx(),StrokeCap.Round)
+        if(fraction>0)drawLine(activeColor,Offset(0f,y),Offset(size.width*fraction,y),(2.dp + 2.dp * emphasis).toPx(),StrokeCap.Round)
         val m=lastMix
         if(m != null && mixAlpha>0f) {
             // Dentro de la barra y sin sobresalir: un tramo apenas más claro hasta que pasa a oírse la siguiente y

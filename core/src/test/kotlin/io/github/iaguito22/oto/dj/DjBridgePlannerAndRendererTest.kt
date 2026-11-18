@@ -75,6 +75,7 @@ class DjBridgePlannerAndRendererTest {
         drumEnergy: Double = 0.70,
         kickSteady: Double = 0.85,
         overrideBars: Map<Long, BarFeature> = emptyMap(),
+        kickOnBeat: Double = kickSteady,
     ): AudioMetrics {
         val bars = ArrayList<BarFeature>()
         var t = 0L
@@ -92,6 +93,7 @@ class DjBridgePlannerAndRendererTest {
                 drumEnergy = drumEnergy,
                 harshness = harsh,
                 vocalRatio = 0.15,
+                kickOnBeat = kickOnBeat,
             )
             t += 2_000L
         }
@@ -149,17 +151,17 @@ class DjBridgePlannerAndRendererTest {
             autoLength = true,
         )
         assertEquals(DjBridgeStyle.BeatMatchLongMix, spec.style)
-        // Hasta 75 s antes del final de A y 45 s dentro de B (lo pidió Iago: no hace falta ir pegado a los bordes).
+        // Hasta 75 s antes del final de A y 45 s dentro de B (lo pidiÃ³ Iago: no hace falta ir pegado a los bordes).
         assertTrue("DJ Normal exit must stay in last 75s of A, got ${spec.cueOutStartMs}", spec.cueOutStartMs >= 105_000L)
         assertTrue("DJ Normal entry must stay in first 45s of B, got ${spec.entryInMs}", spec.entryInMs <= 45_000L)
     }
 
     @Test
     fun halfAnalysedSongDoesNotPutTheMixBeforeTheWindow() {
-        // Medido en el móvil: con solo los primeros 56 s analizados de 185, el plan ponía el cambio en 54 s
-        // sonando ya en 108 s (DJ rápido, trozo 108–184 s), y no había mezcla hasta acabar el análisis.
+        // Medido en el mÃ³vil: con solo los primeros 56 s analizados de 185, el plan ponÃ­a el cambio en 54 s
+        // sonando ya en 108 s (DJ rÃ¡pido, trozo 108â€“184 s), y no habÃ­a mezcla hasta acabar el anÃ¡lisis.
         val full = metricsWithBars("a", bpm = 118.0, durMs = 185_000L)
-        // Como sale del analizador con solo el principio: el «último sonido» es donde se acaba lo analizado.
+        // Como sale del analizador con solo el principio: el Â«Ãºltimo sonidoÂ» es donde se acaba lo analizado.
         val partial = full.copy(
             bars = full.bars.filter { it.endMs <= 56_000L }, analyzedMs = 56_000L,
             lastSoundMs = 55_600L, outroStartMs = 55_600L,
@@ -179,7 +181,7 @@ class DjBridgePlannerAndRendererTest {
             isDjSession = true,
             autoLength = true,
         )
-        assertTrue("el cambio debe quedar en el trozo que suena, salió en ${spec.cueOutStartMs}", spec.cueOutStartMs >= 150_000L)
+        assertTrue("el cambio debe quedar en el trozo que suena, saliÃ³ en ${spec.cueOutStartMs}", spec.cueOutStartMs >= 150_000L)
     }
 
     @Test
@@ -350,7 +352,7 @@ class DjBridgePlannerAndRendererTest {
     }
 
     @Test
-    fun allFiveStylesRenderSampleAccurateWavBelowCeiling() {
+    fun allStylesRenderSampleAccurateWavBelowCeiling() {
         val sliceA = synthStereoFloat(durationSec = 24.0, bpm = 122.0, freqHz = 220.0)
         val sliceB = synthStereoFloat(durationSec = 24.0, bpm = 124.0, freqHz = 330.0)
         val tempDir = Files.createTempDirectory("oto-bridge-test").toFile()
@@ -388,6 +390,7 @@ class DjBridgePlannerAndRendererTest {
                 val spec = when (style) {
                     DjBridgeStyle.EnergyDropCut -> baseSpec.copy(style = style, transitionDurationMs = 1_000L, cueOutEndMs = 6_500L)
                     DjBridgeStyle.LyricLoopCut -> baseSpec.copy(style = style, transitionDurationMs = 3_000L)
+                    DjBridgeStyle.OutroTail -> baseSpec.copy(style = style, cueOutEndMs = 7_000L, transitionDurationMs = 2_250L)
                     else -> baseSpec.copy(style = style)
                 }
                 val rendered = DjBridgeRenderer.renderSliceBridge(
@@ -447,7 +450,7 @@ class DjBridgePlannerAndRendererTest {
 
     @Test
     fun balancedSelectionAndRecentVarietyPreventFilterEchoMonopoly() {
-        // 1. Baladas con pequeña variación tímbrica natural y mismo tempo: no deben disparar FilterEcho.
+        // 1. Baladas con pequeÃ±a variaciÃ³n tÃ­mbrica natural y mismo tempo: no deben disparar FilterEcho.
         val balladA = metricsWithBars("balA", bpm = 67.3, camelot = "8B", harsh = 0.14, highRms = 0.16, lowRms = 0.34, drumEnergy = 0.32)
         val balladB = metricsWithBars("balB", bpm = 65.7, camelot = "8B", harsh = 0.30, highRms = 0.24, lowRms = 0.22, drumEnergy = 0.32)
         val balladSpec = DjBridgePlanner.plan(
@@ -463,7 +466,7 @@ class DjBridgePlannerAndRendererTest {
         assertNotEquals("ballads in same style should not fall into FilterEcho", DjBridgeStyle.FilterEcho, balladSpec.style)
         assertEquals(DjBridgeStyle.BeatMatchLongMix, balladSpec.style)
 
-        // 2. Temas melódicos con distinto BPM pero textura amable y sin cambio de tanda -> SmartFade.
+        // 2. Temas melÃ³dicos con distinto BPM pero textura amable y sin cambio de tanda -> SmartFade.
         val calmA = metricsWithBars("calmA", bpm = 115.0, camelot = "8A", harsh = 0.14, highRms = 0.14, lowRms = 0.32, drumEnergy = 0.26, kickSteady = 0.40)
         val calmB = metricsWithBars("calmB", bpm = 74.0, camelot = "9A", harsh = 0.18, highRms = 0.16, lowRms = 0.30, drumEnergy = 0.24, kickSteady = 0.35)
         val calmSpec = DjBridgePlanner.plan(
@@ -503,7 +506,7 @@ class DjBridgePlannerAndRendererTest {
         assertEquals(DjBridgeStyle.EnergyDropCut, dropSpec.style)
         assertTrue("el corte va antes de la subida de A: ${dropSpec.cueOutEndMs}", dropSpec.cueOutEndMs in 149_500L until 150_000L)
 
-        // 4. Con historial repetido, evita encadenar la misma transición cuando hay otra alternativa sólida.
+        // 4. Con historial repetido, evita encadenar la misma transiciÃ³n cuando hay otra alternativa sÃ³lida.
         val sameTempoWithDropA = metricsWithBars("syncA", bpm = 124.0, camelot = "8A", drumEnergy = 0.58, overrideBars = liftOverrides)
         val sameTempoWithDropB = metricsWithBars("syncB", bpm = 122.5, camelot = "8A", lufs = -10.6, drumEnergy = 0.68, overrideBars = dropOverrides)
         val freshSpec = DjBridgePlanner.plan(
@@ -550,6 +553,8 @@ class DjBridgePlannerAndRendererTest {
             durationMs = 190_000L,
             beatGrid = (0L..188_000L step 8_000L).toList(),
             analyzedMs = 190_000L,
+            // Con bombo al pulso: el bucle vocal solo estira B si lo hay en las dos.
+            bars = metricsWithBars("lrc-a-bars", 120.0, durMs = 190_000L).bars,
         )
         val inAudio = AudioMetrics(
             trackId = "lrc-b",
@@ -566,6 +571,7 @@ class DjBridgePlannerAndRendererTest {
             durationMs = 190_000L,
             beatGrid = (0L..188_000L step 8_000L).toList(),
             analyzedMs = 190_000L,
+            bars = metricsWithBars("lrc-b-bars", 126.0, durMs = 190_000L).bars,
         )
         val lyricsA = io.github.iaguito22.oto.lyrics.Lyrics.Synced(
             lines = listOf(
@@ -653,6 +659,15 @@ class DjBridgePlannerAndRendererTest {
         assertTrue("Expected doubleSpeedTail=true on short LRC line-edge word", spec.lyricLoop?.doubleSpeedTail == true)
         assertEquals(beatMs, outAudio.beatPeriodMs!!.toLong())
         assertTrue("Expected B tempoMatchRatio near 120/126 (was ${spec.tempoMatchRatio})", spec.tempoMatchRatio in 0.94..0.97)
+        // Sin bombo medido en B, la frase entra a su velocidad (no se estira).
+        val noKickSpec = DjBridgePlanner.plan(
+            outgoingDurationMs = 190_000L, incomingDurationMs = 190_000L, configuredFadeMs = 8_000L,
+            outgoingAudio = outAudio, incomingAudio = inAudio.copy(bars = inAudio.bars.map { it.copy(kickOnBeat = 0.05) }),
+            outgoingLyrics = fastLyricsA, incomingLyrics = fastLyricsB, djMode = DjMode.Normal, isDjSession = true,
+            autoLength = true, recentStyles = emptyList(),
+        )
+        assertEquals(DjBridgeStyle.LyricLoopCut, noKickSpec.style)
+        assertEquals(1.0, noKickSpec.tempoMatchRatio, 1e-9)
 
         val originA = (spec.preRollStartMs - 1_000L).coerceAtLeast(0L)
         val sliceDurationMsA = (spec.cueOutEndMs - originA + 2_000L).coerceAtLeast(12_000L)
@@ -861,6 +876,7 @@ class DjBridgePlannerAndRendererTest {
             drumEnergy = 0.44,
             harshness = 0.14,
             vocalRatio = 0.65,
+            kickOnBeat = 0.68,
         )
         val vocalA = metricsWithBars(
             id = "otra-vez",
@@ -931,12 +947,12 @@ class DjBridgePlannerAndRendererTest {
         )
         assertNotNull(spec)
         if (spec!!.style == DjBridgeStyle.FilterEcho) {
-            // Para BPM lejanos (~32.6% diff), FilterEcho debe ir con filtro limpio sin añadir eco descolocado.
+            // Para BPM lejanos (~32.6% diff), FilterEcho debe ir con filtro limpio sin aÃ±adir eco descolocado.
             assertEquals("Incompatible BPM FilterEcho should omit rhythmic echo delay", 0.0, spec.echoDelayMs, 0.5)
             assertTrue("Incompatible BPM echo duration ${spec.transitionDurationMs}ms must stay <= 6800ms", spec.transitionDurationMs <= 6_800L)
         }
 
-        // Cuando dos temas compatibles en tempo con rejilla sólida disparan FilterEcho (p.ej. choque tímbrico), el eco va a 1 negra exacta (beatMs).
+        // Cuando dos temas compatibles en tempo con rejilla sÃ³lida disparan FilterEcho (p.ej. choque tÃ­mbrico), el eco va a 1 negra exacta (beatMs).
         val cleanPianoA = metricsWithBars("clean-piano", bpm = 100.0, camelot = "8A", harsh = 0.05, highRms = 0.08, lowRms = 0.35, drumEnergy = 0.25, kickSteady = 0.35)
             .copy(bpmConfidence = 0.90, beatGrid = (0L..20_000L step 600L).toList())
         val rockGuitarB = metricsWithBars("rock-guitar", bpm = 100.0, camelot = "8A", harsh = 0.78, highRms = 0.65, lowRms = 0.14, drumEnergy = 0.55)
@@ -1093,7 +1109,7 @@ class DjBridgePlannerAndRendererTest {
     @Test
     fun beatMatchAlignsSlowHalfBeatOffsetAndFilterEchoOmitsEchoOnGenreOrHarmonyClash() {
         val sr = DjDsp.DJ_SAMPLE_RATE
-        // 1) Con cambio de tanda o armonía chocante, FilterEcho omite el eco (solo filtro limpio) para no emborronar B.
+        // 1) Con cambio de tanda o armonÃ­a chocante, FilterEcho omite el eco (solo filtro limpio) para no emborronar B.
         val piano8A = metricsWithBars("piano-8a", bpm = 100.0, camelot = "8A", harsh = 0.05, highRms = 0.08, lowRms = 0.35, drumEnergy = 0.25, kickSteady = 0.35)
             .copy(bpmConfidence = 0.90, beatGrid = (0L..20_000L step 600L).toList())
         val guitar8A = metricsWithBars("guitar-8a", bpm = 100.0, camelot = "8A", harsh = 0.78, highRms = 0.65, lowRms = 0.14, drumEnergy = 0.55)
@@ -1140,7 +1156,7 @@ class DjBridgePlannerAndRendererTest {
             val period = 60.0 / bpm
             for (f in 0 until frames) {
                 val t = f.toDouble() / sr
-                // Subgrave continuo 52 Hz que confundía el rectificador abs() anterior.
+                // Subgrave continuo 52 Hz que confundÃ­a el rectificador abs() anterior.
                 var v = (kotlin.math.sin(2.0 * kotlin.math.PI * 52.0 * t) * 0.22).toFloat()
                 val rel = t - phaseMs / 1000.0
                 if (rel >= 0.0) {
@@ -1156,7 +1172,7 @@ class DjBridgePlannerAndRendererTest {
         }
 
         val sliceA = kickWithSubBass(18.0, bpm = 92.0, phaseMs = 0.0)
-        // B a 99 BPM con entrada en 5000 ms, pero sus bombos van ~305 ms más tarde respecto al compás 6 de A (3913 ms, casi a contratiempo).
+        // B a 99 BPM con entrada en 5000 ms, pero sus bombos van ~305 ms mÃ¡s tarde respecto al compÃ¡s 6 de A (3913 ms, casi a contratiempo).
         val sliceB = kickWithSubBass(18.0, bpm = 99.0, phaseMs = 5_000.0 + 305.0 - kotlin.math.floor(5_000.0 / (60_000.0 / 99.0)) * (60_000.0 / 99.0))
         val slowSpec = DjBridgeSpec(
             style = DjBridgeStyle.BeatMatchLongMix,
@@ -1196,7 +1212,7 @@ class DjBridgePlannerAndRendererTest {
             echoDelayMs = 600.0,
         )
         val echoA = kickWithSubBass(16.0, bpm = 100.0, phaseMs = 0.0)
-        // B a 100 BPM desfasada +180 ms respecto a los beats múltiplos de 600 ms de A.
+        // B a 100 BPM desfasada +180 ms respecto a los beats mÃºltiplos de 600 ms de A.
         val echoB = kickWithSubBass(16.0, bpm = 100.0, phaseMs = 5_000.0 + 180.0 - 4_800.0)
         val echoRendered = DjBridgeRenderer.renderSliceBridge(lockedEchoRenderSpec, echoA, 0L, echoB, 0L, sampleRate = sr)
         assertTrue(
@@ -1267,7 +1283,7 @@ class DjBridgePlannerAndRendererTest {
         )
         assertNotEquals(DjBridgeStyle.LyricLoopCut, harmonyClash.style)
 
-        // Cuando sí coinciden tempo y armonía, se renderiza 1.0x rítmico sin chipmunk y sin NaNs.
+        // Cuando sÃ­ coinciden tempo y armonÃ­a, se renderiza 1.0x rÃ­tmico sin chipmunk y sin NaNs.
         val validSpec = DjBridgePlanner.plan(
             outgoingDurationMs = 180_000L,
             incomingDurationMs = 180_000L,
@@ -1304,7 +1320,7 @@ class DjBridgePlannerAndRendererTest {
         assertNotEquals(DjBridgeStyle.BeatMatchLongMix, clashSpec.style)
         assertNotEquals(DjBridgeStyle.SmartFade, clashSpec.style)
 
-        // En pareja compatible rápida (8A -> 9A), BeatMatchLongMix proyecta dryBResumeMs multiplicado por ratio + planeo.
+        // En pareja compatible rÃ¡pida (8A -> 9A), BeatMatchLongMix proyecta dryBResumeMs multiplicado por ratio + planeo.
         val goodB = metricsWithBars("bm-9a", bpm = 112.0, camelot = "9A", drumEnergy = 0.65, kickSteady = 0.85)
         val goodSpec = DjBridgePlanner.plan(
             outgoingDurationMs = 180_000L,
@@ -1316,8 +1332,9 @@ class DjBridgePlannerAndRendererTest {
         )
         assertEquals(DjBridgeStyle.BeatMatchLongMix, goodSpec.style)
         assertTrue(
-            "dryBResumeMs debe cubrir transitionDur*ratio + 1600ms + postRoll",
-            goodSpec.dryBResumeMs - goodSpec.entryInMs >= (goodSpec.transitionDurationMs * goodSpec.tempoMatchRatio).toLong() + 1_600L,
+            "dryBResumeMs debe cubrir cruce estirado + vuelta + cola",
+            goodSpec.dryBResumeMs - goodSpec.entryInMs >= (goodSpec.transitionDurationMs * goodSpec.tempoMatchRatio).toLong() +
+                DjTempoMatch.bridgeTailSourceMs(goodSpec.bpmA, goodSpec.tempoMatchRatio),
         )
     }
 
@@ -1369,10 +1386,274 @@ class DjBridgePlannerAndRendererTest {
         assertTrue("El respiro final (-36 dB) debe quedar muy por debajo del eco (breath=$breathRms vs echo=$echoBloomRms)", breathRms < echoBloomRms * 0.12)
     }
 
+    @Test
+    fun energyDropCutBlocksMidWordMidChorusAndAllowsPreChorusBuildup() {
+        val dur = 180_000L
+        val adhdOut = AdhdSegment(
+            startMs = 45_000L,
+            endMs = 154_000L,
+            clipDurationMs = 109_000L,
+            fadeOutStartMs = 144_000L,
+            mixOutDurationMs = 10_000L,
+            fullDurationMs = dur,
+            fromLyrics = true,
+            fromAudio = true,
+        )
+        val liftBars = mapOf(
+            148_000L to BarFeature(148_000L, 150_000L, 90.0, -16.0, 0.24, 0.22, 0.14, 0.35, 0.25, 0.10, 0.12),
+            150_000L to BarFeature(150_000L, 152_000L, 90.0, -8.0, 0.56, 0.36, 0.24, 0.92, 0.86, 0.18, 0.12),
+        )
+        val outA = metricsWithBars("drop-out", bpm = 90.0, camelot = "8A", lufs = -10.5, durMs = dur, drumEnergy = 0.72, kickSteady = 0.88, overrideBars = liftBars)
+        val inB = metricsWithBars("drop-in", bpm = 126.0, camelot = "8A", lufs = -8.5, durMs = dur, drumEnergy = 0.84, kickSteady = 0.90)
+        val adhdIn = AdhdSegment(40_000L, 130_000L, 90_000L, 122_000L, 8_000L, dur, fromLyrics = false, fromAudio = true)
+
+        // 1) Nunca debe cortar en mitad de un estribillo aunque haya un subidÃ³n fuerte.
+        val midChorusPlan = DjBridgePlanner.plan(
+            outgoingDurationMs = dur,
+            incomingDurationMs = dur,
+            configuredFadeMs = 8_000L,
+            outgoingAudio = outA,
+            incomingAudio = inB,
+            outgoingVocals = listOf(SongSection(140_000L, 170_000L, repeat = 1.0)),
+            outgoingAdhd = adhdOut,
+            incomingAdhd = adhdIn,
+            djMode = DjMode.Adhd,
+        )
+        assertNotEquals("No debe hacer corte en drop dentro del estribillo", DjBridgeStyle.EnergyDropCut, midChorusPlan.style)
+
+        // 2) Nunca debe cortar a mitad de palabra o frase dentro de un verso.
+        val midWordLyrics = Lyrics.Synced(
+            lines = listOf(
+                Line(
+                    start = 148_500L,
+                    end = 152_000L,
+                    words = listOf(
+                        Word(148_500L, 149_500L, "sube", space = true),
+                        Word(149_500L, 150_600L, "fuerte", space = true),
+                        Word(150_600L, 151_800L, "ahora", space = false),
+                    ),
+                    real = true,
+                ),
+            ),
+            source = "test",
+        )
+        assertTrue(DjLyricMatcher.cutsWordOrPhrase(midWordLyrics, 150_000L))
+        val midWordPlan = DjBridgePlanner.plan(
+            outgoingDurationMs = dur,
+            incomingDurationMs = dur,
+            configuredFadeMs = 8_000L,
+            outgoingAudio = outA,
+            incomingAudio = inB,
+            outgoingLyrics = midWordLyrics,
+            outgoingVocals = listOf(SongSection(130_000L, 162_000L, repeat = 0.0)),
+            outgoingAdhd = adhdOut,
+            incomingAdhd = adhdIn,
+            djMode = DjMode.Adhd,
+        )
+        assertNotEquals("No debe cortar una palabra ni frase por la mitad", DjBridgeStyle.EnergyDropCut, midWordPlan.style)
+
+        // 3) Sin letra: si hay voz densa espectral (>= 0.34 / 0.30, antes por debajo de 0.45) tampoco debe cortar.
+        val blindVocalBars = mapOf(
+            148_000L to BarFeature(148_000L, 150_000L, 90.0, -16.0, 0.24, 0.24, 0.14, 0.35, 0.25, 0.10, 0.36),
+            150_000L to BarFeature(150_000L, 152_000L, 90.0, -8.0, 0.56, 0.36, 0.24, 0.92, 0.86, 0.18, 0.34),
+        )
+        val blindVocalA = metricsWithBars("drop-vocal", bpm = 90.0, camelot = "8A", lufs = -10.5, durMs = dur, drumEnergy = 0.72, kickSteady = 0.88, overrideBars = blindVocalBars)
+        val blindVocalPlan = DjBridgePlanner.plan(
+            outgoingDurationMs = dur,
+            incomingDurationMs = dur,
+            configuredFadeMs = 8_000L,
+            outgoingAudio = blindVocalA,
+            incomingAudio = inB,
+            outgoingAdhd = adhdOut,
+            incomingAdhd = adhdIn,
+            djMode = DjMode.Adhd,
+        )
+        assertNotEquals("Sin letra debe bloquear cortes con voz espectral densa", DjBridgeStyle.EnergyDropCut, blindVocalPlan.style)
+
+        // 4) En la costura de subida del preestribillo hacia el estribillo (con end estirado de LRC) sÃ­ debe permitir EnergyDropCut.
+        val preChorusLyrics = Lyrics.Synced(
+            lines = listOf(
+                Line(
+                    start = 147_000L,
+                    end = 150_250L,
+                    words = listOf(
+                        Word(147_000L, 148_200L, "ya", space = true),
+                        Word(148_200L, 149_450L, "llega", space = false),
+                    ),
+                    real = false,
+                ),
+                Line(
+                    start = 150_250L,
+                    end = 154_000L,
+                    words = listOf(Word(150_250L, 152_000L, "estribillo", space = false)),
+                    real = false,
+                ),
+            ),
+            source = "test",
+        )
+        val preChorusPlan = DjBridgePlanner.plan(
+            outgoingDurationMs = dur,
+            incomingDurationMs = dur,
+            configuredFadeMs = 8_000L,
+            outgoingAudio = outA,
+            incomingAudio = inB,
+            outgoingLyrics = preChorusLyrics,
+            outgoingVocals = listOf(
+                SongSection(130_000L, 149_500L, repeat = 0.0),
+                SongSection(150_250L, 175_000L, repeat = 1.0),
+            ),
+            outgoingAdhd = adhdOut,
+            incomingAdhd = adhdIn,
+            djMode = DjMode.Adhd,
+        )
+        assertEquals("Subida de preestribillo antes del drop debe permitir EnergyDropCut", DjBridgeStyle.EnergyDropCut, preChorusPlan.style)
+        assertTrue("El corte debe caer en la costura del preestribillo (${preChorusPlan.cueOutStartMs})", preChorusPlan.cueOutStartMs in 148_000L..150_250L)
+    }
+
+    @Test
+    fun isMidVocalIgnoresStretchedLrcInstrumentalGapBetweenLines() {
+        val stretchedLyrics = Lyrics.Synced(
+            lines = listOf(
+                Line(
+                    start = 60_000L,
+                    end = 82_000L,
+                    words = listOf(
+                        Word(60_000L, 62_500L, "canto", space = true),
+                        Word(62_500L, 65_000L, "aqui", space = false),
+                    ),
+                    real = false,
+                ),
+                Line(
+                    start = 82_000L,
+                    end = 86_000L,
+                    words = listOf(Word(82_000L, 86_000L, "despues", space = false)),
+                    real = false,
+                ),
+            ),
+            source = "lrc",
+        )
+        assertTrue("Mientras suena la frase cantada debe contar como mid-vocal", DjLyricMatcher.isMidVocal(stretchedLyrics, 62_000L))
+        assertTrue("Cortar una palabra activa debe devolver true", DjLyricMatcher.cutsWordOrPhrase(stretchedLyrics, 62_000L))
+        assertEquals("En el hueco instrumental estirado por LRC no hay voz real", false, DjLyricMatcher.isMidVocal(stretchedLyrics, 72_000L))
+        assertEquals("En el hueco instrumental entre estrofas no se corta palabra", false, DjLyricMatcher.cutsWordOrPhrase(stretchedLyrics, 72_000L))
+    }
+
+    @Test
+    fun smartFadeAndFilterEchoPreferLowIntensityValleysInEnergeticTracks() {
+        val dur = 180_000L
+        val valleyA = mapOf(
+            136_000L to BarFeature(136_000L, 138_000L, 72.0, -16.5, 0.22, 0.20, 0.10, 0.25, 0.16, 0.08, 0.04),
+            138_000L to BarFeature(138_000L, 140_000L, 72.0, -16.5, 0.22, 0.20, 0.10, 0.25, 0.16, 0.08, 0.04),
+            140_000L to BarFeature(140_000L, 142_000L, 72.0, -16.5, 0.22, 0.20, 0.10, 0.25, 0.16, 0.08, 0.04),
+            142_000L to BarFeature(142_000L, 144_000L, 72.0, -16.5, 0.22, 0.20, 0.10, 0.25, 0.16, 0.08, 0.04),
+            144_000L to BarFeature(144_000L, 146_000L, 72.0, -14.5, 0.28, 0.24, 0.12, 0.45, 0.32, 0.10, 0.36),
+            146_000L to BarFeature(146_000L, 148_000L, 72.0, -12.0, 0.36, 0.28, 0.16, 0.65, 0.52, 0.12, 0.36),
+        )
+        val calmEntryB = mapOf(
+            8_000L to BarFeature(8_000L, 10_000L, 128.0, -16.0, 0.22, 0.20, 0.10, 0.28, 0.18, 0.08, 0.04),
+            10_000L to BarFeature(10_000L, 12_000L, 128.0, -16.0, 0.22, 0.20, 0.10, 0.28, 0.18, 0.08, 0.04),
+            12_000L to BarFeature(12_000L, 14_000L, 128.0, -16.0, 0.22, 0.20, 0.10, 0.28, 0.18, 0.08, 0.04),
+            14_000L to BarFeature(14_000L, 16_000L, 128.0, -16.0, 0.22, 0.20, 0.10, 0.28, 0.18, 0.08, 0.04),
+        )
+        val outA = metricsWithBars("energetic-valley-a", bpm = 72.0, camelot = "8A", lufs = -9.5, durMs = dur, drumEnergy = 0.74, kickSteady = 0.85, overrideBars = valleyA)
+        val inB = metricsWithBars("energetic-valley-b", bpm = 128.0, camelot = "8A", lufs = -9.5, durMs = dur, drumEnergy = 0.74, kickSteady = 0.85, overrideBars = calmEntryB)
+
+        val plan = DjBridgePlanner.plan(
+            outgoingDurationMs = dur,
+            incomingDurationMs = dur,
+            configuredFadeMs = 8_000L,
+            outgoingAudio = outA,
+            incomingAudio = inB,
+            djMode = DjMode.Normal,
+        )
+        assertTrue(
+            "En zonas de baja intensidad dentro de temas energÃ©ticos debe preferir FilterEcho o SmartFade (fue ${plan.style})",
+            plan.style == DjBridgeStyle.SmartFade || plan.style == DjBridgeStyle.FilterEcho,
+        )
+        assertTrue("Debe anclar la salida en el valle tranquilo (${plan.cueOutStartMs})", plan.cueOutStartMs in 134_000L..144_000L)
+        assertTrue("Debe anclar la entrada en la zona tranquila de B (${plan.entryInMs})", plan.entryInMs in 4_000L..18_000L)
+    }
+
     private object EmptyCatalog : Catalog {
         override suspend fun artist(id: String): ArtistInfo? = null
         override suspend fun songs(info: ArtistInfo): List<Track> = emptyList()
         override suspend fun radio(id: String): List<Track> = emptyList()
         override suspend fun find(name: String): String? = null
+    }
+
+    @Test
+    fun everyStyleProtectsTheWholeOutgoingChorus() {
+        val chorus = SongSection(110_000L, 174_000L, 1.0)
+        for (recent in listOf(emptyList(), DjBridgeStyle.entries.toList())) {
+            for (bpm in listOf(120.0, 143.0)) {
+                val spec = DjBridgePlanner.plan(
+                    outgoingDurationMs = 180_000L, incomingDurationMs = 180_000L,
+                    configuredFadeMs = 10_000L,
+                    outgoingAudio = metricsWithBars("a", 120.0),
+                    incomingAudio = metricsWithBars("b", bpm),
+                    outgoingVocals = listOf(chorus), recentStyles = recent,
+                )
+                assertTrue("${spec.style}: ${spec.cueOutStartMs}..${spec.cueOutEndMs}",
+                    spec.cueOutEndMs <= chorus.startMs || spec.cueOutStartMs >= chorus.endMs)
+            }
+        }
+    }
+
+    @Test
+    fun rapidDjWaitsPastItsWindowForTheChorusToFinish() {
+        val chorus = SongSection(56_000L, 125_000L, 1.0)
+        val spec = DjBridgePlanner.plan(
+            outgoingDurationMs = 180_000L, incomingDurationMs = 180_000L,
+            configuredFadeMs = 10_000L,
+            outgoingAudio = metricsWithBars("a", 120.0), incomingAudio = metricsWithBars("b", 120.0),
+            outgoingVocals = listOf(chorus), djMode = DjMode.Adhd,
+            outgoingAdhd = AdhdSegment(0L, 100_000L, 100_000L, 90_000L, 10_000L, 180_000L),
+        )
+        assertTrue(spec.cueOutStartMs >= chorus.endMs)
+        assertTrue(spec.transitionDurationMs > 0L)
+    }
+
+    @Test
+    fun rapidDjStillMixesWhenTheIncomingEntryWindowIsInsideAChorus() {
+        // B empieza su trozo a mitad de un estribillo largo: toda la ventana de entrada (−8/+4 s) cae dentro de él.
+        val chorusB = SongSection(20_000L, 70_000L, 1.0)
+        val spec = DjBridgePlanner.plan(
+            outgoingDurationMs = 180_000L, incomingDurationMs = 200_000L,
+            configuredFadeMs = 10_000L,
+            outgoingAudio = metricsWithBars("a", 120.0), incomingAudio = metricsWithBars("b", 120.0),
+            incomingVocals = listOf(chorusB), djMode = DjMode.Adhd,
+            outgoingAdhd = AdhdSegment(20_000L, 100_000L, 80_000L, 90_000L, 10_000L, 180_000L),
+            incomingAdhd = AdhdSegment(40_000L, 130_000L, 90_000L, 120_000L, 10_000L, 200_000L),
+        )
+        assertTrue("debe mezclar: ${spec.reason}", spec.transitionDurationMs > 0L)
+        assertTrue("B no entra a mitad del estribillo: ${spec.entryInMs}",
+            spec.entryInMs <= chorusB.startMs || spec.entryInMs >= chorusB.endMs)
+    }
+
+    @Test
+    fun outsideRapidDjTheIncomingSongIsNotSkippedPastItsChorus() {
+        // Lista normal: B empieza con un estribillo de un minuto. No se salta ese minuto para entrar tras él.
+        val chorusB = SongSection(0L, 60_000L, 1.0)
+        val spec = DjBridgePlanner.plan(
+            outgoingDurationMs = 180_000L, incomingDurationMs = 200_000L,
+            configuredFadeMs = 10_000L,
+            outgoingAudio = metricsWithBars("a", 120.0), incomingAudio = metricsWithBars("b", 120.0),
+            incomingVocals = listOf(chorusB), isDjSession = false,
+        )
+        assertTrue("entrada ${spec.entryInMs}", spec.entryInMs < 10_000L)
+    }
+
+    @Test
+    fun chorusThroughTheEndUsesAnOutroTailBridge() {
+        val spec = DjBridgePlanner.plan(
+            outgoingDurationMs = 180_000L, incomingDurationMs = 180_000L,
+            configuredFadeMs = 10_000L,
+            outgoingAudio = metricsWithBars("a", 120.0), incomingAudio = metricsWithBars("b", 120.0),
+            outgoingVocals = listOf(SongSection(90_000L, 180_000L, 1.0)),
+        )
+        assertEquals(DjBridgeStyle.OutroTail, spec.style)
+        assertEquals(180_000L, spec.cueOutEndMs)
+        val live = DjTransitionPlanner.fromBridgeSpec(spec, null, null)
+        assertEquals(spec, live.bridgeSpec)
     }
 }

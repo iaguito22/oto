@@ -31,7 +31,8 @@ class Profile(
         var id: String? = null
         /** Las suyas que tienes, por canción ([Track.key]). */
         val songs = LinkedHashMap<String, Track>()
-        var liked = 0
+        /** Sus Me gusta, ya con olvido (ver [LIKED_RECENT]): los recientes casi enteros, los viejos casi nada. */
+        var liked = 0.0
         /** Las suyas que están en alguna lista tuya (no solo en Me gusta). */
         val listed = HashSet<String>()
         /** Lista → cuánto está en ella. */
@@ -56,7 +57,7 @@ class Profile(
     val artists = HashMap<String, Artist>()
     private val byId = HashMap<String, Artist>()
 
-    /** Canción → en cuántas de tus listas está (Me gusta cuenta doble): las de siempre pesan más. */
+    /** Canción → cuánto es tuya: 1,5 por cada lista en la que está y un poco por un Me gusta reciente. */
     val weight = HashMap<String, Double>()
 
     /** Tus canciones sin versión ([Track.base] y artista): un remix de una tuya no es nada nuevo. */
@@ -94,32 +95,39 @@ class Profile(
             if (v.tags.isNotEmpty()) tagMap.getOrPut(key) { HashSet() } += v.tags
         }
 
-        // Guardar algo en una lista dice más de ti que darle a Me gusta (petición de Iago, 06/11): una canción pesa
-        // 1,5 por cada lista y 0,5 por el Me gusta, y Me gusta, como escena, cuenta la mitad que una lista.
+        // Guardar algo en una lista dice más de ti que darle a Me gusta (petición de Iago, 06/11). Y el Me gusta es
+        // pasajero (16/11: Iago casi no lo usa, y cuando lo usa es para algo del momento): pesa poco y se olvida.
+        // Me gusta va de más reciente a más antiguo, así que su posición hace de fecha: los ~30 últimos cuentan
+        // casi enteros y los de hace cientos de Me gusta, casi nada.
         all.forEachIndexed { l, list ->
             val isLiked = l == all.lastIndex
             val w = (if (isLiked) LIKED_SCENE else 1.0) / ln(E + list.songs.size / 25.0)
             val lv = listVibes[l]
             val hasNamedList = !isLiked && list.name.isNotBlank()
-            for (h in list.songs) {
+            list.songs.forEachIndexed { i, h ->
                 val t = h.toTrack()
                 val a = artist(t.who, t.artist, t.artistId)
                 a.songs.getOrPut(t.key) { t }
                 bases += t.base + "|" + t.who
-                a.lists[l] = (a.lists[l] ?: 0.0) + w
-                if (isLiked) a.liked++ else a.listed += t.key
-                weight[t.key] = (weight[t.key] ?: 0.0) + if (isLiked) LIKED_WEIGHT else LIST_WEIGHT
+                val fresh = if (isLiked) exp(-i / LIKED_RECENT) else 1.0
+                a.lists[l] = (a.lists[l] ?: 0.0) + w * fresh
+                if (isLiked) a.liked += fresh else a.listed += t.key
+                weight[t.key] = (weight[t.key] ?: 0.0) + if (isLiked) LIKED_WEIGHT * fresh else LIST_WEIGHT
                 val tv = VibeAnalyzer.fromText("${t.title} ${t.artist}", t.seconds)
                 val combined = if (hasNamedList) tv.blend(lv, 0.65) else tv
-                addAcc(artistAcc, artistTags, a.key, combined, if (isLiked) 0.5 else 1.2)
-                addAcc(songAcc, songTags, t.key, combined, if (isLiked) 0.5 else 1.4)
+                if (!isLiked || fresh > 0.05) {
+                    addAcc(artistAcc, artistTags, a.key, combined, if (isLiked) 0.3 * fresh else 1.2)
+                    addAcc(songAcc, songTags, t.key, combined, if (isLiked) 0.3 * fresh else 1.4)
+                }
             }
         }
-        // Lo último que sonó, por si el diario de escuchas aún está vacío (recién instalado).
+        // Lo último que sonó, por si el diario de escuchas aún está vacío (recién instalado). Lo que ya está en el
+        // diario no suma aquí: contaría dos veces. Va de más nuevo a más viejo: lo de muy atrás pesa poco.
+        val inPlays = plays.mapTo(HashSet()) { it.key }
         history.forEachIndexed { i, h ->
             val t = h.toTrack()
             heardAt.putIfAbsent(t.key, now - i * 30 * 60_000L)
-            artist(t.who, t.artist, t.artistId).organic += 0.3
+            if (t.key !in inPlays) artist(t.who, t.artist, t.artistId).organic += 0.3 * exp(-i / HISTORY_RECENT)
         }
         for (p in plays) {
             val age = (now - p.at).coerceAtLeast(0)
@@ -253,7 +261,11 @@ class Profile(
         // Sin esto, dos artistas con una canción cada uno en la misma lista gigante saldrían idénticos.
         const val K = 0.5
         const val LIST_WEIGHT = 1.5
-        const val LIKED_WEIGHT = 0.5
-        const val LIKED_SCENE = 0.5
+        const val LIKED_WEIGHT = 0.3
+        const val LIKED_SCENE = 0.3
+        /** Cada [LIKED_RECENT] Me gusta más nuevos, uno viejo pesa 1/e de lo que pesaba. */
+        const val LIKED_RECENT = 30.0
+        /** Igual para el historial sin diario: cada [HISTORY_RECENT] escuchas más nuevas, una vieja pesa 1/e. */
+        const val HISTORY_RECENT = 100.0
     }
 }

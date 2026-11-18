@@ -67,6 +67,13 @@ class DjPrefsTest {
             assertFalse(prefs.smartMix.first())
             assertEquals(DjMood.Chill, prefs.djMood.first())
             assertEquals(DjMode.Adhd, prefs.djMode.first())
+            assertEquals(SmartMixMode.Off, prefs.smartMixMode.first())
+            prefs.setSmartMixMode(SmartMixMode.FastDj)
+            assertEquals(SmartMixMode.FastDj, prefs.smartMixMode.first())
+            assertFalse(SmartMixMode.FastDj.enabled(false))
+            assertTrue(SmartMixMode.FastDj.enabled(true))
+            assertFalse(SmartMixMode.Off.enabled(true))
+            assertTrue(SmartMixMode.Always.enabled(false))
         } finally {
             scope.cancel()
             dir.deleteRecursively()

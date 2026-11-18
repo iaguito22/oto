@@ -87,7 +87,8 @@ fun main() {
     prepareDesktopWindows()
     application {
         CompositionLocalProvider(LocalWindowExceptionHandlerFactory provides ErrorLog.windows) {
-            ModularDesktop(player, prefs, menu, importer, account, cloud, login, downloads, lyricsStore, ::exitApplication)
+            if (ShellMode.startedSingle) SingleDesktop(player, prefs, menu, importer, account, cloud, login, downloads, lyricsStore, ::exitApplication)
+            else ModularDesktop(player, prefs, menu, importer, account, cloud, login, downloads, lyricsStore, ::exitApplication)
         }
     }
 }

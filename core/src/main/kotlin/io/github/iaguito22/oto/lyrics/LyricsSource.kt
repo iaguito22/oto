@@ -207,7 +207,14 @@ object LyricsSource {
         }
         val text = pieces.joinToString("") { it.third }.trim()
         if (text.isEmpty() || (idx < 12 && CREDIT.containsMatchIn(text))) return@mapIndexedNotNull null
-        val (main, bg) = splitParens(pieces.map { (t, d, tx) -> Word(t, t + d, tx.trim(), tx.endsWith(" ")) }.filter { it.text.isNotEmpty() })
+        val words = pieces.mapIndexedNotNull { index, (start, duration, raw) ->
+            val text = raw.trim().ifEmpty { return@mapIndexedNotNull null }
+            val next = pieces.getOrNull(index + 1)?.third
+            // NetEase utiliza también espacios de no separación y puede ponerlos antes de la palabra.
+            val space = raw.last().isWhitespace() || next?.firstOrNull()?.isWhitespace() == true
+            Word(start, start + duration, text, space)
+        }
+        val (main, bg) = splitParens(words)
         Line(m.groupValues[1].toLong(), m.groupValues[1].toLong() + m.groupValues[2].toLong(), main, bg, real = true)
     }
 

@@ -27,6 +27,11 @@ data class BarFeature(
     val harshness: Double = 0.0,
     val vocalRatio: Double = 0.0,
     val chroma: List<Float> = emptyList(),
+    /**
+     * Bombo en el pulso (0..1): qué parte de los beats del compás traen un golpe de graves claro y cuánto destaca sobre
+     * los contratiempos. -1 = sin medir (compases sintéticos o guardados antes de medirlo).
+     */
+    val kickOnBeat: Double = -1.0,
 ) {
     val midMs: Long get() = (startMs + endMs) / 2L
     val durationMs: Long get() = (endMs - startMs).coerceAtLeast(1L)
@@ -55,6 +60,7 @@ data class BarFeature(
         put("de", (drumEnergy * 100.0).roundToInt() / 100.0)
         put("ha", (harshness * 1000.0).roundToInt() / 1000.0)
         put("vr", (vocalRatio * 100.0).roundToInt() / 100.0)
+        if (kickOnBeat >= 0.0) put("kb", (kickOnBeat * 100.0).roundToInt() / 100.0)
         if (chroma.size == 12) {
             put("ch", chroma.joinToString(",") { "%.2f".format(it) })
         }
@@ -82,6 +88,7 @@ data class BarFeature(
                 harshness = o.optDouble("ha", 0.0),
                 vocalRatio = o.optDouble("vr", 0.0),
                 chroma = ch,
+                kickOnBeat = o.optDouble("kb", -1.0),
             )
         }
     }
@@ -204,13 +211,14 @@ object DjHarmonic {
     }
 }
 
-/** Los 5 estilos aprobados del motor Oto DJ v2. */
+/** Estilos de puente del motor Oto DJ. */
 enum class DjBridgeStyle(val id: String, val label: String) {
     LyricLoopCut("lyric_loop", "Bucle vocal"),
     BeatMatchLongMix("beat_mix", "Cuadre de beats"),
     EnergyDropCut("energy_drop_cut", "Corte en drop"),
     FilterEcho("filter_echo", "Filtro + eco"),
     SmartFade("smart_fade", "Fundido suave"),
+    OutroTail("outro_tail", "Enlace al final"),
     ;
 
     companion object {
@@ -268,8 +276,21 @@ data class DjBridgeSpec(
     val pickupMs: Long = 0L,
     val silenceMs: Long = 0L,
     val kickShiftMs: Double = 0.0,
+    /**
+     * `FilterEcho`: B entra desde el principio del cruce, a tempo y en fase con A (con corrección de fase sobre el PCM).
+     * Lo decide el planificador y exige bombo al pulso en las dos aunque no haga falta estirar: sin bombo, la fase no se
+     * puede medir de forma fiable y B entra a mitad del cruce sin cuadrar. Null en specs hechos a mano: se deduce de los
+     * BPM como antes.
+     */
+    val beatAligned: Boolean? = null,
     val incomingGainMatch: Float = 1.0f,
     val lyricLoop: LyricLoopPlanSpec? = null,
     val compatibilityScore: Double = 0.5,
     val reason: String = "",
+    /** Diagnóstico del cuadre de tempo para `oto.mix`: estiramiento, límite, bombo y por qué no se cuadró. */
+    val tempoNote: String = "",
+    /** Intervalo que conserva íntegra la entrada vocal cuando se corrige la fase sobre el PCM. */
+    val kickShiftRangeMs: LongRange? = null,
+    /** Enlace al final: cuándo entra B dentro de la transición si A ya está en silencio. */
+    val outroIncomingOffsetMs: Long? = null,
 )

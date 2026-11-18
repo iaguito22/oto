@@ -310,7 +310,8 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         queue={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; queueOpen=true}, quit=quit,
         playing=nowPlaying.playing, hasSong=nowPlaying.id != null, previous=::skipPrevious, playPause=::playPause, next=::skipNext,
         volume=volume, setVolume=player::setVolume, title=nowPlaying.title, artist=nowPlaying.artist, artwork=nowPlaying.artwork)
-    ModuleWindow("Reproductor", playerWindow, playerOpen && !windowsHidden, { closePrimary(DockId.Player) }, pinned && playerSolo, accent = palette.primary, dock=docking, dockId=DockId.Player,
+    val taskbarPlayback = TaskbarPlayback(nowPlaying.id != null, nowPlaying.playing, ::skipPrevious, ::playPause, ::skipNext)
+    ModuleWindow("Reproductor", playerWindow, playerOpen && !windowsHidden, { closePrimary(DockId.Player) }, pinned && playerSolo, accent = palette.primary, dock=docking, dockId=DockId.Player, taskbarPlayback = taskbarPlayback,
         keys = ::shortcuts, onWindow = { playerFrame = it }, immersive = true, chrome = chrome,
         minimum = if(form == PlayerForm.Vertical) DpSize(96.dp,240.dp) else if(form == PlayerForm.Horizontal) DpSize(280.dp,108.dp) else DpSize(260.dp,370.dp),
         backgroundArtwork = if(artworkBackground) backdrop else null, backgroundOpacity=backdropOpacity, actionsOnRight = form == PlayerForm.Horizontal, hover = {pointerInside = it}, extra = {
@@ -361,7 +362,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         PlayerContents()
     }
     ModuleWindow("Dispositivos", rememberModuleState("devices", 410, 720), devicesOpen && !windowsHidden, { devicesOpen = false }, minimum=DpSize(360.dp,480.dp), accent=palette.primary, keys = ::shortcuts) { DevicesPane(devices) { devices.close(); OtoDirs.keyValue("local_link").putString("secret", null); deviceRevision++ } }
-    ModuleWindow("Letra", lyricsWindow, lyricsOpen && !windowsHidden, { lyricsOpen = false }, dock=docking, dockId=DockId.Lyrics, keys = ::shortcuts, chrome=lyricsHover, backgroundArtwork = if(artworkBackground) backdrop else null, backgroundOpacity=backdropOpacity, hover={lyricsHover=it}, extra={
+    ModuleWindow("Letra", lyricsWindow, lyricsOpen && !windowsHidden, { lyricsOpen = false }, dock=docking, dockId=DockId.Lyrics, taskbarPlayback = taskbarPlayback, keys = ::shortcuts, chrome=lyricsHover, backgroundArtwork = if(artworkBackground) backdrop else null, backgroundOpacity=backdropOpacity, hover={lyricsHover=it}, extra={
         if(lyricsHover) {
             SmallAction(Icons.Rounded.Remove,"Letra más pequeña") { changeLyricsScale(-.1f) }
             SmallAction(Icons.Rounded.Add,"Letra más grande") { changeLyricsScale(.1f) }
@@ -386,7 +387,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             }
         }
     }
-    ModuleWindow("Cola", queueWindow, queueOpen && !windowsHidden, { queueOpen = false }, dock=docking, dockId=DockId.Queue, keys = ::shortcuts, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity) {
+    ModuleWindow("Cola", queueWindow, queueOpen && !windowsHidden, { queueOpen = false }, dock=docking, dockId=DockId.Queue, taskbarPlayback = taskbarPlayback, keys = ::shortcuts, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity) {
         Box(Modifier.fillMaxSize().padding(start=20.dp,end=20.dp,bottom=20.dp,top=4.dp)) {
             QueuePane(
                 queue, localNow.id, shuffle, loop, palette,
@@ -410,7 +411,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             )
         }
     }
-    ModuleWindow("Tu música", libraryWindow, menuOpen && !windowsHidden, {closePrimary(DockId.Library)}, dock=docking, dockId=DockId.Library, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity,
+    ModuleWindow("Tu música", libraryWindow, menuOpen && !windowsHidden, {closePrimary(DockId.Library)}, dock=docking, dockId=DockId.Library, taskbarPlayback = taskbarPlayback, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity,
         extra={
             SmallAction(Icons.Rounded.PlayArrow,if(playerOpen) "Cerrar reproductor" else "Abrir reproductor",active=playerOpen) { docking.toggle(DockId.Player,DockId.Library) }
             SmallAction(MobileIcons.lyrics,if(lyricsOpen) "Cerrar letra" else "Abrir letra",active=lyricsOpen) { docking.toggle(DockId.Lyrics,DockId.Library) }
@@ -502,6 +503,7 @@ private fun SmallAction(icon: ImageVector, label: String, active:Boolean=false, 
 internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, close: () -> Unit, pinned: Boolean = false, accent: Color = Color(0xFFE2EADB),
     dock: DockSession? = null, dockId: DockId? = null,
     keys: (KeyEvent) -> Boolean = { false },
+    taskbarPlayback: TaskbarPlayback? = null,
     immersive:Boolean=false, chrome:Boolean=true, hover:(Boolean)->Unit={}, minimum:DpSize=DpSize((dockId?.minWidth ?: 260).dp,(dockId?.minHeight ?: 250).dp),
     backgroundArtwork:ImageBitmap?=null, backgroundOpacity:Float=1f, actionsOnRight:Boolean=false, onWindow: (java.awt.Window) -> Unit = {}, extra: @Composable () -> Unit = {}, content: @Composable () -> Unit) {
     var mounted by remember { mutableStateOf(visible) }
@@ -600,6 +602,7 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
         if(registered) BindDock(dock, dockId, windowState)
         LaunchedEffect(window) { WindowWorkTrace.measure("$title/icons") { useSharpTaskbarIcons(window) } }
         val taskbarLeader = group == null || group.leader == dockId
+        if (taskbarPlayback != null) TaskbarTransport(window, visible && taskbarLeader, taskbarPlayback)
         LaunchedEffect(window, taskbarLeader, visible) {
             if (visible && dock != null) { kotlinx.coroutines.delay(250); WindowWorkTrace.measure("$title/taskbar") { updateTaskbarEntry(window, taskbarLeader) } }
         }

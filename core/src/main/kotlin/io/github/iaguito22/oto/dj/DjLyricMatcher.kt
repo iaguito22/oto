@@ -111,9 +111,55 @@ object DjLyricMatcher {
                 }
                 false
             } else {
-                (line.words.isNotEmpty() || line.end > line.start + 360L) && ms in (line.start + 160L)..(line.end - 160L)
+                val sungEnd = lineSungEnd(line)
+                (line.words.isNotEmpty() || sungEnd > line.start + 360L) && ms in (line.start + 160L)..(sungEnd - 160L)
             }
         }
+    }
+
+    /**
+     * True si un corte seco en [cutMs] partiría una palabra, el cuerpo de una línea cantada o dos versos
+     * consecutivos sin respiro (salvo unión limpia entre fin de preestribillo e inicio de estribillo si [allowChorusSeam]).
+     */
+    fun cutsWordOrPhrase(lyrics: Lyrics.Synced?, cutMs: Long, allowChorusSeam: Boolean = false): Boolean {
+        if (lyrics == null) return false
+        val sung = lyrics.lines
+            .filter { it.words.isNotEmpty() || it.bg.isNotEmpty() || it.end > it.start + 300L }
+            .sortedBy { it.start }
+        if (sung.isEmpty()) return false
+
+        for (i in sung.indices) {
+            val line = sung[i]
+            val sungEnd = lineSungEnd(line)
+            if (line.real && line.words.isNotEmpty()) {
+                if (line.words.any { w -> w.end > w.start + 50L && cutMs in (w.start + 25L)..(w.end - 15L) }) {
+                    return true
+                }
+                for (j in 0 until line.words.lastIndex) {
+                    val cur = line.words[j]
+                    val nxt = line.words[j + 1]
+                    if (nxt.start - cur.end in 0L..380L && cutMs in (cur.end - 25L)..(nxt.start + 25L)) {
+                        return true
+                    }
+                }
+            } else {
+                val startBound = line.words.firstOrNull()?.start ?: line.start
+                if (sungEnd > startBound + 260L && cutMs in (startBound + 35L)..(sungEnd - 80L)) {
+                    return true
+                }
+            }
+            val next = sung.getOrNull(i + 1)
+            if (next != null && next.start - sungEnd in 0L..260L && cutMs in (sungEnd - 80L)..(next.start + 40L)) {
+                val cleanChorusJoin = allowChorusSeam && cutMs >= sungEnd - 25L && cutMs <= next.start + 20L
+                if (!cleanChorusJoin) return true
+            }
+        }
+        return false
+    }
+
+    private fun lineSungEnd(line: Line): Long {
+        val lastWord = (line.words + line.bg).maxOfOrNull { it.end } ?: line.end
+        return max(lastWord, line.start)
     }
 
     /**
@@ -128,6 +174,7 @@ object DjLyricMatcher {
         inMinMs: Long,
         inMaxMs: Long,
         bpmA: Double,
+        requireOpeningPhrase: Boolean = false,
     ): LyricLoopPlanSpec? {
         val wordsA = extractTimedWords(outLyrics)
         val wordsB = extractTimedWords(inLyrics)
@@ -135,7 +182,9 @@ object DjLyricMatcher {
 
         val beatMs = if (bpmA > 20.0) 60_000.0 / bpmA else 500.0
         val outWords = wordsA.indices.filter { wordsA[it].endMs in outMinMs..outMaxMs && wordsA[it].startMs >= outMinMs - 1500L }
-        val inWords = wordsB.indices.filter { wordsB[it].startMs in inMinMs..inMaxMs }
+        val inWords = wordsB.indices.filter {
+            (!requireOpeningPhrase || it == 0) && wordsB[it].startMs in inMinMs..inMaxMs
+        }
         if (outWords.isEmpty() || inWords.isEmpty()) return null
 
         var best: LyricLoopPlanSpec? = null

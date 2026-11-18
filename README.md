@@ -1,9 +1,9 @@
 # Oto 音
 
-Reproductor de música para Android y escritorio sobre YouTube Music. En el móvil se maneja con una gota y gestos; en el ordenador, con ventanas que se unen como una sola. Los dos se vinculan y comparten tus listas.
+Reproductor de música para Android y escritorio sobre YouTube Music. En el móvil se maneja con una gota y gestos. En el ordenador puedes usar una sola ventana o acoplar varias. Los dos se vinculan y comparten tus listas.
 
 <p align="center">
-  <img src="desktopApp/src/main/resources/welcome/01-unir-ventanas.webp" width="640" alt="En el ordenador: el reproductor, tu música y la letra unidos en un conjunto">
+  <img src="docs/escritorio-una-ventana.png" width="960" alt="Oto en modo Una ventana, con la biblioteca a la izquierda, las canciones al centro, la cola a la derecha y el reproductor flotante abajo">
 </p>
 
 - [Instalar](#instalar)
@@ -14,23 +14,27 @@ Reproductor de música para Android y escritorio sobre YouTube Music. En el móv
 
 ## Instalar
 
-Descargas de [Oto 2.1.0](https://github.com/iaguito22/oto/releases/tag/v2.1.0):
+Descargas de [Oto 2.2.0](https://github.com/iaguito22/oto/releases/tag/v2.2.0):
 
 | Sistema | Paquete |
 |---|---|
-| Windows x64 | MSI con instalador de Oto |
-| Ubuntu/Debian amd64 | DEB; instalar con `sudo apt install ./oto_2.1.0_amd64.deb` |
-| Arch Linux x86_64 | Paquete nativo; instalar con `sudo pacman -U ./oto-2.1.0-1-x86_64.pkg.tar.zst` |
-| Android 13 o superior | `Oto-2.1.0-android.apk`, paquete público `io.github.iaguito22.oto` |
-| Android 12 | `Oto-2.1.0-android12.apk`, paquete aparte `io.github.iaguito22.oto.android12`, para móviles con Android 12 o 12L |
+| Windows x64 | `Oto-2.2.0-Setup.exe` (instalador de Oto) o el MSI para instalación administrada |
+| Ubuntu/Debian amd64 | DEB; instalar con `sudo apt install ./oto_2.2.0_amd64.deb` |
+| Arch Linux x86_64 | Paquete nativo; instalar con `sudo pacman -U ./oto-2.2.0-1-x86_64.pkg.tar.zst` |
+| Android 13 o superior | `Oto-2.2.0-android.apk`, paquete público `io.github.iaguito22.oto` |
+| Android 12 | `Oto-2.2.0-android12.apk`, paquete aparte `io.github.iaguito22.oto.android12`, para móviles con Android 12 o 12L |
 
 El APK público actualiza las versiones públicas anteriores. No está en Play Store.
 
-Los paquetes Linux incluyen Java y dependen de FFmpeg. El MSI de Windows todavía no está firmado con Authenticode, así que SmartScreen puede mostrar un aviso de reputación. Los hashes van adjuntos a cada release.
+Los paquetes Linux incluyen Java y dependen de FFmpeg. El instalador de Windows todavía no está firmado con Authenticode, así que SmartScreen puede mostrar un aviso de reputación. Los hashes van adjuntos a cada release.
 
 ## En el ordenador
 
-Oto se reparte en ventanas: **reproductor**, **tu música**, **letra** y **cola**. Abre las que quieras y se colocan juntas, con un mismo fondo, como si fueran una sola. Al abrirlo por primera vez, una bienvenida enseña estos cinco gestos.
+Desde la versión 2.2.0, **Una ventana** es la interfaz inicial. Reúne tu biblioteca, la cola y el reproductor flotante. Puedes elegir **Varias ventanas** en **Ajustes → Interfaz** y reiniciar Oto para aplicar el cambio.
+
+### Varias ventanas
+
+En este modo, Oto se reparte en ventanas de **reproductor**, **tu música**, **letra** y **cola**. Abre las que quieras y se acoplan con un mismo fondo. La bienvenida de este modo enseña estos cinco gestos.
 
 <table>
   <tr>

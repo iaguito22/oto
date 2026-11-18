@@ -107,12 +107,20 @@ internal object SmoothWheel {
             val screen = Point(point)
             SwingUtilities.convertPointFromScreen(point, target)
             if (point.x in 0 until target.width && point.y in 0 until target.height) { x = point.x; y = point.y }
-            target.dispatchEvent(SmoothWheelEvent(target, System.currentTimeMillis(), m.modifiers, x, y, screen.x, screen.y, m.scrollAmount, part))
+            post(SmoothWheelEvent(target, System.currentTimeMillis(), m.modifiers, x, y, screen.x, screen.y, m.scrollAmount, part))
         } else if (target.isShowing) {
             val origin = target.locationOnScreen
-            target.dispatchEvent(SmoothWheelEvent(target, System.currentTimeMillis(), m.modifiers, x, y, origin.x + x, origin.y + y, m.scrollAmount, part))
+            post(SmoothWheelEvent(target, System.currentTimeMillis(), m.modifiers, x, y, origin.x + x, origin.y + y, m.scrollAmount, part))
         } else m.remaining = 0.0
     }
+
+    /**
+     * El paso se encola en AWT, nunca se despacha aquí: `step` corre dentro de una corrutina de Compose
+     * (FlushCoroutineDispatcher). Despacharlo en el acto metía la rueda en la escena mientras Compose
+     * vaciaba su cola; la rueda cancela la animación de scroll en curso y esa continuación cancelada
+     * reventaba («Fatal exception in coroutines machinery … SuspendAnimation.animate … Cancelled»).
+     */
+    private fun post(event: SmoothWheelEvent) = Toolkit.getDefaultToolkit().systemEventQueue.postEvent(event)
 
     /** Se pone dentro de cada ventana: reparte los pasos al ritmo de sus fotogramas. */
     @Composable

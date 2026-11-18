@@ -19,10 +19,12 @@ import kotlin.math.roundToLong
  *   y mezcla dentro de los últimos 30 s de A con estilos seguros (`BeatMatchLongMix`, `FilterEcho`, `SmartFade`).
  */
 object DjBridgePlanner {
-    // Tramos secos de A antes y de B después: el relevo entre reproductores se cuadra en ellos con pulsos de velocidad
-    // sobre el búfer BT (~1 s). Con pre-medición de shiftB en etapa 2 y steadyError promediado, 5,0 s y 5,2 s sobran.
-    const val PRE_ROLL_MS = 5_000L
-    const val POST_ROLL_MS = 5_200L
+    // Tramos secos de A antes y de B después: el relevo entre reproductores se cuadra en ellos con pulsos de velocidad.
+    // Cada ronda cuesta pulso + búfer + 200 ms: con auriculares BT de ~1 s de búfer, ~1,6 s. Medido el 17/11 en el
+    // Nothing: con 5,0/5,2 s solo cabía una ronda y el relevo se hacía con el resto (13–15 ms, golpe doble audible).
+    // 2 s más a cada lado dejan sitio a una segunda ronda.
+    const val PRE_ROLL_MS = 7_000L
+    const val POST_ROLL_MS = 7_200L
     const val NORMAL_WINDOW_MS = 30_000L
 
     /** DJ normal: la mezcla puede empezar hasta aquí antes del final de A y B entrar hasta aquí desde su principio. */
@@ -30,8 +32,27 @@ object DjBridgePlanner {
     const val NORMAL_IN_WINDOW_MS = 45_000L
 
     /** DJ rápido: B entra cerca del principio de su trozo (antes entraba hasta 18 s tarde y sonaba <40 s). */
-    const val ADHD_IN_EARLY_MS = 8_000L
+    // El trozo ya incluye la preparación antes de la voz. Solo reservar un ajuste corto de beat; ocho segundos
+    // adicionales devolvían al inicio del archivo muchas entradas elegidas en el primer estribillo.
+    const val ADHD_IN_EARLY_MS = 1_500L
     const val ADHD_IN_LATE_MS = 4_000L
+    /** DJ rápido: lo que debería quedar de B tras una entrada de respaldo fuera de su ventana (un trozo entero). */
+    const val ADHD_MIN_B_LEFT_MS = 70_000L
+    /** DJ rápido: cuánto puede pasarse la mezcla del final previsto del trozo (para que quepa empezando en frase). */
+    const val ADHD_OUT_LATE_MS = 6_000L
+    private const val ADHD_FALLBACK_OUT_LATE_MS = 28_000L
+
+    /**
+     * Margen antes de un estribillo con el que entra B cuando empieza por él (listas): cubre la corrección de fase del
+     * render (±0,4 beat, ver [ChorusSafety.allows]) sin que la entrada acabe dentro.
+     */
+    const val INCOMING_CHORUS_LEAD_MS = 450L
+
+    /** Respaldo: fundido corto mínimo cuando tras el último estribillo de A no caben los 6 s habituales. */
+    const val MIN_FALLBACK_FADE_MS = 3_000L
+    private const val OUTRO_TAIL_MS = 1_250L
+    private const val OUTRO_DRY_A_MS = 650L
+    private const val MAX_OUTRO_SILENCE_OVERLAP_MS = 3_000L
 
     private data class CandidatePair(
         val style: DjBridgeStyle,
@@ -46,6 +67,12 @@ object DjBridgePlanner {
         val score: Double,
         val lyricLoop: LyricLoopPlanSpec? = null,
         val reason: String,
+        /** `FilterEcho`: B entra a tempo y en fase (bombo en las dos y estiramiento dentro del límite). */
+        val beatAligned: Boolean = false,
+        /** Límite de estiramiento (%) que se aplicó a esta pareja (cuadre o eco alineado), para el registro. */
+        val stretchLimit: Double? = null,
+        /** Instante de A que debe caer en frase (por defecto el arranque de la mezcla; en el corte al drop, el drop). */
+        val phraseOutMs: Long? = null,
     )
 
     fun plan(
@@ -78,6 +105,13 @@ object DjBridgePlanner {
             ?: incomingAudio?.introEndMs?.coerceIn(0L, min(4_500L, durB / 4))
             ?: 0L
 
+        // Use the lyrics even when callers have not cached the derived sections yet.
+        val sectionsA = (outgoingVocals + outgoingLyrics?.let { SongSections.of(it.lines) }.orEmpty()).distinct()
+        val sectionsB = (incomingVocals + incomingLyrics?.let { SongSections.of(it.lines) }.orEmpty()).distinct()
+        fun protectsChorus(start: Long, end: Long, entry: Long): Boolean =
+            !SongSections.overlapsChorus(start, end, sectionsA) &&
+                sectionsB.none { it.isChorus && entry > it.startMs && entry < it.endMs }
+
         val barsA = effectiveBars(outgoingAudio, durA)
         val barsB = effectiveBars(incomingAudio, durB)
 
@@ -90,6 +124,8 @@ object DjBridgePlanner {
         val bpmB = incomingAudio?.bpm?.takeIf { it > 20.0 } ?: 0.0
         val beatReliable = isBeatMatchReady(outgoingAudio) && isBeatMatchReady(incomingAudio)
         val bpmRel = DjHarmonic.bpmRelation(bpmA, bpmB)
+        // Lo que se estira B para ir al tempo de A (no la diferencia de BPM: con mitad/doble no es lo mismo).
+        val stretchPct = DjTempoMatch.stretchPct(bpmRel.ratioOutOverIn)
         val harmonic = DjHarmonic.harmonicCompatibility(outgoingAudio, incomingAudio)
 
         // Ventanas exactas según modo.
@@ -103,15 +139,21 @@ object DjBridgePlanner {
                 // Playlist/radio normal: últimos 30s de A y arranque real de B (solo salta silencio inicial).
                 outMinMs = max(0L, outLastSound - NORMAL_WINDOW_MS)
                 outMaxMs = max(outMinMs + 2_000L, outLastSound)
-                inMinMs = inFirstSound
-                inMaxMs = min(durB - 6_000L, inFirstSound + 4_000L).coerceAtLeast(inFirstSound)
+                // Si B abre cantando un estribillo y su primer sonido medido cae ya dentro (la letra marca el verso unos
+                // ms antes que el detector, o el detector toma el final de la intro), entrar ahí contaba como «a mitad del
+                // estribillo» y TODAS las parejas se descartaban: sin mezcla (6 de 11 en la lista de house, 18/11). B
+                // empieza por su principio: se entra un poco antes de ese estribillo, sin saltarse nada cantado.
+                inMinMs = sectionsB.filter { it.isChorus && inFirstSound > it.startMs && inFirstSound < it.endMs }
+                    .minOfOrNull { (it.startMs - INCOMING_CHORUS_LEAD_MS).coerceAtLeast(0L) } ?: inFirstSound
+                inMaxMs = min(durB - 6_000L, inFirstSound + 4_000L).coerceAtLeast(inMinMs)
             }
             djMode == DjMode.Adhd && outgoingAdhd != null -> {
-                val adhdSafeOutEnd = (outgoingAdhd.endMs - 2_600L).coerceAtLeast(outgoingAdhd.startMs + 2_000L)
-                val targetOut = outgoingAdhd.fadeOutStartMs.coerceIn(55_000L.coerceAtMost(outLastSound / 2), min(outLastSound, adhdSafeOutEnd))
-                outMaxMs = minOf(outLastSound, adhdSafeOutEnd, outgoingAdhd.startMs + 108_000L, targetOut + 14_000L)
+                // [outMaxMs] es el límite del FINAL de la mezcla. Antes era el fin del trozo − 2,6 s: la salida planeada
+                // (fin − mezcla) no cabía y la mezcla se adelantaba a un compás cualquiera, a veces dentro de la voz.
+                val targetOut = outgoingAdhd.fadeOutStartMs.coerceIn(55_000L.coerceAtMost(outLastSound / 2), outLastSound)
+                outMaxMs = minOf(outLastSound, max(outgoingAdhd.endMs + ADHD_OUT_LATE_MS, targetOut + 14_000L), outgoingAdhd.startMs + 122_000L)
                     .coerceAtLeast(2_000L)
-                outMinMs = max(outgoingAdhd.startMs + 56_000L, targetOut - 14_000L)
+                outMinMs = max(min(outgoingAdhd.startMs + 56_000L, outgoingAdhd.fadeOutStartMs), targetOut - 14_000L)
                     .coerceAtMost((outMaxMs - 2_000L).coerceAtLeast(0L))
                     .coerceAtLeast(0L)
                 val targetIn = incomingAdhd?.startMs ?: min(durB / 4, 30_000L)
@@ -136,14 +178,95 @@ object DjBridgePlanner {
             0.022 * ((outLastSound - mixEndMs - 14_000L).coerceAtLeast(0L) / 1000.0) +
                 0.030 * ((entryMs - inFirstSound - 10_000L).coerceAtLeast(0L) / 1000.0)
 
-        val candidatesA = selectOutCandidateBars(barsA, outMinMs, outMaxMs, durA)
-        val candidatesB = selectInCandidateBars(barsB, inMinMs, inMaxMs, durB, !isDjSession)
+        // Cruce estirado + vuelta + tramo seco final tienen que caber en B (si no, el puente se rellenaría con ceros y el
+        // relevo WAV→B se quedaría sin tramo seco donde cuadrarse).
+        fun fitsInB(entryMs: Long, crossMs: Long, ratio: Double): Boolean =
+            entryMs + (crossMs * ratio).roundToLong() + DjTempoMatch.bridgeTailSourceMs(bpmA, ratio) + POST_ROLL_MS + 1_500L <= durB
+
+        fun entryInChorusB(ms: Long): Boolean = sectionsB.any { it.isChorus && ms > it.startMs && ms < it.endMs }
+        /**
+         * La entrada de B llevada a su beat, sin que el ajuste (hasta medio beat) la meta en un estribillo que la entrada
+         * sin ajustar respetaba (antes esa pareja se descartaba entera): si pasa, al beat anterior o, si no, sin ajustar.
+         */
+        fun snapEntry(raw: Long): Long {
+            val snapped = snapToBeat(raw, incomingAudio, inMinMs, inMaxMs)
+            if (!entryInChorusB(snapped) || entryInChorusB(raw)) return snapped
+            val back = snapToBeat(raw, incomingAudio, inMinMs, raw)
+            return if (!entryInChorusB(back)) back else raw
+        }
+        val beatMsA = if (bpmA > 20.0) 60_000.0 / bpmA else 500.0
+        /**
+         * Limitar el ajuste PCM al borde de la voz. Si la rejilla de B ya cae cerca de una posición permitida, una
+         * entrada con estribillo desde el primer golpe también puede cuadrar sin saltarse su ataque.
+         */
+        fun phaseBoundsB(entry: Long): LongRange {
+            val choruses = sectionsB.filter { it.isChorus }
+            val first = choruses.filter { it.startMs >= entry }.minOfOrNull { it.startMs }
+            val previous = choruses.filter { it.endMs <= entry }.maxOfOrNull { it.endMs }
+            val minShift = maxOf(-420L, -entry, (previous ?: 0L) - entry)
+            val maxShift = minOf(DjTempoMatch.MAX_PHASE_SHIFT_MS, first?.minus(entry) ?: Long.MAX_VALUE)
+            return minShift..maxShift
+        }
+        fun phaseRoomB(entry: Long): Boolean {
+            if (entryInChorusB(entry)) return false
+            val room = if (bpmB > 20.0) min(DjTempoMatch.MAX_PHASE_SHIFT_MS, (57_600.0 / bpmB).roundToLong()) else DjTempoMatch.MAX_PHASE_SHIFT_MS
+            val bounds = phaseBoundsB(entry)
+            if (bounds.last >= room) return true
+            val beat = incomingAudio?.nearestBeatMs(entry) ?: return false
+            val period = incomingAudio.beatPeriodMs ?: return false
+            val offset = beat - entry
+            return listOf(offset, offset - period, offset + period).any {
+                it >= bounds.first - 45.0 && it <= bounds.last + 45.0
+            }
+        }
+        /**
+         * Arranque de A que solo pisa la cola vocal ([SongSections.VOCAL_TAIL_MS]) de un estribillo ya acabado (o el final de
+         * su última palabra, tras ajustarlo al beat): se retrasa a cuando la cola termina, en el beat siguiente si lo hay.
+         * El DJ rápido sale «en el compás tras la última palabra», a 200–250 ms (`AdhdPlanner`), y la guarda pide 600 ms:
+         * se descartaba su propia salida y quedaban respaldos o mezclas fuera de frase (29 y 49 de 85 el 18/11).
+         * La cola sigue protegida entera; solo se deja de tirar la pareja.
+         */
+        fun pastChorusTail(start: Long, hi: Long): Long {
+            val s = sectionsA.filter {
+                it.isChorus && it.seamFreeMs == 0L &&
+                    start >= it.endMs - (beatMsA * 0.6).roundToLong() && start < it.endMs + SongSections.VOCAL_TAIL_MS
+            }.maxByOrNull { it.endMs } ?: return start
+            val clear = s.endMs + SongSections.VOCAL_TAIL_MS
+            if (clear > hi) return start
+            return snapToBeat(clear, outgoingAudio, clear, hi)
+        }
+
+        // DJ rápido: los límites de frase de cada trozo (ver [AdhdSegment.phrasePointsMs]) son candidatos siempre (no
+        // solo los compases más tranquilos), para que haya mezclas que empiecen y entren en frase.
+        val adhd = isDjSession && djMode == DjMode.Adhd
+        // La salida y la entrada que eligió el propio trozo también valen (con o sin compases medidos).
+        val phraseA = if (adhd && outgoingAdhd != null && outgoingAdhd.phrasePointsMs.isNotEmpty()) {
+            (outgoingAdhd.phrasePointsMs + outgoingAdhd.fadeOutStartMs).distinct().sorted()
+        } else emptyList()
+        val phraseB = if (adhd && incomingAdhd != null && incomingAdhd.phrasePointsMs.isNotEmpty()) {
+            (incomingAdhd.phrasePointsMs + incomingAdhd.startMs).distinct().sorted()
+        } else emptyList()
+        val beatTolA = phraseTolerance(bpmA)
+        val beatTolB = phraseTolerance(bpmB)
+        // Además de los compases más tranquilos (máx. 10), justo al acabar cada bloque cantado de A, pasada su cola: son las
+        // salidas sin voz por definición y la poda por compases podía dejarlas fuera (sobre todo con estribillos largos).
+        val sectionExitsA = sectionsA.map { it.endMs + SongSections.VOCAL_TAIL_MS }
+            .filter { it in outMinMs..(outMaxMs - 2_000L) }
+        val candidatesA = (selectOutCandidateBars(barsA, outMinMs, outMaxMs, durA) +
+            phraseA.filter { it in outMinMs..(outMaxMs - 2_000L) }.map { barAt(barsA, it) } +
+            sectionExitsA.map { barAt(barsA, it) }).distinctBy { it.startMs }
+        // En sesiones de DJ, B también puede entrar justo tras un estribillo suyo (su verso siguiente).
+        val chorusExitsB = if (!isDjSession) emptyList() else sectionsB.filter { it.isChorus }
+            .map { it.endMs + SongSections.VOCAL_TAIL_MS }.filter { it in inMinMs..inMaxMs }
+        val candidatesB = (selectInCandidateBars(barsB, inMinMs, inMaxMs, durB, !isDjSession) +
+            phraseB.filter { it in inMinMs..inMaxMs }.map { barAt(barsB, it) } +
+            chorusExitsB.map { barAt(barsB, it) }).distinctBy { it.startMs }
         val zoneTimbreShock = hasTimbreShock(representativeBar(candidatesA), representativeBar(candidatesB))
 
         // 1. Evaluar `LyricLoopCut` (prioridad alta si ambas letras reales coinciden con intensidades compatibles).
         var lyricCandidate: CandidatePair? = null
-        if (isDjSession && recentStyles.lastOrNull() != DjBridgeStyle.LyricLoopCut && outgoingLyrics != null && incomingLyrics != null) {
-            val loopSpec = DjLyricMatcher.findSharedLoopMatch(
+        if (recentStyles.lastOrNull() != DjBridgeStyle.LyricLoopCut && outgoingLyrics != null && incomingLyrics != null) {
+            val match = DjLyricMatcher.findSharedLoopMatch(
                 outLyrics = outgoingLyrics,
                 inLyrics = incomingLyrics,
                 outMinMs = outMinMs + 1_000L,
@@ -151,9 +274,12 @@ object DjBridgePlanner {
                 inMinMs = inMinMs,
                 // En DJ rápido la ventana de B es estrecha; para una frase compartida se acepta entrar algo más tarde (el
                 // trozo de B se recoloca desde donde entra y dura lo mínimo igual).
-                inMaxMs = max(inMinMs + 1_000L, inMaxMs - 1_500L + (if (djMode == DjMode.Adhd) 18_000L else 6_000L)),
+                inMaxMs = if (!isDjSession) min(inMaxMs, inMinMs + 1_500L) else
+                    max(inMinMs + 1_000L, inMaxMs - 1_500L + (if (djMode == DjMode.Adhd) 18_000L else 6_000L)),
                 bpmA = if (bpmA > 20.0) bpmA else 110.0,
+                requireOpeningPhrase = !isDjSession,
             )
+            val loopSpec = if (isDjSession) match else match?.copy(inEntryMs = inMinMs)
             if (loopSpec != null && loopSpec.confidence >= 0.35) {
                 val barA = nearestBar(barsA, loopSpec.outLoopEndMs)
                 val barB = nearestBar(barsB, loopSpec.inEntryMs)
@@ -165,12 +291,19 @@ object DjBridgePlanner {
                 // Guardia de intensidad, tempo y armonía solo cuando existen mediciones reales (sin penalizar si falta B).
                 val acousticOk = !bothMeasured ||
                     (lufsDiffTotal <= 5.5 && lufsDiffLocal <= 5.0 && drumDiff <= 0.42 && !hasTimbreShock(barA, barB))
-                val tempoOk = !beatReliable || bpmRel.relDiffPct <= 9.5
+                // Estirar B para cuadrar la frase también es cambiar su velocidad: solo con bombo al pulso en las dos
+                // (como pidió Iago) y hasta el límite con voz (6 %); si no, la frase entra a su velocidad.
+                val loopKicks = DjTempoMatch.kickOnBeat(barsA, loopSpec.outLoopStartMs, loopSpec.outLoopEndMs) >= DjTempoMatch.MIN_KICK_ON_BEAT &&
+                    DjTempoMatch.kickOnBeat(barsB, loopSpec.inEntryMs, max(loopSpec.inPhraseEndMs, loopSpec.inEntryMs + 2_000L)) >=
+                    DjTempoMatch.MIN_KICK_ON_BEAT
+                // El tope solo importa si se va a estirar: sin bombo la frase entra a 1× y el tempo no la descarta.
+                val tempoOk = !beatReliable || !loopKicks || stretchPct <= DjTempoMatch.MAX_STRETCH_PCT
                 val harmonyOk = !bothMeasured ||
                     outgoingAudio.camelot.isNullOrBlank() ||
                     incomingAudio.camelot.isNullOrBlank() ||
                     harmonic >= 0.42
-                if (acousticOk && tempoOk && harmonyOk) {
+                if (acousticOk && tempoOk && harmonyOk &&
+                    protectsChorus(loopSpec.outLoopStartMs, loopSpec.outLoopEndMs, loopSpec.inEntryMs)) {
                     val beatAEst = if (bpmA > 20.0) 60_000.0 / bpmA else 545.0
                     val unitMs = if (loopSpec.doubleSpeedTail) {
                         // 1 compás (4 tiempos) a 1.0x sin chipmunk: 3×cell + 2×half (si cell~1t) o cell + tail + 2×half (si cell~2t).
@@ -183,6 +316,9 @@ object DjBridgePlanner {
                         loopSpec.loopDurationMs * loopSpec.repeats.coerceIn(3, 5).toLong()
                     }
                     val loopTransDur = (unitMs + 1_100L).coerceIn(2_400L, 9_500L)
+                    // Solo se estira si además cabe en B la vuelta a 1× (si no, la frase entra a su velocidad).
+                    val loopStretch = beatReliable && loopKicks && stretchPct <= DjTempoMatch.MAX_STRETCH_PCT &&
+                        fitsInB(loopSpec.inEntryMs, loopTransDur, bpmRel.ratioOutOverIn)
                     lyricCandidate = CandidatePair(
                         style = DjBridgeStyle.LyricLoopCut,
                         cueOutStartMs = loopSpec.outLoopStartMs,
@@ -191,7 +327,7 @@ object DjBridgePlanner {
                         transitionDurMs = loopTransDur,
                         pickupMs = 0L,
                         silenceMs = 0L,
-                        tempoRatio = if (beatReliable && bpmRel.relDiffPct <= 9.5) bpmRel.ratioOutOverIn else 1.0,
+                        tempoRatio = if (loopStretch) bpmRel.ratioOutOverIn else 1.0,
                         echoDelayMs = 360.0,
                         score = 12.0 + loopSpec.confidence * 3.0,
                         lyricLoop = loopSpec,
@@ -200,19 +336,93 @@ object DjBridgePlanner {
                 }
             }
         }
-        if (lyricCandidate != null) {
-            return buildSpec(lyricCandidate, durA, durB, bpmA, bpmB, harmonic, gainMatch, outgoingAudio, incomingAudio)
+        lyricCandidate?.let { win ->
+            val loop = win.lyricLoop!!
+            val kA = DjTempoMatch.kickOnBeat(barsA, loop.outLoopStartMs, loop.outLoopEndMs)
+            val kB = DjTempoMatch.kickOnBeat(barsB, loop.inEntryMs, max(loop.inPhraseEndMs, loop.inEntryMs + 2_000L))
+            val note = "estira %.1f %%, bombo A %.2f B %.2f, bucle vocal %s".format(
+                DjTempoMatch.stretchPct(win.tempoRatio), kA, kB,
+                if (DjTempoMatch.isStretched(win.tempoRatio)) "estirado (lím %.0f %%)".format(DjTempoMatch.MAX_STRETCH_PCT) else "a 1×",
+            )
+            return buildSpec(win, durA, durB, bpmA, bpmB, harmonic, gainMatch, outgoingAudio, incomingAudio).copy(tempoNote = note)
         }
 
         // 2. Evaluar parejas `(barOut, barIn)` entre los estilos instrumentales/rítmicos.
+        val avgLufsA = barsA.map { it.lufs }.average().let { if (it.isNaN()) lufsA else it }
         val avgLufsB = barsB.map { it.lufs }.average().let { if (it.isNaN()) lufsB else it }
         val avgDrumA = barsA.map { it.drumEnergy }.average().let { if (it.isNaN()) 0.4 else it }
         val avgDrumB = barsB.map { it.drumEnergy }.average().let { if (it.isNaN()) 0.4 else it }
 
         var best: CandidatePair? = null
+        // Por qué no salió el cuadre de beats (para `oto.mix`): mejor bombo visto y descartes por motivo.
+        var bestKickA = 0.0
+        var bestKickB = 0.0
+        var rejKick = 0
+        var rejVoice = 0
+        var rejFit = 0
+        var rejTimbre = 0
+        var limitSeen = DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT
 
-        fun consider(cand: CandidatePair) {
-            if (best == null || cand.score > best!!.score) best = cand
+        // DJ rápido: las mezclas que no empiezan en frase, cortan un bloque cantado de A o hacen entrar B a mitad de
+        // verso solo valen si no hay ninguna otra (cubo «relajado», con castigo); nunca por encima de una limpia.
+        var bestRelaxed: CandidatePair? = null
+        var rejPhrase = 0
+        var rejVocal = 0
+        // Descartes por estribillo, por lado (para atribuir un «sin mezcla» en `oto.mix`).
+        var rejChorusA = 0
+        var rejChorusB = 0
+        fun adhdClean(cand: CandidatePair): Boolean {
+            if (!adhd || cand.style == DjBridgeStyle.LyricLoopCut) return true
+            val refOut = cand.phraseOutMs ?: cand.cueOutStartMs
+            val onPhraseA = phraseA.isEmpty() || phraseA.any { abs(it - refOut) <= beatTolA }
+            val onPhraseB = phraseB.isEmpty() || phraseB.any { abs(it - cand.entryInMs) <= beatTolB }
+            if (!onPhraseA || !onPhraseB) { rejPhrase++; return false }
+            val outVoc = DjLyricMatcher.vocalOccupancyRatio(outgoingLyrics, cand.cueOutStartMs, cand.cueOutEndMs)
+                ?: vocalOverlapSections(sectionsA, cand.cueOutStartMs, cand.cueOutEndMs)
+            // El corte al drop tiene su propia guarda (no parte palabras y solo corta la voz en la costura pre-estribillo →
+            // estribillo, que es justo donde debe cortar).
+            val cutsA = cand.style != DjBridgeStyle.EnergyDropCut && (
+                inSection(sectionsA, cand.cueOutStartMs) || DjLyricMatcher.isMidVocal(outgoingLyrics, cand.cueOutStartMs) ||
+                    (outVoc != null && outVoc > 0.25)
+                )
+            val cutsB = inSection(sectionsB, cand.entryInMs) || DjLyricMatcher.isMidVocal(incomingLyrics, cand.entryInMs)
+            if (cutsA || cutsB) { rejVocal++; return false }
+            return true
+        }
+        /**
+         * Si [pastChorusTail] retrasó el arranque solo por la cola vocal, la frase de referencia sigue siendo el compás
+         * candidato (el límite de frase está tras la última palabra; la mezcla empieza en cuanto acaba su cola).
+         */
+        fun tailShiftedPhrase(barMs: Long, gridMs: Long, startMs: Long): Long? =
+            barMs.takeIf { startMs != gridMs && abs(gridMs - barMs) <= beatTolA }
+        /** DJ rápido: premio si la sección de B llega cuando acaba la mezcla (B ya a su volumen) y no antes. */
+        fun adhdLanding(cand: CandidatePair): Double {
+            val target = incomingAdhd?.entrySectionMs ?: return 0.0
+            if (!adhd || target <= incomingAdhd.startMs || cand.style == DjBridgeStyle.LyricLoopCut) return 0.0
+            val inSpan = (cand.transitionDurMs * cand.tempoRatio).roundToLong()
+            val arrives = cand.entryInMs + inSpan
+            val barMs = if (bpmB > 20.0) 240_000.0 / bpmB else 2_000.0
+            val off = (target - arrives) / barMs // >0: la sección llega después de la mezcla
+            return when {
+                off < -0.5 -> -0.9 // la voz de B llega con A todavía delante
+                off <= 2.5 -> 0.8
+                else -> 0.8 - 0.15 * (off - 2.5).coerceAtMost(8.0)
+            }
+        }
+        fun consider(raw: CandidatePair) {
+            // A chorus is a constraint, not a score which style/tempo/variety can outweigh.
+            if (!protectsChorus(raw.cueOutStartMs, raw.cueOutEndMs, raw.entryInMs)) {
+                if (SongSections.overlapsChorus(raw.cueOutStartMs, raw.cueOutEndMs, sectionsA)) rejChorusA++
+                if (entryInChorusB(raw.entryInMs)) rejChorusB++
+                return
+            }
+            val cand = raw.copy(score = raw.score + adhdLanding(raw))
+            if (adhdClean(cand)) {
+                if (best == null || cand.score > best!!.score) best = cand
+            } else {
+                val relaxed = cand.copy(score = cand.score - 3.0)
+                if (bestRelaxed == null || relaxed.score > bestRelaxed!!.score) bestRelaxed = relaxed
+            }
         }
 
         val beatA = if (bpmA > 20.0) 60_000.0 / bpmA else 500.0
@@ -225,6 +435,17 @@ object DjBridgePlanner {
         val fatigueEcho = varietyPenalty(DjBridgeStyle.FilterEcho, recentStyles)
         val fatigueFade = varietyPenalty(DjBridgeStyle.SmartFade, recentStyles)
 
+        // Puertas de la canción entera para el cuadre (las de la pareja se cuentan abajo).
+        val beatGate = when {
+            !beatReliable -> "pulso dudoso"
+            stretchPct > DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT -> "tempo lejos"
+            zoneTimbreShock -> "choque de timbre"
+            avgDrumA < 0.16 || avgDrumB < 0.16 -> "poca batería (A %.2f B %.2f)".format(avgDrumA, avgDrumB)
+            harmonic < 0.45 -> "armonía %.2f".format(harmonic)
+            else -> null
+        }
+        val beatGateOpen = beatGate == null
+
         for (bOut in candidatesA) {
             val midVocalOut = DjLyricMatcher.isMidVocal(outgoingLyrics, bOut.endMs) ||
                 inSection(outgoingVocals, bOut.endMs)
@@ -232,6 +453,10 @@ object DjBridgePlanner {
                 ?: vocalOverlapSections(outgoingVocals, bOut.startMs, bOut.endMs)
                 ?: bOut.vocalRatio)
             val exitPenalty = (2.2 * exitVocals) + (2.3 * bOut.soloRisk) + (if (midVocalOut) 2.4 else 0.0)
+            val outLowIntensity = (
+                0.55 * ((avgLufsA - bOut.lufs - 0.8) / 3.5).coerceIn(0.0, 1.0) +
+                    0.45 * ((0.38 - bOut.drumEnergy) / 0.22).coerceIn(0.0, 1.0)
+                ).coerceIn(0.0, 1.0)
 
             for (bIn in candidatesB) {
                 val rawEntry = if (!isDjSession) inMinMs else bIn.startMs.coerceIn(inMinMs, inMaxMs)
@@ -239,13 +464,24 @@ object DjBridgePlanner {
                 val entryVocals = (DjLyricMatcher.vocalOccupancyRatio(incomingLyrics, rawEntry, rawEntry + 6_000L)
                     ?: vocalOverlapSections(incomingVocals, rawEntry, rawEntry + 6_000L)
                     ?: bIn.vocalRatio)
+                val inCalmZone = (
+                    0.50 * ((avgLufsB - bIn.lufs - 0.6) / 3.5).coerceIn(0.0, 1.0) +
+                        0.50 * ((0.40 - bIn.drumEnergy) / 0.24).coerceIn(0.0, 1.0)
+                    ).coerceIn(0.0, 1.0)
 
                 val harshDiff = abs(bOut.harshness - bIn.harshness)
                 val pairTimbreShock = hasTimbreShock(bOut, bIn)
                 val lufsDiffLocal = abs(bOut.lufs - bIn.lufs)
+                // Aproximación (ventanas fijas, tope instrumental) de si esta pareja se podría cuadrar: SOLO para no
+                // castigar el fundido cuando el cuadre no es posible. Las puertas reales están en cada estilo.
+                val pairMayBeatMatch = beatReliable &&
+                    stretchPct <= DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT &&
+                    DjTempoMatch.kickOnBeat(barsA, bOut.startMs, bOut.endMs + 4_000L) >= DjTempoMatch.MIN_KICK_ON_BEAT &&
+                    DjTempoMatch.kickOnBeat(barsB, rawEntry, rawEntry + 6_000L) >= DjTempoMatch.MIN_KICK_ON_BEAT
 
                 // A. `BeatMatchLongMix`
-                if (beatReliable && bpmRel.relDiffPct <= 8.5 && !zoneTimbreShock && !pairTimbreShock && avgDrumA >= 0.16 && avgDrumB >= 0.16 && harmonic >= 0.45) {
+                if (beatGateOpen && pairTimbreShock) rejTimbre++
+                if (beatReliable && stretchPct <= DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT && !zoneTimbreShock && !pairTimbreShock && avgDrumA >= 0.16 && avgDrumB >= 0.16 && harmonic >= 0.45) {
                     val barsCount = if (autoLength) {
                         if (tandaChanged) 4 else if (bpmRel.relDiffPct <= 3.5 && harmonic >= 0.72) 6 else 4
                     } else 0
@@ -256,8 +492,9 @@ object DjBridgePlanner {
                     }
                     // Que la mezcla no rebase la zona útil de A, y que arranque en un compás de A y en su beat (con B
                     // también en su beat): si no, los bombos de las dos van desfasados toda la mezcla.
-                    val startOut = onGridStart(bOut.startMs, outMinMs, outMaxMs - mixDur, barsA, outgoingAudio)
-                    val beatEntry = snapToBeat(rawEntry, incomingAudio, inMinMs, inMaxMs)
+                    val startGrid = onGridStart(bOut.startMs, outMinMs, outMaxMs - mixDur, barsA, outgoingAudio)
+                    val startOut = pastChorusTail(startGrid, outMaxMs - mixDur)
+                    val beatEntry = snapEntry(rawEntry)
                     // Mejor si B entra en un cambio de sección y A termina la mezcla en otro (frases enteras).
                     val phraseFit = 0.6 * sectionLift(barsB, bIn) + 0.4 * sectionLift(barsA, nearestBar(barsA, startOut + mixDur))
                     val outVocWin = DjLyricMatcher.vocalOccupancyRatio(outgoingLyrics, startOut, startOut + mixDur)
@@ -271,13 +508,25 @@ object DjBridgePlanner {
                     } else {
                         0.0
                     }
+                    // B se estira mientras suenan juntas y durante su vuelta a 1×: si canta ahí, el límite es más bajo.
+                    val ratio = bpmRel.ratioOutOverIn
+                    val stretchedSpanMs = (mixDur * ratio).roundToLong() + DjTempoMatch.returnGlideSourceMs(bpmA, ratio)
+                    val inVocStretched = DjLyricMatcher.vocalOccupancyRatio(incomingLyrics, beatEntry, beatEntry + stretchedSpanMs)
+                        ?: vocalOverlapSections(incomingVocals, beatEntry, beatEntry + stretchedSpanMs)
+                        ?: bIn.vocalRatio
+                    val maxStretch = DjTempoMatch.maxStretchPct(inVocStretched)
+                    // Cuadrar beats solo funciona con bombo al pulso en las dos durante el cruce (no basta con un
+                    // pulso fiable: hi-hats o una guitarra rítmica también lo dan).
+                    val kickA = DjTempoMatch.kickOnBeat(barsA, startOut, startOut + mixDur)
+                    val kickB = DjTempoMatch.kickOnBeat(barsB, beatEntry, beatEntry + (mixDur * ratio).roundToLong())
+                    val kicksOk = kickA >= DjTempoMatch.MIN_KICK_ON_BEAT && kickB >= DjTempoMatch.MIN_KICK_ON_BEAT
 
-                    val tempoCloseness = (1.0 - bpmRel.relDiffPct / 8.5).coerceIn(0.0, 1.0)
+                    val tempoCloseness = (1.0 - stretchPct / maxStretch).coerceIn(0.0, 1.0)
                     val score = 7.15 +
                         phraseFit +
                         1.85 * tempoCloseness +
                         1.25 * harmonic +
-                        0.95 * min(bOut.kickSteady, bIn.kickSteady) -
+                        1.10 * min(kickA, kickB) -
                         bothSingingPenalty -
                         0.85 * exitPenalty -
                         0.40 * harshDiff -
@@ -285,7 +534,16 @@ object DjBridgePlanner {
                         (lufsDiffLocal * 0.20) -
                         edgeCost(startOut + mixDur, beatEntry) -
                         fatigueBeat
-                    consider(
+                    val fits = fitsInB(beatEntry, mixDur, ratio)
+                    bestKickA = max(bestKickA, kickA)
+                    bestKickB = max(bestKickB, kickB)
+                    limitSeen = min(limitSeen, maxStretch)
+                    when {
+                        !kicksOk -> rejKick++
+                        stretchPct > maxStretch -> rejVoice++
+                        !fits || !phaseRoomB(beatEntry) -> rejFit++
+                    }
+                    if (stretchPct <= maxStretch && kicksOk && fits && phaseRoomB(beatEntry)) consider(
                         CandidatePair(
                             style = DjBridgeStyle.BeatMatchLongMix,
                             cueOutStartMs = startOut,
@@ -298,13 +556,40 @@ object DjBridgePlanner {
                             echoDelayMs = 360.0,
                             score = score,
                             reason = "Cuadre ${"%.1f".format(bpmA)}↔${"%.1f".format(bpmB)} BPM · ${outgoingAudio?.camelot.orEmpty()}→${incomingAudio?.camelot.orEmpty()}",
+                            stretchLimit = maxStretch,
+                            phraseOutMs = tailShiftedPhrase(bOut.startMs, startGrid, startOut),
                         ),
                     )
                 }
 
                 // C. `FilterEcho` (pasa-altos suave 12 dB/oct + LPF apertura en B; eco a negra con estela sobre B cuando va a pulso y en armonía)
-                val echoCanBeatMatch = beatReliable && bpmRel.relDiffPct <= 9.5
-                val useBeatEcho = echoCanBeatMatch &&
+                // Eco a tempo: B entra en fase desde el principio del cruce y, si hace falta, se estira como en el
+                // cuadre de beats; así que pide lo mismo, en las ventanas reales del eco: bombo en las dos y
+                // estiramiento dentro del límite según cante B en la parte estirada.
+                val sameTempo = beatReliable && !DjTempoMatch.isStretched(bpmRel.ratioOutOverIn)
+                val alignedEchoDur = (defaultMixDur * 0.90).roundToLong()
+                    .coerceIn(4_500L, min(8_500L, max(4_500L, durA - bOut.startMs)))
+                val alignedEchoStart = pastChorusTail(
+                    onGridStart(bOut.startMs, outMinMs, outMaxMs - alignedEchoDur, barsA, outgoingAudio), outMaxMs - alignedEchoDur,
+                )
+                val alignedEchoEntry = snapEntry(rawEntry)
+                var echoLimit = DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT
+                val echoCanBeatMatch = beatReliable && phaseRoomB(alignedEchoEntry) && run {
+                    val r = bpmRel.ratioOutOverIn
+                    val span = (alignedEchoDur * r).roundToLong() + DjTempoMatch.returnGlideSourceMs(bpmA, r)
+                    val voc = DjLyricMatcher.vocalOccupancyRatio(incomingLyrics, alignedEchoEntry, alignedEchoEntry + span)
+                        ?: vocalOverlapSections(incomingVocals, alignedEchoEntry, alignedEchoEntry + span)
+                        ?: bIn.vocalRatio
+                    echoLimit = DjTempoMatch.maxStretchPct(voc)
+                    stretchPct <= echoLimit &&
+                        fitsInB(alignedEchoEntry, alignedEchoDur, r) &&
+                        DjTempoMatch.kickOnBeat(barsA, alignedEchoStart, alignedEchoStart + alignedEchoDur) >= DjTempoMatch.MIN_KICK_ON_BEAT &&
+                        DjTempoMatch.kickOnBeat(barsB, alignedEchoEntry, alignedEchoEntry + (alignedEchoDur * r).roundToLong()) >=
+                        DjTempoMatch.MIN_KICK_ON_BEAT
+                }
+                // Eco a negra de A: con B cuadrada en fase, o al mismo tempo si B entra sin batería (si la lleva y no está en
+                // fase, los ecos de A y sus golpes no coinciden y suena a golpe doble).
+                val useBeatEcho = (echoCanBeatMatch || (sameTempo && bIn.drumEnergy < 0.30)) &&
                     !tandaChanged &&
                     harmonic >= 0.45 &&
                     (outgoingAudio?.bpmConfidence ?: 0.0) >= 0.50 &&
@@ -313,14 +598,17 @@ object DjBridgePlanner {
                 val maxEchoDur = if (echoCanBeatMatch) 8_500L else 6_800L
                 val echoDur = (defaultMixDur * (if (echoCanBeatMatch) 0.90 else 0.78)).roundToLong()
                     .coerceIn(4_500L, min(maxEchoDur, max(4_500L, durA - bOut.startMs)))
-                val echoStart = onGridStart(bOut.startMs, outMinMs, outMaxMs - echoDur, barsA, outgoingAudio)
-                val echoEntry = if (echoCanBeatMatch) snapToBeat(rawEntry, incomingAudio, inMinMs, inMaxMs) else rawEntry
+                val echoGrid = onGridStart(bOut.startMs, outMinMs, outMaxMs - echoDur, barsA, outgoingAudio)
+                val echoStart = pastChorusTail(echoGrid, outMaxMs - echoDur)
+                val echoEntry = if (echoCanBeatMatch) snapEntry(rawEntry) else rawEntry
                 val beatEcho = if (useBeatEcho) straightEchoMs(beatA) else 0.0
                 val trueTimbreReason = zoneTimbreShock && pairTimbreShock
+                val calmZoneFilterBoost = 1.30 * outLowIntensity + 0.65 * inCalmZone
                 val echoBoost = (if (trueTimbreReason) 2.55 else 0.0) +
                     (if (tandaChanged) 1.25 else 0.0) +
                     (if (harmonic < 0.36) 1.05 else 0.0) +
-                    (if (bpmRel.relDiffPct > 14.0 && entryVocals > 0.35) 0.70 else 0.0) -
+                    (if (bpmRel.relDiffPct > 14.0 && entryVocals > 0.35) 0.70 else 0.0) +
+                    calmZoneFilterBoost -
                     (if (pairTimbreShock && !zoneTimbreShock) 0.75 else 0.0)
                 val echoScore = 4.15 +
                     echoBoost -
@@ -340,6 +628,9 @@ object DjBridgePlanner {
                         tempoRatio = if (echoCanBeatMatch) bpmRel.ratioOutOverIn else 1.0,
                         echoDelayMs = beatEcho,
                         score = echoScore,
+                        beatAligned = echoCanBeatMatch,
+                        stretchLimit = if (echoCanBeatMatch) echoLimit else null,
+                        phraseOutMs = tailShiftedPhrase(bOut.startMs, echoGrid, echoStart),
                         reason = when {
                             useBeatEcho && trueTimbreReason -> "Filtro + eco a pulso para cambio de textura"
                             useBeatEcho -> "Filtro pasa-altos + eco a pulso"
@@ -349,16 +640,43 @@ object DjBridgePlanner {
                     ),
                 )
 
-                // D. `SmartFade` (fundido musical cálido para temas más melódicos o tempos incompatibles sin choque tímbrico)
-                val fadeTempoClose = beatReliable && bpmRel.relDiffPct <= 8.5
+                // D. `SmartFade` (fundido musical cálido para temas más melódicos, zonas de baja intensidad o tempos incompatibles)
+                // Tempo cercano (sin pedir bombo): el fundido dura algo más y B entra en su beat.
+                val fadeTempoClose = beatReliable && stretchPct <= DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT
                 val fadeBothDrums = avgDrumA >= 0.28 && avgDrumB >= 0.28
+                val localCalmPair = bOut.drumEnergy < 0.30 || bIn.drumEnergy < 0.30 ||
+                    (outLowIntensity >= 0.45 && inCalmZone >= 0.35)
                 val maxFadeDur = 7_200L
                 val fadeDur = (if (fadeTempoClose) (defaultMixDur * 0.85).roundToLong() else (defaultMixDur * 0.78).roundToLong())
                     .coerceIn(4_000L, min(maxFadeDur, max(4_000L, durA - bOut.startMs)))
-                val fadeStart = onGridStart(bOut.startMs, outMinMs, outMaxMs - fadeDur, barsA, outgoingAudio)
-                val fadeEntry = if (fadeTempoClose) snapToBeat(rawEntry, incomingAudio, inMinMs, inMaxMs) else rawEntry
-                val calmBonus = if (avgDrumA < 0.32 || avgDrumB < 0.32) 1.35 else 0.0
-                val closeDrumFadePenalty = if (fadeTempoClose && fadeBothDrums) 2.35 else 0.0
+                val fadeGrid = onGridStart(bOut.startMs, outMinMs, outMaxMs - fadeDur, barsA, outgoingAudio)
+                val fadeStart = pastChorusTail(fadeGrid, outMaxMs - fadeDur)
+                val fadeEntry = if (fadeTempoClose) snapEntry(rawEntry) else rawEntry
+                // Fundido a tempo (opcional en el renderizador, `beatAligned = true`): B al tempo de A y en fase durante el
+                // cruce, y vuelta a 1× ya sola. Pide lo mismo que el cuadre en las ventanas reales del fundido: bombo al
+                // pulso en las dos (A en su cruce, B en el audio que gasta), límite 6 % con voz / 8 % instrumental en el
+                // cruce + vuelta, y que todo eso más el tramo seco quepa en B. Si no, el fundido de siempre a 1×.
+                val fadeRatio = bpmRel.ratioOutOverIn
+                val fadeSpanB = DjTempoMatch.lockedCrossSourceMs(fadeDur, bpmA, fadeRatio)
+                var fadeLimit = DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT
+                val fadeLock = fadeTempoClose && harmonic >= 0.36 && phaseRoomB(fadeEntry) && run {
+                    val voc = DjLyricMatcher.vocalOccupancyRatio(incomingLyrics, fadeEntry, fadeEntry + fadeSpanB)
+                        ?: vocalOverlapSections(incomingVocals, fadeEntry, fadeEntry + fadeSpanB)
+                        ?: bIn.vocalRatio
+                    fadeLimit = DjTempoMatch.maxStretchPct(voc)
+                    stretchPct <= fadeLimit &&
+                        fadeEntry + fadeSpanB + POST_ROLL_MS + 1_500L <= durB &&
+                        DjTempoMatch.kickOnBeat(barsA, fadeStart, fadeStart + fadeDur) >= DjTempoMatch.MIN_KICK_ON_BEAT &&
+                        DjTempoMatch.kickOnBeat(barsB, fadeEntry, fadeEntry + (fadeDur * fadeRatio).roundToLong()) >=
+                        DjTempoMatch.MIN_KICK_ON_BEAT
+                }
+                val calmBonus = (if (avgDrumA < 0.32 || avgDrumB < 0.32) 1.35 else 0.0) +
+                    1.50 * outLowIntensity +
+                    0.95 * inCalmZone
+                // Castigo al fundido solo si el cuadre de beats era posible (con bombo): si no, el fundido es lo mejor.
+                // A tempo y en fase los bombos ya no chocan: ese castigo no aplica (el cuadre suele seguir ganando por
+                // puntuación propia; el fundido a tempo es la alternativa cuando el cuadre está cansado o no cabe).
+                val closeDrumFadePenalty = if (!fadeLock && pairMayBeatMatch && fadeBothDrums && !localCalmPair) 2.35 else 0.0
                 val textureMatch = (1.0 - harshDiff).coerceIn(0.0, 1.0)
                 val dualVocalPenalty = if (exitVocals > 0.30 && entryVocals > 0.30) 2.0 * min(exitVocals, entryVocals) else 0.0
                 val fadeScore = 4.65 +
@@ -383,19 +701,35 @@ object DjBridgePlanner {
                         transitionDurMs = fadeDur,
                         pickupMs = 0L,
                         silenceMs = 0L,
-                        tempoRatio = 1.0,
+                        tempoRatio = if (fadeLock) fadeRatio else 1.0,
                         echoDelayMs = 320.0,
                         score = fadeScore,
-                        reason = "Fundido musical suave",
+                        beatAligned = fadeLock,
+                        stretchLimit = if (fadeLock) fadeLimit else null,
+                        phraseOutMs = tailShiftedPhrase(bOut.startMs, fadeGrid, fadeStart),
+                        reason = if (fadeLock) "Fundido musical suave a tempo" else "Fundido musical suave",
                     ),
                 )
             }
         }
 
         // B. `EnergyDropCut`: A sube hacia un estribillo/drop y, justo cuando iba a caer, se calla (eco amplio a pulso
-        // + respiro de tensión) y entra el riser de B hasta el drop de B.
-        if (isDjSession) {
+        // + respiro de tensión) y entra el riser de B hasta el drop de B. Nunca cortar palabras, frases ni en mitad de estribillo.
+        run {
             val dropsA = liftBars(barsA, outMinMs + 2_500L, outMaxMs)
+            // A clean instrumental break is also a musical place to release A into a strong opening in B.
+            val breaksA = if (beatReliable && (!isDjSession || adhd)) outgoingAudio?.bars.orEmpty().zipWithNext().mapNotNull { (before, after) ->
+                val lufsDrop = before.lufs - after.lufs
+                val drumDrop = before.drumEnergy - after.drumEnergy
+                (after.startMs to (0.4 + 0.1 * lufsDrop).coerceAtMost(0.95)).takeIf {
+                    after.startMs in (outMinMs + 2_500L)..outMaxMs && before.endMs == after.startMs &&
+                        dropsA.none { (lift) -> lift.startMs == after.endMs } &&
+                        before.vocalRatio < 0.24 && after.vocalRatio < 0.24 &&
+                        before.kickOnBeat >= DjTempoMatch.MIN_KICK_ON_BEAT &&
+                        before.drumEnergy >= 0.48 && lufsDrop >= 2.0 && drumDrop >= 0.18
+                }
+            }.toMap() else emptyMap()
+            val dropExits = dropsA + barsA.mapNotNull { bar -> breaksA[bar.startMs]?.let { bar to it } }
             val dropsB = candidatesB.filter { bIn ->
                 bIn.drumEnergy >= 0.36 && bIn.lufs >= avgLufsB - 1.5 &&
                     (rise(barsB, bIn).first >= 0.9 || bIn.drumEnergy >= 0.48 || bIn.kickSteady >= 0.55)
@@ -412,28 +746,59 @@ object DjBridgePlanner {
             val gapEchoMs = (effBeatA * gapBeats).roundToLong().coerceIn(1_200L, 2_700L)
             val pickup = effBeatA.roundToLong().coerceIn(380L, 750L)
             val echoStepMs = (effBeatA * (if (bpmEff > 126.0) 2.0 else 1.0)).coerceIn(380.0, 950.0)
-            for ((barA, liftA) in dropsA) {
+            for ((barA, liftA) in dropExits) {
+                val atBreak = barA.startMs in breaksA
                 val dropAt = snapToBeat(barA.startMs, outgoingAudio, outMinMs + 2_000L, outMaxMs)
-                val cutMs = dropAt - preDropGap
-                // Cortar a A en mitad de una palabra suena a error; justo al acabar su subida, no.
-                val cutsVocal = DjLyricMatcher.isMidVocal(outgoingLyrics, cutMs) || inSection(outgoingVocals, cutMs)
+                val cutMs = if (atBreak) dropAt else dropAt - preDropGap
+                val gapMs = if (atBreak) (effBeatA * 2.0).roundToLong().coerceIn(750L, 1_150L) else gapEchoMs
                 val prevA = barsA.getOrNull(barsA.indexOf(barA) - 1) ?: barA
-                val blindVocalCut = outgoingLyrics == null && outgoingVocals.isEmpty() &&
-                    prevA.vocalRatio >= 0.45 && barA.vocalRatio >= 0.45
+                val (dlA, ddA) = rise(barsA, barA)
+
+                // Nunca cortar en mitad de un estribillo ni partiendo palabras o versos sin respiro.
+                val secAtCut = outgoingVocals.firstOrNull { cutMs in (it.startMs + 250L)..(it.endMs - 250L) }
+                if (secAtCut?.isChorus == true) continue
+                val preChorusIntoChorus = outgoingVocals.any { it.isChorus && it.startMs in (cutMs - 120L)..(dropAt + 2_200L) }
+                if (DjLyricMatcher.cutsWordOrPhrase(outgoingLyrics, cutMs, allowChorusSeam = preChorusIntoChorus && !atBreak)) continue
+                if (atBreak && (secAtCut != null ||
+                        (DjLyricMatcher.vocalOccupancyRatio(outgoingLyrics, cutMs - pickup, cutMs) ?: 0.0) > 0.05)) continue
+                if (secAtCut != null) {
+                    val nearSecEnd = cutMs >= secAtCut.endMs - 1_400L && (dlA >= 1.5 || ddA >= 0.14)
+                    if (outgoingLyrics == null || (!preChorusIntoChorus && !nearSecEnd)) continue
+                }
+
+                // Sin letra ni estructura vocal conocida: exigir una subida clara sin voz densa encima.
+                val blindNoLyrics = outgoingLyrics == null && outgoingVocals.isEmpty()
+                if (blindNoLyrics && !atBreak) {
+                    if (dlA < 1.6 && ddA < 0.14) continue
+                    if (prevA.vocalRatio >= 0.35 || (prevA.vocalRatio >= 0.30 && barA.vocalRatio >= 0.28)) continue
+                }
+                val blindVocalRisk = blindNoLyrics && (prevA.vocalRatio >= 0.27 || barA.vocalRatio >= 0.30)
+                val blindSoftBumpPenalty = if (blindNoLyrics && liftA < 0.42) 1.4 else 0.0
+                val adhdBonus = when {
+                    !adhd -> 0.0
+                    preChorusIntoChorus -> 0.65
+                    !blindNoLyrics -> 0.50
+                    liftA >= 0.55 && prevA.vocalRatio < 0.27 && barA.vocalRatio < 0.27 -> 0.55
+                    else -> 0.0
+                }
                 for (bIn in dropsB) {
-                    val entryMs = snapToBeat(bIn.startMs.coerceIn(inMinMs, inMaxMs), incomingAudio, inMinMs, inMaxMs)
+                    val entryMs = if (isDjSession) snapEntry(bIn.startMs.coerceIn(inMinMs, inMaxMs)) else inMinMs
                     if (DjLyricMatcher.isMidVocal(incomingLyrics, entryMs)) continue
-                    val lufsJump = abs(barA.lufs - bIn.lufs)
+                    if (atBreak && (bIn.drumEnergy < 0.55 || bIn.kickOnBeat < DjTempoMatch.MIN_KICK_ON_BEAT ||
+                            incomingAudio?.nearestBeatMs(entryMs)?.let { abs(it - entryMs) <= 100.0 } != true)) continue
+                    val lufsJump = abs((if (atBreak) prevA.lufs else barA.lufs) - bIn.lufs)
                     if (lufsJump > 5.5) continue
                     val liftB = rise(barsB, bIn).first
-                    val score = 6.0 +
+                    val score = 5.95 +
                         1.6 * liftA +
                         liftB.coerceIn(0.0, 5.0) * 0.40 +
                         1.2 * bIn.drumEnergy +
-                        (if (djMode == DjMode.Adhd) 0.55 else 0.0) +
+                        adhdBonus +
+                        (if (preChorusIntoChorus) 0.40 else 0.0) +
                         (if (tandaChanged) 0.35 else 0.0) +
                         (if (beatReliable) 0.3 else -0.6) -
-                        (if (cutsVocal) 2.8 else if (blindVocalCut) 1.65 else 0.0) -
+                        (if (blindVocalRisk) 2.2 else 0.0) -
+                        blindSoftBumpPenalty -
                         1.2 * prevA.soloRisk -
                         (if (hasTimbreShock(prevA, bIn)) 0.8 else 0.0) -
                         lufsJump * 0.18 -
@@ -445,33 +810,140 @@ object DjBridgePlanner {
                             cueOutStartMs = (cutMs - pickup).coerceAtLeast(outMinMs),
                             cueOutEndMs = cutMs,
                             entryInMs = entryMs,
-                            transitionDurMs = pickup + gapEchoMs + 750L,
+                            transitionDurMs = pickup + gapMs + 750L,
                             pickupMs = pickup,
-                            silenceMs = gapEchoMs,
+                            silenceMs = gapMs,
                             tempoRatio = 1.0,
                             echoDelayMs = echoStepMs,
                             score = score,
-                            reason = "Corte con ecos a pulso + respiro (${gapEchoMs} ms) y riser al drop",
+                            phraseOutMs = dropAt,
+                            reason = if (atBreak) "Corte en el descanso instrumental + entrada al pulso"
+                                else "Corte con ecos a pulso + respiro (${gapMs} ms) y riser al drop",
                         ),
                     )
                 }
             }
         }
 
-        val winner = best ?: CandidatePair(
-            style = DjBridgeStyle.SmartFade,
-            cueOutStartMs = max(0L, outLastSound - 6_000L),
-            cueOutEndMs = outLastSound,
-            entryInMs = inMinMs,
-            transitionDurMs = 6_000L,
+        // If the segment/window contains no clean candidate, wait until a whole chorus has finished.
+        // Include section ends explicitly: pruning to ten quiet bars can otherwise discard every safe exit.
+        val fallbackDur = 6_000L.coerceAtMost(durA)
+        // DJ rápido: antes los límites de frase (B en su entrada prevista, A tras acabar un bloque), y fuera de la
+        // ventana también: mejor salir algo tarde que no mezclar y oír la canción entera hasta el final.
+        val fallbackEntry = (phraseB.filter { it in inMinMs..inMaxMs }.sortedBy { abs(it - (incomingAdhd?.startMs ?: it)) } +
+            listOf(inMinMs) + sectionsB.filter { it.isChorus }.flatMap { listOf(it.startMs, it.endMs + SongSections.VOCAL_TAIL_MS) } +
+            listOfNotNull(inMaxMs.takeIf { adhd }))
+            .firstOrNull { it in inMinMs..inMaxMs && sectionsB.none { s -> s.isChorus && it > s.startMs && it < s.endMs } }
+            // Toda la ventana cae dentro de un estribillo de B (su trozo empieza a mitad de uno): se entra en el borde más
+            // cercano (su inicio o su final) aunque quede fuera. Antes no había mezcla y el aviso de la cola desaparecía
+            // (medido el 17/11 en DJ rápido, dos veces en 15 min).
+            // Solo en DJ rápido (en listas normales B empieza por el principio); antes los bordes que dejan un trozo
+            // entero de B (≥ 70 s), y solo si no hay, los que dejan al menos 20 s.
+            ?: sectionsB.takeIf { adhd }.orEmpty().filter { it.isChorus }
+                .flatMap { listOf(it.startMs, it.endMs + SongSections.VOCAL_TAIL_MS) }
+                .filter { it >= inFirstSound && it <= durB - 20_000L && sectionsB.none { s -> s.isChorus && it > s.startMs && it < s.endMs } }
+                .sortedWith(compareBy({ it > durB - ADHD_MIN_B_LEFT_MS }, { abs(it - (incomingAdhd?.startMs ?: inMinMs)) }))
+                .firstOrNull()
+        // Si tras el último bloque protegido de A no caben los 6 s (estribillo hasta pocos segundos del final, medido en
+        // listas y en reguetón del DJ normal: «sin mezcla» y cambio seco), un fundido más corto sobre la cola instrumental,
+        // de al menos [MIN_FALLBACK_FADE_MS] y sin pisar nada protegido. Solo mientras A sigue sonando.
+        // En rápido, un estribillo puede acabar un poco después de la ventana. Darle margen aún permite salir antes
+        // del final de la pista, pero una salida alternativa que ya eligió el trozo tiene su propia ventana.
+        val fallbackEnd = if (adhd && outgoingAdhd != null && outgoingAdhd.endMs < durA) {
+            val limit = if (outgoingAdhd.fallbackExit) outMaxMs else max(outMaxMs, outgoingAdhd.endMs + ADHD_FALLBACK_OUT_LATE_MS)
+            min(durA - AdhdPlanner.FALLBACK_END_MARGIN_MS, limit)
+        } else durA
+        val minFallback = if (adhd) 2_000L else MIN_FALLBACK_FADE_MS
+        fun fallbackLen(start: Long): Long = min(fallbackDur, fallbackEnd - start)
+        val fallbackStarts = (phraseA.filter { it >= outMinMs && !inSection(sectionsA, it) } +
+            listOf(outMinMs, (outMaxMs - fallbackDur).coerceAtLeast(outMinMs)) +
+            listOfNotNull(outgoingAdhd?.fadeOutStartMs.takeIf { adhd }) +
+            sectionsA.map { it.endMs + SongSections.VOCAL_TAIL_MS }).distinct().filter {
+            val len = fallbackLen(it)
+            it >= outMinMs && len >= min(fallbackDur, minFallback) && it <= outLastSound - 1_500L &&
+                fallbackEntry != null && protectsChorus(it, it + len, fallbackEntry)
+        }
+        val fallbackStart = fallbackStarts.minWithOrNull(
+            // Mejor con los 6 s enteros; entre iguales, DJ rápido el primero (sale de su trozo cuanto antes) y el resto el
+            // más cercano al final de A (antes era el primero de la ventana: hasta 75 s antes del final en DJ normal).
+            compareBy<Long>({ fallbackLen(it) < fallbackDur }, { if (adhd) it else abs(outLastSound - fallbackDur - it) }),
+        )
+        val fallbackLength = fallbackStart?.let { fallbackLen(it) } ?: 0L
+        // Ventanas y descartes: sin esto un «sin mezcla» no se podía repartir entre la salida de A y la entrada de B.
+        val noMixWhy = "descartes por estribillo A $rejChorusA, B $rejChorusB; ventana A %.1f–%.1f s, B %.1f–%.1f s".format(
+            outMinMs / 1000.0, outMaxMs / 1000.0, inMinMs / 1000.0, inMaxMs / 1000.0,
+        ) + (if (fallbackEntry == null) "; B sin entrada fuera de estribillo" else "")
+        val outroCanKeepSegment = !adhd || outgoingAdhd == null || outgoingAdhd.endMs >= durA
+        val outro = outroCanKeepSegment && fallbackStart == null && fallbackEntry != null && durA >= PRE_ROLL_MS * 2 &&
+            durB - fallbackEntry >= POST_ROLL_MS + OUTRO_TAIL_MS
+        // If whole-track analysis found dead air at the end, start B there while keeping every sample of A.
+        val outroBStart = if (outro && fallbackEntry != null && outgoingAudio?.coversWholeSong == true) {
+            val lastChorusEnd = sectionsA.filter { it.isChorus }.maxOfOrNull { it.endMs + SongSections.VOCAL_TAIL_MS } ?: 0L
+            val overlapBudget = min(MAX_OUTRO_SILENCE_OVERLAP_MS, durB - fallbackEntry - POST_ROLL_MS)
+            maxOf(outLastSound + 300L, lastChorusEnd, durA - overlapBudget).coerceAtMost(durA)
+        } else durA
+        val winner = best ?: bestRelaxed ?: CandidatePair(
+            style = if (outro) DjBridgeStyle.OutroTail else DjBridgeStyle.SmartFade,
+            cueOutStartMs = fallbackStart ?: (if (outro) outroBStart - OUTRO_DRY_A_MS else durA),
+            cueOutEndMs = fallbackStart?.plus(fallbackLength) ?: durA,
+            entryInMs = fallbackEntry ?: inMinMs,
+            transitionDurMs = if (outro) OUTRO_DRY_A_MS + max(OUTRO_TAIL_MS, durA - outroBStart) else fallbackLength,
             pickupMs = 0L,
             silenceMs = 0L,
             tempoRatio = 1.0,
             echoDelayMs = 340.0,
             score = 1.0,
-            reason = "Fundido suave de respaldo",
+            reason = when {
+                outro -> "Enlace al final: se conserva el estribillo completo"
+                fallbackStart == null -> "Sin mezcla: proteger el estribillo completo ($noMixWhy)"
+                fallbackLength < fallbackDur -> "Fundido corto tras el estribillo completo"
+                else -> "Fundido tras el estribillo completo"
+            },
         )
-        return buildSpec(winner, durA, durB, bpmA, bpmB, harmonic, gainMatch, outgoingAudio, incomingAudio)
+        val phraseNote = if (!adhd) "" else when {
+            best != null -> ", en frase"
+            bestRelaxed != null -> ", FUERA de frase (descartes: frase $rejPhrase, voz $rejVocal)"
+            else -> ", respaldo"
+        }
+        // Bombo de la pareja ELEGIDA, en las mismas ventanas que miró la puerta (la de B en audio de B: cruce × ratio).
+        val winKickA = DjTempoMatch.kickOnBeat(barsA, winner.cueOutStartMs, winner.cueOutEndMs)
+        val winKickB = DjTempoMatch.kickOnBeat(
+            barsB, winner.entryInMs, winner.entryInMs + (max(2_000L, winner.transitionDurMs) * winner.tempoRatio).roundToLong(),
+        )
+        val aligned = winner.style == DjBridgeStyle.BeatMatchLongMix ||
+            ((winner.style == DjBridgeStyle.FilterEcho || winner.style == DjBridgeStyle.SmartFade) && winner.beatAligned)
+        val tempoNote = buildString {
+            // Lo que se aplica de verdad (ratio del plan elegido) y, si no es lo mismo, lo que pedía la pareja: antes decía
+            // «estira 2,6 %» con el puente a 1× (18/11).
+            val applied = DjTempoMatch.stretchPct(winner.tempoRatio)
+            append("estira %.1f %%".format(applied))
+            if (abs(applied - stretchPct) >= 0.05) append(" (pareja %.1f %%)".format(stretchPct))
+            append(phraseNote)
+            if (best == null && bestRelaxed == null) append(" ($noMixWhy)")
+            if (aligned) {
+                append(" (lím %.0f %%), bombo A %.2f B %.2f".format(winner.stretchLimit ?: limitSeen, winKickA, winKickB))
+                append(
+                    when (winner.style) {
+                        DjBridgeStyle.BeatMatchLongMix -> ", cuadre"
+                        DjBridgeStyle.SmartFade -> ", fundido a tempo"
+                        else -> ", eco alineado"
+                    },
+                )
+            } else {
+                append(", bombo A %.2f B %.2f, sin alinear".format(winKickA, winKickB))
+                if (beatGate != null) {
+                    append(" (cuadre cerrado: $beatGate)")
+                } else {
+                    append(" (mejor visto A %.2f B %.2f, lím mín %.0f %%)".format(bestKickA, bestKickB, limitSeen))
+                    append("; descartes de cuadre: bombo $rejKick, voz $rejVoice, no cabe $rejFit, timbre $rejTimbre")
+                }
+            }
+        }
+        val spec = buildSpec(winner, durA, durB, bpmA, bpmB, harmonic, gainMatch, outgoingAudio, incomingAudio)
+        val phaseBounds = if (winner.style == DjBridgeStyle.BeatMatchLongMix || winner.beatAligned) {
+            phaseBoundsB(spec.entryInMs)
+        } else null
+        return spec.copy(tempoNote = tempoNote, kickShiftRangeMs = phaseBounds)
     }
 
     private fun buildSpec(
@@ -486,27 +958,39 @@ object DjBridgePlanner {
         inAudio: AudioMetrics?,
     ): DjBridgeSpec {
         // Ajustar el inicio de efectos con preRoll seco anterior para handoff limpio.
-        val cueOutStart = win.cueOutStartMs.coerceIn(0L, max(0L, durA - 1_500L))
-        val cueOutEnd = win.cueOutEndMs.coerceIn(cueOutStart + 400L, durA)
+        val cueOutStart = win.cueOutStartMs.coerceIn(0L, durA)
+        val cueOutEnd = win.cueOutEndMs.coerceIn(cueOutStart, durA)
         val preRoll = min(PRE_ROLL_MS, cueOutStart)
         val preRollStart = cueOutStart - preRoll
         val entryIn = win.entryInMs.coerceIn(0L, max(0L, durB - 4_000L))
         val postRoll = min(POST_ROLL_MS, max(800L, durB - entryIn - 1_500L))
 
         val dryOffsetInB = when (win.style) {
-            DjBridgeStyle.BeatMatchLongMix -> (win.transitionDurMs * win.tempoRatio).roundToLong() + 1_600L
+            // Cruce a tempo de A + vuelta de B a 1× ya sola + margen para el empalme con el tramo seco.
+            DjBridgeStyle.BeatMatchLongMix -> (win.transitionDurMs * win.tempoRatio).roundToLong() +
+                DjTempoMatch.bridgeTailSourceMs(bpmA, win.tempoRatio)
             DjBridgeStyle.LyricLoopCut -> {
                 // La entrada de B ya ha cantado la frase compartida + puente corto de estabilización a tempo.
-                val phraseDur = (win.lyricLoop?.let { max(2_200L, it.inPhraseEndMs - it.inEntryMs + 1_600L) } ?: 2_600L)
+                // Igual que el renderizador: max(frase, 1,1 s) + cola (≥1,6 s o la vuelta a 1×).
+                val tail = max(1_600L, DjTempoMatch.returnGlideSourceMs(bpmA, win.tempoRatio))
+                val phraseDur = (win.lyricLoop?.let { max(2_200L, max(it.inPhraseEndMs - it.inEntryMs, 1_100L) + tail) } ?: (1_100L + tail))
                 phraseDur
             }
             DjBridgeStyle.EnergyDropCut -> 750L
-            DjBridgeStyle.FilterEcho -> if (bpmA > 20.0 && bpmB > 20.0 && DjHarmonic.bpmRelation(bpmA, bpmB).relDiffPct <= 9.5) {
-                win.transitionDurMs
+            DjBridgeStyle.OutroTail -> win.transitionDurMs - OUTRO_DRY_A_MS
+            DjBridgeStyle.FilterEcho -> if (win.beatAligned && DjTempoMatch.isStretched(win.tempoRatio)) {
+                (win.transitionDurMs * win.tempoRatio).roundToLong() + DjTempoMatch.bridgeTailSourceMs(bpmA, win.tempoRatio)
+            } else if (win.beatAligned) {
+                win.transitionDurMs + 1_800L + 800L // cola de 1,8 s + corrección de fase máxima
             } else {
-                (win.transitionDurMs * 0.55).roundToLong().coerceIn(1_800L, 5_000L)
+                // Lo que gasta el render sin alinear: B entra al 48 % del cruce y suena 1,8 s de cola tras él. Antes se
+                // reservaba 0,55× cruce (1,8–5 s): con 6,8 s de cruce faltaban ~1,6 s y se comían el tramo seco de B.
+                (win.transitionDurMs * 0.52).roundToLong() + 1_800L
             }
-            DjBridgeStyle.SmartFade -> win.transitionDurMs
+            // A tempo: cruce estirado + vuelta (o cruce + corrección de fase máxima a 1×), igual que el renderizador.
+            DjBridgeStyle.SmartFade -> if (win.beatAligned) {
+                DjTempoMatch.lockedCrossSourceMs(win.transitionDurMs, bpmA, win.tempoRatio)
+            } else win.transitionDurMs
         }
         val dryBResumeMs = (entryIn + dryOffsetInB + postRoll).coerceAtMost(durB)
         val lufsParity = 1.0 - (abs((outAudio?.integratedLufs ?: -14.0) - (inAudio?.integratedLufs ?: -14.0)) / 12.0).coerceIn(0.0, 1.0)
@@ -533,10 +1017,12 @@ object DjBridgePlanner {
             pickupMs = win.pickupMs,
             silenceMs = win.silenceMs,
             kickShiftMs = 0.0,
+            beatAligned = if (win.style == DjBridgeStyle.FilterEcho || win.style == DjBridgeStyle.SmartFade) win.beatAligned else null,
             incomingGainMatch = gainMatch,
             lyricLoop = win.lyricLoop,
             compatibilityScore = compat,
             reason = win.reason,
+            outroIncomingOffsetMs = OUTRO_DRY_A_MS.takeIf { win.style == DjBridgeStyle.OutroTail },
         )
     }
 
@@ -550,7 +1036,9 @@ object DjBridgePlanner {
             // que acababa el análisis. Lo que falta se rellena con compases como los últimos medidos (sin voz supuesta).
             val step = bars.takeLast(8).map { it.durationMs }.sorted().let { it[it.size / 2] }.coerceIn(1_000L, 4_000L)
             val recent = bars.takeLast(8)
+            // Sin bombo supuesto (-1): lo no analizado no puede habilitar un cuadre de beats.
             val template = recent.last().copy(
+                kickOnBeat = -1.0,
                 lufs = recent.map { it.lufs }.average(),
                 drumEnergy = recent.map { it.drumEnergy }.average(),
                 vocalRatio = recent.map { it.vocalRatio }.average(),
@@ -593,7 +1081,10 @@ object DjBridgePlanner {
     private fun selectOutCandidateBars(bars: List<BarFeature>, minMs: Long, maxMs: Long, dur: Long): List<BarFeature> {
         val inside = bars.filter { it.endMs >= minMs + 2_000L && it.startMs <= maxMs - 500L }
         if (inside.isNotEmpty()) {
-            return if (inside.size <= 8) inside else inside.sortedBy { it.vocalRatio + it.soloRisk * 0.8 }.take(8)
+            if (inside.size <= 10) return inside
+            val clean = inside.sortedBy { it.vocalRatio + it.soloRisk * 0.8 }.take(7)
+            val calm = inside.sortedBy { it.drumEnergy + (it.lufs * 0.08) + it.vocalRatio * 1.4 }.take(4)
+            return (clean + calm).distinct().take(10)
         }
         // Ningún compás en la ventana: uno al final de la ventana, no el último que haya (podía quedar muy antes).
         if (maxMs > minMs) return listOf(BarFeature((maxMs - 4_000L).coerceAtLeast(minMs), maxMs))
@@ -607,7 +1098,10 @@ object DjBridgePlanner {
         }
         val inside = bars.filter { it.startMs in minMs..maxMs }
         if (inside.isNotEmpty()) {
-            return if (inside.size <= 8) inside else inside.sortedByDescending { it.drumEnergy + (it.lufs * 0.06) - it.vocalRatio }.take(8)
+            if (inside.size <= 10) return inside
+            val punchy = inside.sortedByDescending { it.drumEnergy + (it.lufs * 0.06) - it.vocalRatio }.take(6)
+            val calm = inside.sortedBy { it.vocalRatio + it.drumEnergy * 0.65 + (it.lufs * 0.04) }.take(4)
+            return (punchy + calm).distinct().take(10)
         }
         return listOf(bars.firstOrNull { it.endMs > minMs } ?: bars.firstOrNull() ?: BarFeature(0L, min(dur, 2_000L)))
     }
@@ -659,7 +1153,7 @@ object DjBridgePlanner {
             val (dl, dd) = rise(bars, bar)
             val lift = 0.55 * ((dl - 0.8) / 3.0).coerceIn(0.0, 1.0) + 0.45 * ((dd - 0.05) / 0.25).coerceIn(0.0, 1.0)
             if ((dl >= 1.2 || (dd >= 0.12 && dl >= 0.3)) && lift >= 0.25) bar to lift else null
-        }.sortedByDescending { it.second }.take(6)
+        }.sortedByDescending { it.second }.take(10)
 
     /** Cuánto cambia la música al empezar [bar] (0..1): un cambio de sección o de frase, donde mezclar suena natural. */
     private fun sectionLift(bars: List<BarFeature>, bar: BarFeature): Double {
@@ -669,6 +1163,16 @@ object DjBridgePlanner {
         val loud = ((abs(bar.lufs - prev.lufs) - 1.0) / 3.0).coerceIn(0.0, 1.0)
         val drums = ((abs(bar.drumEnergy - prev.drumEnergy) - 0.08) / 0.25).coerceIn(0.0, 1.0)
         return 0.5 * loud + 0.5 * drums
+    }
+
+    /** Tolerancia para «cae en un límite de frase»: algo más de medio beat. */
+    private fun phraseTolerance(bpm: Double): Long =
+        if (bpm > 20.0) (60_000.0 / bpm * 0.6).roundToLong().coerceIn(220L, 450L) else 450L
+
+    /** Un compás que empieza justo en [ms] (las métricas del compás real más cercano). */
+    private fun barAt(bars: List<BarFeature>, ms: Long): BarFeature {
+        val near = nearestBar(bars, ms)
+        return if (near.startMs == ms) near else near.copy(startMs = ms, endMs = ms + near.durationMs)
     }
 
     private fun nearestBar(bars: List<BarFeature>, ms: Long): BarFeature =
@@ -725,11 +1229,8 @@ object DjBridgePlanner {
         return lastSame + freqPenalty
     }
 
-    private fun isBeatMatchReady(m: AudioMetrics?): Boolean {
-        if (m == null || (m.bpm ?: 0.0) <= 20.0) return false
-        if (m.bpmConfidence >= 0.35 && m.beatGrid.isNotEmpty()) return true
-        return m.bpmConfidence >= 0.18 && m.beatGrid.size >= 8 && m.beatStrength >= 0.28
-    }
+    /** Mismos umbrales que usa el DJ al elegir canciones cuadrables (viven en [DjTempoMatch]). */
+    private fun isBeatMatchReady(m: AudioMetrics?): Boolean = DjTempoMatch.isBeatMatchReady(m)
 
     /** Eco a pulso de negra (`1.0 * beatMs`, o `0.5 * beatMs` si el tempo detectado es muy lento) para caer siempre sobre el pulso. */
     private fun straightEchoMs(beatMs: Double): Double {

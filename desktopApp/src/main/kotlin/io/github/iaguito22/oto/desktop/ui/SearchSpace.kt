@@ -52,7 +52,7 @@ internal fun SearchSpace(state:MenuState,lists:List<LocalPlaylist>,currentId:Str
             state.searchError!=null && state.results.isEmpty() && local.isEmpty() -> Text("La búsqueda falló · ${state.searchError}",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
             state.query.trim().length<2 && state.results.isEmpty() && local.isEmpty() -> Text("Sigue escribiendo. Con dos letras ya busca.",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
             state.results.isEmpty() && local.isEmpty() -> Text("Sin resultados. Prueba con otro nombre o artista.",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
-            else -> LazyColumn(contentPadding=PaddingValues(bottom=20.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+            else -> LazyColumn(contentPadding=PaddingValues(bottom=20.dp+LocalFloatingDockInset.current),verticalArrangement=Arrangement.spacedBy(4.dp)) {
                 items(local,key={"local:${it.id}"}) {list->SearchLine(list.name,"Tu lista · ${list.songs.size} canciones",list.songs.firstOrNull()?.artwork,false,{onRemember(null);onLocal(list.id)})}
                 itemsIndexed(state.results,key={i,item->"$i:${item.id}"}) {i,item->
                     val subtitle=when(item){is SongItem->"Canción · "+item.artists.joinToString{it.name};is ArtistItem->"Artista";is AlbumItem->listOfNotNull("Álbum",item.artists?.joinToString{it.name}?.takeIf{it.isNotBlank()},item.year?.toString()).joinToString(" · ");is PlaylistItem->listOfNotNull("Lista",item.author?.name).joinToString(" · ");else->""}

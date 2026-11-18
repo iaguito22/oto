@@ -35,7 +35,7 @@ import kotlin.math.*
 
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
-internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playing: Boolean, position: () -> Long, seek: (Long) -> Unit, store: LyricsStore, prefs: Prefs, fontScale:Float = 1f) {
+internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playing: Boolean, position: () -> Long, seek: (Long) -> Unit, store: LyricsStore, prefs: Prefs, fontScale:Float = 1f, bottomInset:Dp = 0.dp) {
     val clock = remember(id) { LyricsClock() }
     val leadMs = if(lyrics is Lyrics.Synced && !lyrics.wordByWord) 100L else 250L
     val romanize by prefs.romanize.collectAsState(initial = true)
@@ -116,14 +116,14 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
                     item(key = "source") { LyricsSource(lyrics.source, synced = lyrics.wordByWord) }
                 }
                 if (!following) {
-                    Row(Modifier.align(Alignment.BottomCenter).padding(bottom=46.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(50)).background(Color(0xEE343936)).clickable { following=true; syncRequest++ }.padding(horizontal=16.dp,vertical=10.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.align(Alignment.BottomCenter).padding(bottom=maxOf(46.dp, bottomInset + 12.dp)).clip(androidx.compose.foundation.shape.RoundedCornerShape(50)).background(Color(0xEE343936)).clickable { following=true; syncRequest++ }.padding(horizontal=16.dp,vertical=10.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         Icon(Icons.Rounded.Sync,null,Modifier.size(16.dp),tint=Color.White)
                         Text("Sincronizar",style=OtoType.rowSub,color=Color.White)
                     }
                 }
             }
         }
-        lyrics is Lyrics.Plain -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) { items(lyrics.lines) { Text(it, style = LYRIC.copy(fontSize=LYRIC.fontSize*fontScale,lineHeight=LYRIC.lineHeight*fontScale), color = Color.White.copy(alpha = .62f)) }; item { LyricsSource(lyrics.source, synced = false) } }
+        lyrics is Lyrics.Plain -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start=20.dp,end=20.dp,top=20.dp,bottom=20.dp+bottomInset), verticalArrangement = Arrangement.spacedBy(20.dp)) { items(lyrics.lines) { Text(it, style = LYRIC.copy(fontSize=LYRIC.fontSize*fontScale,lineHeight=LYRIC.lineHeight*fontScale), color = Color.White.copy(alpha = .62f)) }; item { LyricsSource(lyrics.source, synced = false) } }
         else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Instrumental o sin letra disponible", style = OtoType.rowSub, color = Color.White.copy(alpha = .36f)) }
     }
 }

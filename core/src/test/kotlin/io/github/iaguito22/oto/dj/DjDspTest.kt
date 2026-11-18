@@ -110,6 +110,23 @@ class DjDspTest {
     }
 
     @Test
+    fun softClipLeavesNormalLevelsUntouched() {
+        // Antes un tanh sobre todo el puente: 0,5 salía a 0,467 y con tercer armónico.
+        for (x in listOf(0f, 0.1f, -0.25f, 0.5f, -0.8f, 0.89f)) assertEquals(x, DjDsp.softClip(x), 0f)
+        assertTrue(DjDsp.softClip(0.95f) in 0.9f..0.95f)
+        assertTrue(DjDsp.softClip(4f) <= 0.995f)
+        assertEquals(-DjDsp.softClip(1.2f), DjDsp.softClip(-1.2f), 0f)
+
+        // Un tono a media escala atraviesa el limitador sin armónicos.
+        val sr = 48_000
+        val tone = sineStereo(1_000.0, sr, sec = 0.5, amp = 0.5f)
+        val limited = DjDsp.truePeakLimiterStereo(tone, sr, ceilingDb = -0.8)
+        var err = 0.0
+        for (i in tone.indices) err = maxOf(err, abs(tone[i] - limited[i]).toDouble())
+        assertTrue("el limitador no debe tocar un tono a −6 dBFS (dif. $err)", err < 1e-6)
+    }
+
+    @Test
     fun truePeakLimiterEnforcesCeilingAndKickCorrelationFindsOffset() {
         val sr = 48_000
         val loud = sineStereo(300.0, sr, sec = 0.4, amp = 1.8f)

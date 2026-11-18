@@ -131,6 +131,7 @@ import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.LoopMode
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.Prefs
+import io.github.iaguito22.oto.SmartMixMode
 import io.github.iaguito22.oto.QualityMode
 import io.github.iaguito22.oto.R
 import io.github.iaguito22.oto.Storage
@@ -1604,16 +1605,35 @@ private fun AudioSettings(prefs: Prefs) {
 /** Mezcla inteligente: curvas al ritmo, cruce de graves y transiciones inteligentes entre canciones. */
 @Composable
 private fun SmartMixRow(prefs: Prefs) {
+    val c = Oto.colors
     val scope = rememberCoroutineScope()
-    val smart by prefs.smartMix.collectAsStateWithLifecycle(initialValue = null)
-    val on = smart ?: return
-    ToggleRow(
-        R.drawable.ic_graphic_eq,
-        "Mezcla inteligente",
-        if (on) "Transiciones inteligentes con filtro, cruce de graves y cuadre de ritmo entre canciones."
-        else "Desactivada: usa solo el fundido clásico de abajo (o ningún fundido si está en No).",
-        on,
-    ) { scope.launch { prefs.setSmartMix(!on) } }
+    val haptics = LocalHapticFeedback.current
+    val mode by prefs.smartMixMode.collectAsStateWithLifecycle(initialValue = SmartMixMode.Always)
+    val choices = SmartMixMode.entries
+    val at by animateFloatAsState(mode.ordinal.toFloat(), spring(dampingRatio = 0.8f, stiffness = 500f), label = "smartMix")
+    Row(Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.md)) {
+        SettingIcon(R.drawable.ic_graphic_eq)
+        Spacer(Modifier.width(Space.md))
+        Column(Modifier.weight(1f)) {
+            Text("Mezcla inteligente", style = OtoType.rowTitle, color = c.text)
+            Text("Transiciones al ritmo con filtros y cruce de graves. Cuando no se aplica, se usa el fundido de abajo.",
+                style = OtoType.rowSub, color = c.textMuted, modifier = Modifier.padding(top = 2.dp, bottom = Space.sm))
+            Row(Modifier.fillMaxWidth().height(36.dp).clip(CircleShape).background(c.field).drawBehind {
+                val width = size.width / choices.size
+                drawRoundRect(c.accent.copy(alpha = 0.22f), Offset(width * at + 3.dp.toPx(), 3.dp.toPx()), Size(width - 6.dp.toPx(), size.height - 6.dp.toPx()), CornerRadius(size.height))
+            }) {
+                choices.forEach { choice ->
+                    Box(Modifier.weight(1f).height(36.dp).clip(CircleShape).clickable(remember { MutableInteractionSource() }, null) {
+                        if (choice != mode) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                        scope.launch { prefs.setSmartMixMode(choice) }
+                    }, contentAlignment = Alignment.Center) {
+                        val fg by animateColorAsState(if (choice == mode) c.text else c.textMuted, tween(Motion.EFFECTS), label = "smartMixFg")
+                        Text(choice.label, style = OtoType.rowSub, color = fg, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
 }
 
 /** Cuántos segundos se funden una canción y la siguiente (ver [io.github.iaguito22.oto.playback.Crossfade]). */
@@ -1633,8 +1653,8 @@ private fun CrossfadeRow(prefs: Prefs) {
             Text("Fundido entre canciones", style = OtoType.rowTitle, color = c.text)
             Text(
                 when {
-                    smart -> if (now == 0) "Con mezcla inteligente apagada: acabarán del todo antes de seguir."
-                    else "Con mezcla inteligente apagada: fundido clásico de $now s."
+                    smart -> if (now == 0) "Cuando no se aplique la mezcla inteligente, cada canción acabará antes de seguir."
+                    else "Cuando no se aplique la mezcla inteligente: fundido clásico de $now s."
                     now == 0 -> "Cada canción acaba del todo antes de que empiece la siguiente."
                     else -> "Los últimos $now segundos de una canción suenan a la vez que el principio de la siguiente. Solo cuando acaba sola, no al pasarla tú."
                 },

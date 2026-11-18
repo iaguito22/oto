@@ -25,6 +25,17 @@ import kotlin.math.log10
 
 internal val PCM_FORMAT = AudioFormat(48000f, 16, 2, true, false)
 
+// El Opus/AAC decodificado puede superar 0 dBFS. Conserva margen antes de cuantizar
+// y restaura la escala en Float al aplicar el volumen, antes de la salida final.
+internal const val PCM_DECODE_GAIN = 0.5f
+
+internal fun ffmpegPcmCommand(executable: String, input: File, offsetMs: Long): List<String> = listOf(
+    executable, "-nostdin", "-v", "error",
+    "-ss", String.format(java.util.Locale.US, "%.3f", offsetMs / 1000.0),
+    "-i", input.absolutePath, "-vn", "-ac", "2", "-ar", "48000",
+    "-af", "volume=$PCM_DECODE_GAIN:precision=float", "-f", "s16le", "pipe:1",
+)
+
 internal fun canUseFfmpegPcm(
     ffmpegAvailable: Boolean = DesktopTools.find("ffmpeg") != null,
     lineSupported: Boolean = runCatching {
@@ -189,7 +200,8 @@ class DesktopAudioEngine(
     }
 
     fun setTempo(tempo: Float) {
-        val safe = if (tempo.isFinite()) tempo.coerceIn(0.90f, 1.10f) else 1f
+        // Hasta ±8 % del cuadre (`DjTempoMatch`) más ±4 % de corrección de fase, sin recortar por un lado.
+        val safe = if (tempo.isFinite()) tempo.coerceIn(0.85f, 1.15f) else 1f
         targetTempo = safe
         timeStretch.targetTempo = safe
     }
@@ -488,19 +500,8 @@ class DesktopAudioEngine(
         var process: Process? = null
         try {
             currentLine = line
-            val seconds = String.format(java.util.Locale.US, "%.3f", offsetMs / 1000.0)
-            val proc = ProcessBuilder(
-                DesktopTools.require("ffmpeg"),
-                "-nostdin",
-                "-v", "error",
-                "-ss", seconds,
-                "-i", file.absolutePath,
-                "-vn",
-                "-ac", "2",
-                "-ar", "48000",
-                "-f", "s16le",
-                "pipe:1",
-            ).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+            val proc = ProcessBuilder(ffmpegPcmCommand(DesktopTools.require("ffmpeg"), file, offsetMs))
+                .redirectError(ProcessBuilder.Redirect.DISCARD).start()
             process = proc
             currentProcess = proc
             currentCoroutineContext().ensureActive()
@@ -517,7 +518,7 @@ class DesktopAudioEngine(
                     applyMicroFadeIn(pcm, len, microFadeRemaining)
                     microFadeRemaining = (microFadeRemaining - len / 4).coerceAtLeast(0)
                 }
-                bandFilter.processPcm16(pcm, len, mixBands, gainLinear)
+                bandFilter.processPcm16(pcm, len, mixBands, gainLinear, inputScale = 1f / PCM_DECODE_GAIN)
                 line.write(pcm, 0, len)
                 emittedFrames += len / 4
                 decoded = true

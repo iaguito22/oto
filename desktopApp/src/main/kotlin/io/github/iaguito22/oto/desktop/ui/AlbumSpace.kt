@@ -32,7 +32,7 @@ internal fun AlbumSpace(page:Page.Remote,currentId:String?,player:DesktopPlayerC
     val scope=rememberCoroutineScope()
     fun play(index:Int?) {if(!songs.isNullOrEmpty()){player.playAll(songs,index,album)}}
     val songActions=rememberSongActions(player,prefs,onSave,onArtist)
-    LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=28.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+    LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=28.dp+LocalFloatingDockInset.current),verticalArrangement=Arrangement.spacedBy(4.dp)) {
         item(key="header") {Column(Modifier.fillMaxWidth().padding(bottom=24.dp)) {
             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                 HoverAction(MobileIcons.arrowBack,"Volver",onClick=onBack);Spacer(Modifier.weight(1f))

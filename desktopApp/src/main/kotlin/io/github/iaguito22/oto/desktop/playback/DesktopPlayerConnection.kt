@@ -5,7 +5,8 @@ import com.metrolist.innertube.models.ArtistItem
 import com.metrolist.innertube.models.PlaylistItem
 import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.YTItem
-import io.github.iaguito22.oto.DEFAULT_SMART_MIX
+import io.github.iaguito22.oto.DEFAULT_SMART_MIX_SECONDS
+import io.github.iaguito22.oto.SmartMixMode
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.LoopMode
 import io.github.iaguito22.oto.OtoDirs
@@ -23,6 +24,8 @@ import io.github.iaguito22.oto.dj.DjMode
 import io.github.iaguito22.oto.dj.DjMood
 import io.github.iaguito22.oto.dj.DjPickInfo
 import io.github.iaguito22.oto.dj.DjReaction
+import io.github.iaguito22.oto.dj.DjTempoMatch
+import io.github.iaguito22.oto.dj.ChorusSafety
 import io.github.iaguito22.oto.dj.DjTransitionPlan
 import io.github.iaguito22.oto.dj.DjTransitionPlanner
 import io.github.iaguito22.oto.dj.DjTransitionStyle
@@ -154,10 +157,22 @@ class DesktopPlayerConnection(
     private var currentLoudnessGain: Float = 1.0f
     private var songQueue = mutableListOf<SongItem>()
     private var originalQueue: List<SongItem>? = null
-    private var currentIndex = -1
+    /**
+     * Lo que suena. Todo cambio pasa por [djIndexGate] (candado + época): la revisión por tempo del DJ publica su cola
+     * dentro del mismo candado y solo si la época no cambió, así que «Siguiente» (que mueve el índice sin coger
+     * `djMutex`, desde cualquier hilo de `Dispatchers.Default`) no puede colarse entre comprobar y publicar.
+     */
+    private val djIndexGate = IndexGate()
+    private var currentIndexValue = -1
+    private var currentIndex: Int
+        get() = currentIndexValue
+        set(value) = djIndexGate.moving { currentIndexValue = value }
     private var radio: Radio? = null
     private var dj: Dj? = null
     private val djMutex = Mutex()
+    /** Revisión por tempo pedida y aún sin atender; y si hay un trabajo atendiéndolas (hilos de `Dispatchers.Default`). */
+    private val djTempoPending = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val djTempoRunning = java.util.concurrent.atomic.AtomicBoolean(false)
     private val djGeneration = AtomicLong()
     private var djReplenishJob: Job? = null
     private val manualQueueIds = HashSet<String>()
@@ -200,7 +215,8 @@ class DesktopPlayerConnection(
     val djTanda: StateFlow<String?> = _djTanda.asStateFlow()
     private val djTandas = ConcurrentHashMap<String, String>()
 
-    @Volatile private var smartMixEnabled = DEFAULT_SMART_MIX
+    @Volatile private var smartMixMode = SmartMixMode.Always
+    private val smartMixEnabled: Boolean get() = smartMixMode.enabled(dj?.mode == DjMode.Adhd)
     @Volatile private var ramSaverEnabled = false
     @Volatile private var currentTrackStartOffsetMs = 0L
     @Volatile private var finishedAdhdTrackKey: String? = null
@@ -238,6 +254,8 @@ class DesktopPlayerConnection(
                             if (durationMs > 0L && it.durationMs <= 0L) it.copy(durationMs = durationMs) else it
                         }
                         analysisCache.put(metrics, persist = true)
+                        // Con su tempo ya medido, el DJ puede revisar la cola (la de después de esta).
+                        scope.launch { if (dj != null) retuneDjTempo() }
                     }
                 }
             }
@@ -286,7 +304,8 @@ class DesktopPlayerConnection(
         outgoing = deck
         _mixing.value = deck != null
     }
-    @Volatile private var fadeSeconds = 0
+    @Volatile private var classicFadeSeconds = 0
+    private val fadeSeconds: Int get() = if (ramSaverEnabled) 0 else if (smartMixEnabled) DEFAULT_SMART_MIX_SECONDS else classicFadeSeconds
     @Volatile private var fadeIn = 1f
     @Volatile private var fadeOut = 0f
     @Volatile private var outgoingGain = 1f
@@ -353,7 +372,12 @@ class DesktopPlayerConnection(
         }
         scope.launch { prefs.playlistModes.collect { _modes.value = it } }
         scope.launch { prefs.likedIds.collect { liked = it } }
-        scope.launch { prefs.smartMix.collect { smartMixEnabled = it } }
+        scope.launch {
+            prefs.smartMixMode.collect {
+                if (smartMixMode != it && fading?.isActive != true) cancelCrossfade()
+                smartMixMode = it
+            }
+        }
         scope.launch { prefs.djGenre.collect { _djGenre.value = it } }
         scope.launch {
             prefs.djMood.collect { mood ->
@@ -378,11 +402,11 @@ class DesktopPlayerConnection(
         }
         scope.launch {
             // La mezcla inteligente, si está activada, con su duración; si no, el fundido normal.
-            kotlinx.coroutines.flow.combine(prefs.mixSeconds, prefs.ramSaver) { seconds, saving ->
+            kotlinx.coroutines.flow.combine(prefs.crossfade, prefs.ramSaver) { seconds, saving ->
                 ramSaverEnabled = saving
                 if (saving) 0 else seconds
             }.collect {
-                fadeSeconds = it.coerceAtLeast(0)
+                classicFadeSeconds = it.coerceAtLeast(0)
                 if (fadeSeconds == 0 && dj?.mode != DjMode.Adhd) cancelCrossfade()
             }
         }
@@ -403,7 +427,9 @@ class DesktopPlayerConnection(
     private fun cancelCrossfade() {
         preparationGeneration.incrementAndGet()
         finishFadeJob?.cancel(); finishFadeJob = null
-        tempoReturnJob?.cancel(); tempoReturnJob = null
+        // La vuelta a 1× de la que ya suena NO se toca aquí: este cancelar también se usa para rehacer la mezcla
+        // siguiente, y justo al acabar un cuadre `watchCrossfade` lo llamaba y la dejaba estirada toda la canción
+        // (medido 18/11: WSOLA activo y tempo ≠ 1 hasta el final). Se cancela al cambiar de pista ([startCurrentTrack]).
         fading?.cancel(); fading = null
         preparation?.cancel(); preparation = null
         preparingDeck?.takeIf { it !== activeDeck.value && it !== outgoing }?.let { d ->
@@ -424,6 +450,37 @@ class DesktopPlayerConnection(
         engine.resetMixBands()
         fadeIn = 1f; fadeOut = 0f
         applyDeckGains()
+    }
+
+    /** Para no repetir: canción → (con letra, cobertura del análisis) del último intento de recolocar su salida. */
+    private val exitRefreshedWith = HashMap<String, Pair<Boolean, Long>>()
+
+    /**
+     * La que suena no cambia su inicio, pero si llega su letra o su análisis, su SALIDA pasa a un límite de frase (tras
+     * un bloque cantado), solo hacia delante y con margen para preparar la mezcla. true si cambió.
+     */
+    private suspend fun refreshPlayingExit(song: SongItem, seg: AdhdSegment, positionMs: Long, durationMs: Long): Boolean {
+        val sections = sectionsOf(song.id)
+        val audio = analysisCache.get(song.id)
+        if (!seg.improvesWith(sections, audio)) return false
+        val attempt = (sections.size >= 3) to AdhdPlanner.audioCoverageMs(audio, seg.fullDurationMs)
+        if (exitRefreshedWith[song.id] == attempt) return false
+        exitRefreshedWith[song.id] = attempt
+        if (exitRefreshedWith.size > 64) exitRefreshedWith.keys.retainAll(setOf(song.id))
+        val activeDj = dj ?: return false
+        val minFade = AdhdPlanner.liveMinFadeStartMs(seg, positionMs)
+        val fadeMs = DesktopTransitionPlanner.effectiveAdhdCrossfadeMs(fadeSeconds, ramSaverEnabled)
+        val fresh = djMutex.withLock {
+            if (dj !== activeDj || activeDj.mode != DjMode.Adhd || fullOnceTrackId == song.id) null
+            else activeDj.adhdSegment(
+                song.toTrack(), durationMs.takeIf { it > 0L } ?: seg.fullDurationMs, fadeMs, sections, audio,
+                fixedStartMs = seg.startMs, minFadeStartMs = minFade,
+            )
+        } ?: return false
+        if (!AdhdPlanner.isLiveExitUpdate(seg, fresh, positionMs) || _state.value.id != song.id || _adhdSegment.value !== seg) return false
+        if (fresh.fadeOutStartMs == seg.fadeOutStartMs && fresh.endMs == seg.endMs) return false
+        _adhdSegment.value = fresh
+        return true
     }
 
     /** Prepara la siguiente canción con antelación; si no llega, la transición normal sigue intacta. */
@@ -453,8 +510,38 @@ class DesktopPlayerConnection(
                 }
             }
 
+            if (activeAdhd != null && current != null && fading?.isActive != true && finishFadeJob?.isActive != true &&
+                state.playing && refreshPlayingExit(current, activeAdhd, state.positionMs, state.durationMs)) {
+                // La salida cambió: la mezcla preparada se rehace con el trozo nuevo. Se vuelve a empezar la vuelta para
+                // que nada de lo que sigue (p. ej. el final forzado) decida con el trozo viejo.
+                cancelCrossfade()
+                preparingKey = null
+                continue
+            }
+
             if (fading?.isActive != true && finishFadeJob?.isActive != true && current != null) {
-                val candidate = preparedNext?.takeIf { it.currentId == current.id && it.next.id == next?.id }
+                var candidate = preparedNext?.takeIf { it.currentId == current.id && it.next.id == next?.id }
+                val outSections = sectionsOf(current.id)
+                val inSections = next?.let { sectionsOf(it.id) }.orEmpty()
+                // Lyrics can arrive long after the next deck was prepared; never freeze an unsafe exit.
+                val oldCandidate = candidate
+                if (oldCandidate?.plan != null && !ChorusSafety.allows(oldCandidate.plan, outSections, inSections)) {
+                    val updatedPlan = DjTransitionPlanner.plan(
+                        outgoingDurationMs = state.durationMs,
+                        incomingDurationMs = oldCandidate.deck.state.value.durationMs,
+                        configuredFadeMs = length,
+                        outgoingAudio = analysisCache.get(current.id), incomingAudio = analysisCache.get(oldCandidate.next.id),
+                        outgoingLyrics = lyricsStore.peek(current.id) as? Lyrics.Synced,
+                        incomingLyrics = lyricsStore.peek(oldCandidate.next.id) as? Lyrics.Synced,
+                        outgoingVocals = outSections, incomingVocals = inSections,
+                        outgoingAdhd = activeAdhd, incomingAdhd = oldCandidate.adhdSegment,
+                        autoLength = true, djMode = dj?.mode ?: DjMode.Normal,
+                        isDjSession = dj != null, incomingFromStart = dj == null,
+                    )
+                    candidate = oldCandidate.copy(plan = updatedPlan)
+                    if (updatedPlan.incomingStartMs != oldCandidate.plan.incomingStartMs) oldCandidate.deck.seekTo(updatedPlan.incomingStartMs)
+                    if (preparedNext === oldCandidate) preparedNext = candidate
+                }
                 val action = DesktopTransitionPlanner.evaluate(
                     positionMs = state.positionMs,
                     durationMs = state.durationMs,
@@ -463,9 +550,10 @@ class DesktopPlayerConnection(
                     configuredFadeSeconds = fadeSeconds,
                     ramSaver = ramSaverEnabled,
                     crossfadeSupported = pcmSupported,
-                    nextReady = candidate != null,
+                    nextReady = candidate != null && !candidate.deck.state.value.buffering,
                     adhdSegment = activeAdhd,
                     plan = candidate?.plan,
+                    outgoingSections = outSections,
                 )
                 when (action) {
                     is TransitionAction.StartCrossfade -> if (candidate != null) {
@@ -476,6 +564,11 @@ class DesktopPlayerConnection(
                         if (finishedAdhdTrackKey != trackKey) {
                             finishedAdhdTrackKey = trackKey
                             finishFadeJob = scope.launch {
+                                val actual = engine.state.value
+                                if (SongSections.safeExitAt(actual.positionMs, sectionsOf(current.id), actual.durationMs, 260L) > actual.positionMs) {
+                                    finishedAdhdTrackKey = null
+                                    return@launch
+                                }
                                 // Atenuación breve para no cortar en seco si la siguiente no estaba lista.
                                 val steps = 6
                                 for (step in 1..steps) {
@@ -496,7 +589,8 @@ class DesktopPlayerConnection(
             val mix = if (!canPrepareCrossfade || length <= 0 || key == null || next == null || fading?.isActive == true) null else {
                 val ready = preparedNext?.takeIf { it.currentId == current?.id && it.next.id == next.id }
                 val window = ready?.let {
-                    DesktopTransitionPlanner.mixWindow(state.durationMs, fadeSeconds, ramSaverEnabled, pcmSupported, activeAdhd, it.plan)
+                    DesktopTransitionPlanner.mixWindow(state.durationMs, fadeSeconds, ramSaverEnabled, pcmSupported, activeAdhd, it.plan,
+                        current?.let { song -> sectionsOf(song.id) }.orEmpty())
                 }
                 when {
                     ready != null && window != null -> NextMix(
@@ -591,7 +685,7 @@ class DesktopPlayerConnection(
             val curDurMs = engine.state.value.durationMs
             val curAdhd = if (activeDj?.mode == DjMode.Adhd && fullOnceTrackId != current.id) _adhdSegment.value else null
             val configuredFadeMs = if (curAdhd != null) adhdFadeMs else fadeSeconds * 1000L
-            val plan = if (activeDj != null) {
+            val plan = if (activeDj != null && smartMixEnabled) {
                 djMutex.withLock {
                     if (dj === activeDj) {
                         activeDj.transitionPlan(
@@ -604,6 +698,9 @@ class DesktopPlayerConnection(
                             incomingAdhd = nextSeg,
                             outgoingVocals = sectionsOf(current.id),
                             incomingVocals = sectionsOf(next.id),
+                            outgoingLyrics = lyricsStore.peek(current.id) as? Lyrics.Synced,
+                            incomingLyrics = lyricsStore.peek(next.id) as? Lyrics.Synced,
+                            incomingDurationMs = actualNextDur,
                             autoLength = smartMixEnabled,
                         )
                     } else null
@@ -618,6 +715,9 @@ class DesktopPlayerConnection(
                     incomingAdhd = null,
                     outgoingVocals = sectionsOf(current.id),
                     incomingVocals = sectionsOf(next.id),
+                    outgoingLyrics = lyricsStore.peek(current.id) as? Lyrics.Synced,
+                    incomingLyrics = lyricsStore.peek(next.id) as? Lyrics.Synced,
+                    incomingDurationMs = actualNextDur,
                     autoLength = true,
                     incomingFromStart = true,
                 )
@@ -661,7 +761,10 @@ class DesktopPlayerConnection(
         val plan = next.plan
         val prevAdhd = if (dj?.mode == DjMode.Adhd && fullOnceTrackId != next.currentId) _adhdSegment.value else null
         val useEchoOut = plan?.style == DjTransitionStyle.EchoOutFilterSweep || plan?.style == DjTransitionStyle.LoopRollOut
-        val useTempoNudge = plan?.style == DjTransitionStyle.BeatMatchLongMix && abs(plan.incomingTempoNudge - 1.0) > 0.004
+        // B al tempo de A en el cuadre de beats y en el filtro con eco a tempo (el plan solo pone ratio ≠ 1 si hay bombo
+        // en las dos y el estiramiento cabe en el límite).
+        val useTempoNudge = (plan?.style == DjTransitionStyle.BeatMatchLongMix || plan?.style == DjTransitionStyle.EchoOutFilterSweep) &&
+            DjTempoMatch.isStretched(plan.incomingTempoNudge)
 
         deck.setTempo(if (useTempoNudge) plan.incomingTempoNudge.toFloat() else 1f)
         if (useEchoOut) {
@@ -685,62 +788,78 @@ class DesktopPlayerConnection(
             return
         }
 
-        recordPlayProgress(completed = true)
-        setOutgoing(old); outgoingGain = oldGain; fadeOut = 1f; fadeIn = 0f
-        preparedNext = null; preparation = null; preparingKey = null
-        currentIndex = originalIndex + 1
         val song = next.next
-        manualQueueIds.remove(song.id)
-
         val activeDj = dj
         var resolvedTanda = if (activeDj != null) djTandas[song.id] else null
-        if (activeDj != null) {
-            djMutex.withLock {
-                if (dj === activeDj) {
+        val committed = commitPreparedTransition(
+            mutex = djMutex,
+            prepare = {
+                next.adhdSegment ?: activeDj?.takeIf { dj === it && it.mode == DjMode.Adhd }?.let { d ->
+                    deck.state.value.durationMs.takeIf { it > 0L }?.let { dur ->
+                        d.adhdSegment(song.toTrack(), dur, DesktopTransitionPlanner.effectiveAdhdCrossfadeMs(fadeSeconds, ramSaverEnabled), sectionsOf(song.id), analysisCache.get(song.id))
+                    }
+                }
+            },
+            isSafe = {
+                // Lock acquisition and metadata preparation are complete. No suspension follows this check.
+                val latestSections = sectionsOf(next.currentId)
+                engine === old && currentIndex == originalIndex && old.state.value.playing &&
+                    songQueue.getOrNull(originalIndex + 1)?.id == song.id && dj === activeDj &&
+                    (plan == null || ChorusSafety.allows(plan, latestSections, sectionsOf(song.id))) &&
+                    ChorusSafety.allowsLive(old.state.value.positionMs, length, 1.0, latestSections)
+            },
+            commit = { resolvedNextSeg ->
+                if (activeDj != null) {
                     commitDjQueueAdvanceLocked(activeDj, song.id)
                     resolvedTanda = activeDj.tandaOf(song.id) ?: resolvedTanda
                     resolvedTanda?.let { djTandas[song.id] = it }
                 }
-            }
-        }
+                recordPlayProgress(completed = true)
+                setOutgoing(old); outgoingGain = oldGain; fadeOut = 1f; fadeIn = 0f
+                preparedNext = null; preparation = null; preparingKey = null
+                currentIndex = originalIndex + 1
+                manualQueueIds.remove(song.id)
+                // La igualación de volumen solo vale durante la mezcla (vuelve a `next.gain` al acabar) y nunca sube por
+                // encima de 1: antes se quedaba toda la canción, hasta ×1,45, y recortaba la salida en 16 bits.
+                currentLoudnessGain = matchedIncomingGain(next.gain, plan?.incomingGainMatch ?: 1f, 0f)
+                fullOnceTrackId = null
+                _djFullOnce.value = false
+                // B entró por la mezcla donde la puso el plan (hasta −8/+4 s del trozo): el trozo cuenta desde ahí.
+                val enteredAt = plan?.incomingStartMs
+                _adhdSegment.value = if (resolvedNextSeg != null && enteredAt != null && kotlin.math.abs(enteredAt - resolvedNextSeg.startMs) > 1_500L) {
+                    resolvedNextSeg.startingAt(enteredAt)
+                } else resolvedNextSeg
+                _djTanda.value = resolvedTanda
+                currentTrackStartOffsetMs = plan?.incomingStartMs ?: resolvedNextSeg?.startMs ?: 0L
+                finishedAdhdTrackKey = null
+                engine = deck
+                _currentQuality.value = next.quality
+                next.quality?.let { StreamInfo.put(song.id, it) }
+                _state.value = NowPlaying(
+                    id = song.id,
+                    title = song.title,
+                    artist = song.artists.joinToString { it.name },
+                    artists = song.artists.map { it.name to it.id },
+                    album = song.album?.name,
+                    artwork = song.thumbnail,
+                    playing = true,
+                    buffering = false,
+                    durationMs = deck.state.value.durationMs,
+                    upNext = (songQueue.size - 1 - currentIndex).coerceAtLeast(0),
+                    index = currentIndex,
+                )
+                syncQueueFlow()
+                scope.launch { prefs.addHeard(song.toHeard()) }
+                fetchLyrics(song)
+                maybeReplenishQueue()
 
-        val gainMatch = plan?.incomingGainMatch ?: 1f
-        currentLoudnessGain = (next.gain * gainMatch).coerceIn(0.25f, 1.45f)
-
-        val resolvedNextSeg = next.adhdSegment ?: activeDj?.takeIf { it.mode == DjMode.Adhd }?.let { d ->
-            deck.state.value.durationMs.takeIf { it > 0L }?.let { dur ->
-                djMutex.withLock {
-                    if (dj === d) d.adhdSegment(song.toTrack(), dur, DesktopTransitionPlanner.effectiveAdhdCrossfadeMs(fadeSeconds, ramSaverEnabled), sectionsOf(song.id), analysisCache.get(song.id))
-                    else null
-                }
-            }
-        }
-        fullOnceTrackId = null
-        _djFullOnce.value = false
-        _adhdSegment.value = resolvedNextSeg
-        _djTanda.value = resolvedTanda
-        currentTrackStartOffsetMs = plan?.incomingStartMs ?: resolvedNextSeg?.startMs ?: 0L
-        finishedAdhdTrackKey = null
-        engine = deck
-        _currentQuality.value = next.quality
-        next.quality?.let { StreamInfo.put(song.id, it) }
-        _state.value = NowPlaying(
-            id = song.id,
-            title = song.title,
-            artist = song.artists.joinToString { it.name },
-            artists = song.artists.map { it.name to it.id },
-            album = song.album?.name,
-            artwork = song.thumbnail,
-            playing = true,
-            buffering = false,
-            durationMs = deck.state.value.durationMs,
-            upNext = (songQueue.size - 1 - currentIndex).coerceAtLeast(0),
-            index = currentIndex,
+            },
         )
-        syncQueueFlow()
-        scope.launch { prefs.addHeard(song.toHeard()) }
-        fetchLyrics(song)
-        maybeReplenishQueue()
+        if (!committed) {
+            deck.stop(); deck.resetMixBands(); deck.setTempo(1f); deck.setGain(volumeGain())
+            preparedNext = null; preparingKey = null
+            return
+        }
 
         // Ajustar duración al tiempo restante real de la saliente para que nunca llegue a EOF antes de p=1.
         val oldDur = old.state.value.durationMs
@@ -748,9 +867,10 @@ class DesktopPlayerConnection(
         val oldRemaining = if (oldDur > 0L) (oldDur - oldPos - 240L) else Long.MAX_VALUE
         val safeLength = minOf(length, oldRemaining).coerceAtLeast(250L)
         Timber.tag("oto.mix").i(
-            "Iniciando mezcla %s -> %s: style=%s safeLength=%d ms oldPos=%d/%d ms tempo=%.3f adhd=%s",
+            "Iniciando mezcla %s -> %s: style=%s safeLength=%d ms oldPos=%d/%d ms tempo=%.3f adhd=%s fase=%s %s",
             next.currentId, song.id, plan?.style ?: "Legacy", safeLength, oldPos, oldDur,
-            if (useTempoNudge) plan.incomingTempoNudge else 1.0, prevAdhd != null,
+            if (useTempoNudge) plan.incomingTempoNudge else 1.0, prevAdhd != null, plan?.phaseLock == true,
+            plan?.bridgeSpec?.tempoNote.orEmpty(),
         )
 
         val start = System.nanoTime()
@@ -758,7 +878,7 @@ class DesktopPlayerConnection(
         // Cuadre de fase: con el tempo ya igualado, la entrante se acelera o frena un poco (aún baja) hasta que sus beats
         // caen sobre los de la saliente. Se promedian varias lecturas: la posición del PC va a saltos de un trozo.
         val baseTempo = if (useTempoNudge) plan.incomingTempoNudge.toFloat() else 1f
-        val phaseLock = plan?.phaseLock == true && plan.outgoingAudio != null && plan.incomingAudio != null
+        val phaseLock = DjTempoMatch.livePhaseLock(plan)
         val phaseErrs = ArrayDeque<Double>()
         var phaseLocked = false
         var phaseCorrecting = false
@@ -766,16 +886,20 @@ class DesktopPlayerConnection(
         try {
             while (true) {
                 val p = ((System.nanoTime() - start) / 1_000_000.0 / safeLength).toFloat().coerceIn(0f, 1f)
-                if (phaseLock && !phaseLocked && System.nanoTime() - lastPhaseAt >= 150_000_000L) {
+                if (phaseLock && plan != null && !phaseLocked && System.nanoTime() - lastPhaseAt >= 150_000_000L) {
                     lastPhaseAt = System.nanoTime()
                     if (p < plan.bassSwapAt - 0.06f) {
                         val outOff = plan.outgoingAudio!!.beatOffset(old.state.value.positionMs)
                         val inOff = plan.incomingAudio!!.beatOffset(deck.state.value.positionMs)
                         if (outOff != null && inOff != null) {
-                            var err = inOff - outOff
-                            if (err > 0.5) err -= 1.0
-                            if (err < -0.5) err += 1.0
-                            phaseErrs.addLast(err * (plan.incomingAudio?.beatPeriodMs ?: 500.0) / baseTempo)
+                            // En ms de reproducción (la entrante va a `baseTempo`), sobre el periodo más corto: vale
+                            // también a mitad/doble tempo.
+                            phaseErrs.addLast(
+                                DjTempoMatch.phaseErrorMs(
+                                    outOff, plan.outgoingAudio?.beatPeriodMs ?: 500.0,
+                                    inOff, (plan.incomingAudio?.beatPeriodMs ?: 500.0) / baseTempo,
+                                ),
+                            )
                             if (phaseErrs.size > 3) phaseErrs.removeFirst()
                             val avg = phaseErrs.average()
                             if (phaseErrs.size >= 2 && abs(avg) <= 18.0) {
@@ -813,6 +937,7 @@ class DesktopPlayerConnection(
                     old.setMixBands(outBands.copy(overall = 1f))
                     deck.setMixBands(inBands.copy(overall = 1f))
                 }
+                if (engine === deck) currentLoudnessGain = matchedIncomingGain(next.gain, plan?.incomingGainMatch ?: 1f, p)
                 applyDeckGains()
                 if (p >= 1f) {
                     completedCleanly = true
@@ -843,20 +968,31 @@ class DesktopPlayerConnection(
             }
             if (activeDeck.value === deck) {
                 fadeIn = 1f; fadeOut = 0f
+                if (engine === deck) currentLoudnessGain = matchedIncomingGain(next.gain, 1f, 1f)
                 deck.resetMixBands()
                 applyDeckGains()
                 if (useTempoNudge && completedCleanly) {
                     val startTempo = plan.incomingTempoNudge.toFloat()
                     tempoReturnJob?.cancel()
+                    // Vuelta a 1× con B ya sola, en beats (la misma duración que en el móvil) y en curva suave.
+                    val glideMs = DjTempoMatch.returnGlideMs(
+                        (plan.outgoingAudio?.bpm ?: 0.0),
+                        startTempo.toDouble(),
+                    )
                     tempoReturnJob = scope.launch {
-                        val steps = 80
-                        for (i in 1..steps) {
-                            if (engine !== deck || !deck.state.value.playing) break
-                            val t = startTempo + (1f - startTempo) * (i.toFloat() / steps.toFloat())
-                            deck.setTempo(t)
-                            delay(100L)
+                        try {
+                            val steps = (glideMs / 50L).toInt().coerceAtLeast(1)
+                            for (i in 1..steps) {
+                                if (engine !== deck || !deck.state.value.playing || _state.value.id != song.id) break
+                                val u = i.toFloat() / steps.toFloat()
+                                val eased = 0.5f * (1f - kotlin.math.cos(u * kotlin.math.PI.toFloat()))
+                                deck.setTempo(startTempo + (1f - startTempo) * eased)
+                                delay(50L)
+                            }
+                        } finally {
+                            // Pase lo que pase (pausa, búsqueda, cancelación), la que suena nunca se queda estirada.
+                            if (engine === deck) deck.setTempo(1f)
                         }
-                        if (engine === deck) deck.setTempo(1f)
                     }
                 } else {
                     deck.setTempo(1f)
@@ -1033,6 +1169,8 @@ class DesktopPlayerConnection(
                     genre = resolveGenre(_djGenre.value),
                     genreOf = { t -> known.genreOf(t, profile) },
                     analysisCache = analysisCache,
+                    // Con la letra sabe si la entrante entra sin voz (y entonces se puede estirar hasta el 8 %).
+                    lyricsPeek = { lyricsStore.peek(it) },
                 )
             }
             if (djGeneration.get() != gen) return@launch
@@ -1115,7 +1253,7 @@ class DesktopPlayerConnection(
                 }
             } ?: return@launch
             if (dj !== activeDj || djGeneration.get() != gen) return@launch
-            syncDjTail(updated)
+            publishDjTail(activeDj, gen)
         }
     }
 
@@ -1126,27 +1264,109 @@ class DesktopPlayerConnection(
         vetoDjNextUp(id)
     }
 
-    private fun syncDjTail(nextUp: List<DjPickInfo>) {
-        nextUp.forEach { info -> info.tanda?.let { djTandas[info.track.id] = it } }
+    /**
+     * Cambia una canción de la cola del DJ (nunca la siguiente) que no se podrá cuadrar con la de antes por tempo o
+     * bombo ([Dj.retuneUpcomingTempo]). En el PC la cola no se precarga: solo cuenta lo ya analizado (índice de tempo),
+     * así que se prueban seguidos los cambios que se puedan juzgar ya.
+     */
+    private fun retuneDjTempo() {
+        val activeDj = dj ?: return
+        // Trabajo propio (no el del relleno, que lo llama al acabar): el mutex del DJ ya los pone en fila. La petición
+        // queda pendiente hasta que una vuelta la atienda.
+        djTempoPending.set(true)
+        // Un solo trabajo a la vez; quien llega con uno en marcha solo deja la petición (la atiende ese trabajo).
+        if (!djTempoRunning.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                djTempoLoop(activeDj)
+            } finally {
+                djTempoRunning.set(false)
+                // Pedida justo entre la última mirada del bucle y el final: no se pierde.
+                if (djTempoPending.get() && dj === activeDj) retuneDjTempo()
+            }
+        }
+    }
+
+    private suspend fun djTempoLoop(activeDj: Dj) {
+        run {
+            while (djTempoPending.getAndSet(false)) {
+                djMutex.withLock {
+                    val gen = djGeneration.get()
+                    if (dj !== activeDj) return@withLock
+                    // El avance de canción consume la cola del DJ bajo este mismo candado: aquí van a la par. Aun así,
+                    // si la cola del DJ aún empieza por la que suena (sin consumir), no se toca.
+                    val currentId = songQueue.getOrNull(currentIndex)?.id
+                    if (activeDj.nextUp().firstOrNull()?.track?.id == currentId) return@withLock
+                    // La que suena, la siguiente y lo que se está preparando para el fundido no se tocan.
+                    // Época antes de mirar lo que suena: si cambia hasta publicar, se deshace.
+                    val epochBefore = djIndexGate.epoch
+                    val protect = djTempoProtected(
+                        songQueue.map { it.id }, currentIndex, preparedNext?.next?.id, preparingKey?.second,
+                        upcomingIds = activeDj.nextUp().map { it.track.id },
+                    )
+                    // «Siguiente» mueve el índice sin coger este candado: si se mueve mientras se revisa, lo protegido ya
+                    // no es lo que suena. Entonces se deshace la revisión entera y se repite después.
+                    val checkpoint = activeDj.tempoCheckpoint()
+                    val notes = ArrayList<String>()
+                    var changed = false
+                    for (round in 0..Dj.MAX_TEMPO_SWAPS) {
+                        val swap = withContext(Dispatchers.IO) {
+                            runCatching {
+                                activeDj.retuneUpcomingTempo(DJ_NEXT_UP_COUNT, protect = protect) { notes += it }
+                            }.getOrNull()
+                        } ?: break
+                        notes += swap.describe()
+                        changed = true
+                    }
+                    if (!changed) return@withLock
+                    // Comprobar y publicar de una vez, con el índice quieto (ver [djIndexGate]). Dentro de `djMutex`:
+                    // ningún relleno puede poner una cola más vieja encima de esta.
+                    val published = djIndexGate.publishIfStill(epochBefore) {
+                        notes.forEach { Timber.tag("oto.mix").i(it) }
+                        if (dj === activeDj && djGeneration.get() == gen) syncDjTail(activeDj.nextUp())
+                    }
+                    if (!published) {
+                        // Se movió lo que suena mientras se revisaba: se deshace todo (nada se confirmó: el avance
+                        // consume la cola con `djMutex`, que tenemos) y se repite cuando lo haya consumido.
+                        activeDj.rollbackTempo(checkpoint)
+                        Timber.tag("oto.mix").i("DJ: revisión por tempo deshecha (cambió lo que suena), se repite")
+                        djTempoPending.set(true)
+                    }
+                }
+                // Deshecha por un avance (o pedida otra vez): deja que el avance consuma la cola antes de repetir.
+                if (djTempoPending.get()) delay(DJ_TEMPO_RETRY_MS)
+            }
+        }
+    }
+
+    private fun syncDjTail(nextUp: List<DjPickInfo>) = djIndexGate.locked { syncDjTailLocked(nextUp) }
+
+    /** Relee la cola vigente al publicar: el relleno puede haber cedido el mutex a la revisión por tempo. */
+    private suspend fun publishDjTail(activeDj: Dj, gen: Long) = publishCurrentDjTail(
+        djMutex,
+        { dj === activeDj && djGeneration.get() == gen },
+        { activeDj.nextUp() },
+        ::syncDjTail,
+    )
+
+    /** Con el índice quieto (dentro de [IndexGate.locked] o [IndexGate.publishIfStill]). */
+    private fun syncDjTailLocked(nextUp: List<DjPickInfo>) {
         val split = (currentIndex + 1).coerceIn(0, songQueue.size)
         val kept = songQueue.take(split)
+        // Si «Siguiente» ya movió el índice pero el DJ aún no consumió esa canción (lo hace bajo `djMutex`), su cola
+        // empieza por la que ya suena: no se repite (B → B → X). Lo consume el avance al coger el candado.
+        val tail = djTailAfter(kept.map { it.id }, nextUp)
+        tail.forEach { info -> info.tanda?.let { djTandas[info.track.id] = it } }
         val manual = songQueue.drop(split).filter { it.id in manualQueueIds }
-        songQueue = (kept + manual + nextUp.map { it.track.toSong() }).toMutableList()
-        _djNextUp.value = nextUp
+        songQueue = (kept + manual + tail.map { it.track.toSong() }).toMutableList()
+        _djNextUp.value = tail
         syncQueueFlow()
     }
 
-    private suspend fun commitDjQueueAdvanceLocked(activeDj: Dj, targetId: String) {
-        val upcoming = activeDj.nextUp()
-        val pos = upcoming.indexOfFirst { it.track.id == targetId }
-        if (pos >= 0) {
-            // Confirmamos el tema que empieza (y si se saltó directamente a uno posterior en NextUp, avanzamos hasta él).
-            repeat(pos + 1) {
-                val picked = runCatching { activeDj.next() }.getOrNull()
-                if (picked != null) {
-                    (activeDj.tandaOf(picked.id) ?: activeDj.tanda)?.let { djTandas[picked.id] = it }
-                }
-            }
+    private fun commitDjQueueAdvanceLocked(activeDj: Dj, targetId: String) {
+        // Only consume the staged queue here: committing audio must never wait for network/planning.
+        activeDj.consumeUpcomingThrough(targetId)?.let { picked ->
+            (activeDj.tandaOf(picked.id) ?: activeDj.tanda)?.let { djTandas[picked.id] = it }
         }
         _djNextUp.value = activeDj.nextUp()
     }
@@ -1183,7 +1403,7 @@ class DesktopPlayerConnection(
                 }
             } ?: return@launch
             if (dj !== activeDj || djGeneration.get() != gen) return@launch
-            syncDjTail(nextUp)
+            publishDjTail(activeDj, gen)
         }
     }
 
@@ -1229,17 +1449,20 @@ class DesktopPlayerConnection(
                     runCatching { activeDj.prepareNextUp(DJ_NEXT_UP_COUNT) }.getOrDefault(emptyList())
                 }
             }
-            val song = pickedSong ?: return@launch
-            if (dj !== activeDj || djGeneration.get() != gen) return@launch
-            val base = songQueue.take((currentIndex + 1).coerceIn(0, songQueue.size)).toMutableList()
-            val newIndex = base.size
-            base.add(song)
-            nextUp.forEach { info -> info.tanda?.let { djTandas[info.track.id] = it } }
-            base.addAll(nextUp.map { it.track.toSong() })
-            songQueue = base
-            _djNextUp.value = nextUp
-            _djTanda.value = pickedTanda
-            skipTo(newIndex)
+            djMutex.withLock {
+                val song = pickedSong ?: return@withLock
+                if (dj !== activeDj || djGeneration.get() != gen) return@withLock
+                val liveNextUp = activeDj.nextUp()
+                val base = songQueue.take((currentIndex + 1).coerceIn(0, songQueue.size)).toMutableList()
+                val newIndex = base.size
+                base.add(song)
+                liveNextUp.forEach { info -> info.tanda?.let { djTandas[info.track.id] = it } }
+                base.addAll(liveNextUp.map { it.track.toSong() })
+                songQueue = base
+                _djNextUp.value = liveNextUp
+                _djTanda.value = pickedTanda
+                skipTo(newIndex)
+            }
         }
     }
 
@@ -1256,7 +1479,7 @@ class DesktopPlayerConnection(
                     runCatching { activeDj.prepareNextUp(DJ_NEXT_UP_COUNT) }.getOrDefault(emptyList())
                 }
             } ?: return@launch
-            if (dj === activeDj && djGeneration.get() == gen) syncDjTail(nextUp)
+            if (dj === activeDj && djGeneration.get() == gen) publishDjTail(activeDj, gen)
         }
     }
 
@@ -1272,17 +1495,25 @@ class DesktopPlayerConnection(
             val cur = songQueue.getOrNull(currentIndex)
             val dur = _state.value.durationMs
             val fadeMs = DesktopTransitionPlanner.effectiveAdhdCrossfadeMs(fadeSeconds, ramSaverEnabled)
+            val pos0 = _positionMs.value
             val seg = djMutex.withLock {
                 if (dj !== activeDj || djGeneration.get() != gen) return@withLock null
                 activeDj.setMode(mode)
                 if (mode == DjMode.Adhd && cur != null && dur > 0L && fullOnceTrackId != cur.id) {
-                    activeDj.adhdSegment(cur.toTrack(), dur, fadeMs, sectionsOf(cur.id), analysisCache.get(cur.id))
+                    val base = activeDj.adhdSegment(cur.toTrack(), dur, fadeMs, sectionsOf(cur.id), analysisCache.get(cur.id))
+                    // Ya va por delante de su trozo: se queda donde está y solo se elige su salida (en frase).
+                    if (base != null && pos0 > base.startMs) {
+                        activeDj.adhdSegment(
+                            cur.toTrack(), dur, fadeMs, sectionsOf(cur.id), analysisCache.get(cur.id),
+                            fixedStartMs = pos0, minFadeStartMs = pos0 + AdhdPlanner.LIVE_EXIT_LEAD_MS,
+                        )?.takeIf { it.endMs >= pos0 + it.minimumClipMs - 5_000L } ?: base.startingAt(pos0)
+                    } else base
                 } else null
             }
             if (dj !== activeDj || djGeneration.get() != gen) return@launch
             if (mode == DjMode.Adhd) {
                 val pos = _positionMs.value
-                val liveSeg = seg?.let { if (pos > it.startMs) it.startingAt(pos) else it }
+                val liveSeg = seg?.let { if (pos > it.startMs + 1_500L) it.startingAt(pos) else it }
                 _adhdSegment.value = liveSeg
                 if (liveSeg != null && pos < liveSeg.startMs) {
                     currentTrackStartOffsetMs = liveSeg.startMs
@@ -1340,7 +1571,7 @@ class DesktopPlayerConnection(
                         djTandas[target.id] = it
                         if (_state.value.id == target.id) _djTanda.value = it
                     }
-                    syncDjTail(nextUp)
+                    publishDjTail(activeDj, gen)
                 }
             }
         }
@@ -1421,6 +1652,10 @@ class DesktopPlayerConnection(
 
     /** El oído percibe la intensidad en escala logarítmica: potencia 1,5. */
     private fun volumeGain(): Float = _volume.value.let { it * kotlin.math.sqrt(it) }
+
+    /** Normalización de la entrante durante una mezcla: arranca igualada a la saliente y vuelve a la suya al final. */
+    private fun matchedIncomingGain(base: Float, match: Float, progress: Float): Float =
+        incomingMixGain(base, match, progress)
 
     fun setVolume(vol: Float) {
         val clamped = vol.coerceIn(0f, 1f)
@@ -1538,18 +1773,22 @@ class DesktopPlayerConnection(
 
     override fun previous() {
         cancelCrossfade()
-        if (restarts()) {
-            engine.seekTo(0L)
-            return
-        }
-        if (currentIndex > 0) {
-            recordPlayProgress(completed = false)
-            currentIndex--
-            syncQueueFlow()
-            startCurrentTrack()
-        } else {
-            engine.seekTo(0L)
-        }
+        if (restarts() || currentIndex <= 0) engine.seekTo(0L)
+        else stepToPreviousTrack()
+    }
+
+    /** El gesto de portada salta a la canción anterior incluso si la actual lleva un rato sonando. */
+    fun previousTrack() {
+        if (currentIndex <= 0) return
+        cancelCrossfade()
+        stepToPreviousTrack()
+    }
+
+    private fun stepToPreviousTrack() {
+        recordPlayProgress(completed = false)
+        currentIndex--
+        syncQueueFlow()
+        startCurrentTrack()
     }
 
     private fun onTrackFinished(completedNaturally: Boolean) {
@@ -1628,7 +1867,7 @@ class DesktopPlayerConnection(
                         songQueue.add(song)
                         currentIndex++
                         _djTanda.value = pickedTanda
-                        syncDjTail(nextUp)
+                        publishDjTail(activeDj, gen)
                         startCurrentTrack()
                         return@launch
                     }
@@ -1708,7 +1947,10 @@ class DesktopPlayerConnection(
         if (activeDj != null) {
             val split = (currentIndex + 1).coerceIn(0, songQueue.size)
             val djUpcoming = songQueue.drop(split).count { it.id !in manualQueueIds }
-            if (djUpcoming >= DJ_NEXT_UP_COUNT) return
+            if (djUpcoming >= DJ_NEXT_UP_COUNT) {
+                retuneDjTempo()
+                return
+            }
             if (djReplenishJob?.isActive == true) return
             val gen = djGeneration.get()
             djReplenishJob = scope.launch {
@@ -1718,7 +1960,10 @@ class DesktopPlayerConnection(
                         runCatching { activeDj.prepareNextUp(DJ_NEXT_UP_COUNT) }.getOrDefault(emptyList())
                     }
                 } ?: return@launch
-                if (dj === activeDj && djGeneration.get() == gen) syncDjTail(nextUp)
+                if (dj === activeDj && djGeneration.get() == gen) {
+                    publishDjTail(activeDj, gen)
+                    retuneDjTempo()
+                }
             }
         } else if (radio != null) {
             val remaining = songQueue.size - 1 - currentIndex
@@ -1746,6 +1991,7 @@ class DesktopPlayerConnection(
     private fun startCurrentTrack(playWhenReady: Boolean = true, initialPositionMs: Long = 0L) {
         val song = songQueue.getOrNull(currentIndex) ?: return
         cancelCrossfade()
+        tempoReturnJob?.cancel(); tempoReturnJob = null
         resolveJob?.cancel()
         engine.stop()
         engine.setTempo(1f)
@@ -1990,5 +2236,76 @@ class DesktopPlayerConnection(
         const val RADIO_AHEAD = 2
         const val RADIO_PAGES = 3
         const val DJ_NEXT_UP_COUNT = 3
+        private const val DJ_TEMPO_RETRY_MS = 300L
     }
+}
+
+/**
+ * La cola del DJ que va detrás de [keptIds] (lo ya sonado y la que suena): sin repetir ninguna de ellas. Si «Siguiente»
+ * movió el índice antes de que el DJ consumiera esa canción, su cola aún empieza por la que suena.
+ */
+internal fun djTailAfter(keptIds: List<String>, nextUp: List<DjPickInfo>): List<DjPickInfo> {
+    // Solo lo último (la que suena y las de justo antes): lo de antes del DJ no es parte de su cola y no debe filtrarse.
+    val kept = keptIds.takeLast(3).toHashSet()
+    return nextUp.filter { it.track.id !in kept }
+}
+
+/**
+ * Lo que la revisión por tempo del DJ no puede cambiar en el PC: la que suena, la siguiente, la de después y lo que se
+ * prepara para el fundido. «Siguiente» mueve el índice sin esperar a `djMutex` (consume la cola del DJ después, con el
+ * candado): si avanza mientras se revisa, la de después pasa a ser la siguiente, y ya estaba protegida. Así la
+ * revisión solo toca lo que sigue detrás, que es justo la última de la cola (la que acaba de entrar).
+ */
+internal fun djTempoProtected(
+    queueIds: List<String>, currentIndex: Int, preparedId: String?, preparingId: String?,
+    upcomingIds: List<String>,
+): Set<String> =
+    buildSet {
+        // Las manuales pueden desplazar B/C fuera de current+2 en la cola del reproductor.
+        addAll(io.github.iaguito22.oto.dj.DjTempoMatch.protectedUpcomingIds(upcomingIds))
+        for (i in currentIndex..currentIndex + 2) queueIds.getOrNull(i)?.let(::add)
+        preparedId?.let(::add)
+        preparingId?.let(::add)
+    }
+
+/**
+ * Candado y época de lo que suena. [moving] cambia el índice (y sube la época) con el candado; [publishIfStill] publica
+ * con el mismo candado solo si la época sigue igual. Comprobar y publicar no se pueden separar por un avance.
+ */
+internal class IndexGate {
+    private val lock = Any()
+
+    @Volatile
+    var epoch = 0L
+        private set
+
+    fun moving(change: () -> Unit) {
+        synchronized(lock) {
+            change()
+            epoch++
+        }
+    }
+
+    /** Con el índice quieto (cualquier publicación de la cola: lee el índice y escribe la cola de una vez). */
+    fun locked(block: () -> Unit) {
+        synchronized(lock) { block() }
+    }
+
+    fun publishIfStill(epochBefore: Long, publish: () -> Unit): Boolean = synchronized(lock) {
+        if (epoch != epochBefore) return@synchronized false
+        publish()
+        true
+    }
+}
+
+/**
+ * Ganancia de normalización de la entrante en el punto [progress] (0–1) de la mezcla: empieza en `base × match` (igualada
+ * a la saliente) y desde el 55 % vuelve en curva suave a [base], como en el móvil. Nunca pasa de 1 (salvo que [base] ya lo
+ * haga): la salida es PCM de 16 bits sin limitador y subir una canción ya masterizada la recorta.
+ */
+internal fun incomingMixGain(base: Float, match: Float, progress: Float): Float {
+    val settle = io.github.iaguito22.oto.dj.DjGains.smoothStep(((progress - 0.55f) / 0.45f).coerceIn(0f, 1f))
+    val m = match.takeIf { it.isFinite() }?.coerceIn(0.65f, 1.45f) ?: 1f
+    val g = base * (m + (1f - m) * settle)
+    return g.coerceIn(0.25f, maxOf(base, 1f))
 }

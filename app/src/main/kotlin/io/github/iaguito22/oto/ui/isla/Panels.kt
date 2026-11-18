@@ -518,11 +518,12 @@ private fun MixTransitionBadge(
     val c = Oto.colors
     val preparing = mix?.preparing == true
     val ready = mix?.ready == true
+    val styleLabel = mix?.styleLabel ?: style?.label
     val label = when {
         preparing -> "Preparando la mezcla"
-        ready && style != null -> "${style.label} · lista"
+        ready && styleLabel != null -> "$styleLabel · lista"
         ready -> "Mezcla lista"
-        style != null -> style.label
+        styleLabel != null -> styleLabel
         else -> return
     }
     val fg by animateColorAsState(if (ready) c.accent else c.textMuted, tween(Motion.EFFECTS), label = "mixBadgeFg")

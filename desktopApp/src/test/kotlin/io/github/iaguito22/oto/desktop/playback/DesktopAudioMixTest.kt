@@ -73,6 +73,33 @@ class DesktopAudioMixTest {
     }
 
     @Test
+    fun ffmpegPreservesOvershootUntilPlaybackGainHasBeenApplied() {
+        val file = java.nio.file.Files.createTempFile("oto-pcm-headroom", ".wav").toFile()
+        try {
+            val ffmpeg = DesktopTools.require("ffmpeg")
+            val generator = ProcessBuilder(
+                ffmpeg, "-y", "-nostdin", "-v", "error",
+                "-f", "lavfi", "-i", "aevalsrc=1.2*sin(2*PI*1000*t)|1.2*sin(2*PI*1000*t):s=48000:d=0.2:c=stereo",
+                "-ac", "2", "-c:a", "pcm_f32le", file.absolutePath,
+            ).start()
+            assertEquals(0, generator.waitFor())
+            val decoder = ProcessBuilder(ffmpegPcmCommand(ffmpeg, file, offsetMs = 0)).start()
+            val pcm = decoder.inputStream.use { it.readBytes() }
+            assertEquals(0, decoder.waitFor())
+            assertEquals(9600 * 4, pcm.size)
+
+            val peak = (0 until 9600).maxOf { kotlin.math.abs(sampleLeft(pcm, it)) }
+            assertTrue("Decoded peak $peak must retain the headroom", peak in 19_650..19_670)
+            StereoBandFilter().processPcm16(pcm, pcm.size, MixBands.NEUTRAL, masterGain = .5f,
+                inputScale = 1f / PCM_DECODE_GAIN)
+            val expected = .6 * 32768 / sqrt(2.0)
+            assertEquals(expected, rms(pcm, skipFrames = 2400), expected * .02)
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
     fun `stereo band filter cuts low bass while preserving highs`() {
         val lowPcm = sineStereoPcm(freqHz = 70.0, frames = 9600)
         val highPcm = sineStereoPcm(freqHz = 6000.0, frames = 9600)

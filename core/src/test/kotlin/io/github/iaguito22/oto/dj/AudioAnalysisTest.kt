@@ -2,6 +2,7 @@ package io.github.iaguito22.oto.dj
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -161,24 +162,11 @@ class AudioAnalysisTest {
             incomingGenre = "Electronica",
             tandaChanged = false,
         )
-        assertEquals(DjTransitionStyle.BeatMatchLongMix, longMix.style)
-        assertTrue(longMix.useBassSwap)
-        assertFalse(longMix.useHighPassSweep)
-        assertTrue(longMix.phaseLock)
-        assertEquals("La duración de Ajustes se respeta", 6_000L, longMix.fadeDurationMs)
-        assertTrue("Tempo nudge should approach outgoing/incoming ratio", longMix.incomingTempoNudge in 0.94..1.00)
-        assertEquals("La saliente se pone al tempo de la entrante", 126.0 / 122.0, longMix.outgoingSpeed, 0.001)
-        assertTrue("Incoming start should skip intro silence", longMix.incomingStartMs >= 3_200L)
-        assertTrue("Gain match should boost quieter incoming track", longMix.incomingGainMatch > 1.05f)
-
-        // Con los beats cuadrados, la saliente repite su último compás desde un beat (y el fundido empieza ahí).
-        assertEquals(4, longMix.loopBeats)
-        assertEquals(longMix.loopStartMs, longMix.outgoingFadeStartMs)
-        val beat122 = 60_000.0 / 122.0
-        val offBeat = ((longMix.loopStartMs % 8_000L) / beat122).let { kotlin.math.abs(it - kotlin.math.round(it)) * beat122 }
-        assertTrue("El bucle empieza en un beat ($offBeat ms fuera)", offBeat <= 1.0)
-        // (La rejilla de prueba no cae en beats: el periodo local sale algo distinto, pero a menos del 1 %.)
-        assertEquals(beat122, longMix.loopBeatMs, beat122 * 0.01)
+        // Sin compases no hay prueba de bombo: no se cuadran beats (antes sí, solo con el pulso). Con el pulso de la
+        // saliente claro, bucle con roll, y la entrante sin estirar.
+        assertEquals(DjTransitionStyle.LoopRollOut, longMix.style)
+        assertEquals(1.0, longMix.incomingTempoNudge, 1e-9)
+        assertFalse(longMix.phaseLock)
 
         // >10% BPM con el pulso de la saliente claro -> bucle con roll y filtro, sin eco.
         val rolled = DjTransitionPlanner.plan(
@@ -232,7 +220,8 @@ class AudioAnalysisTest {
             incomingGenre = "Rock",
             tandaChanged = true,
         )
-        assertEquals(DjTransitionStyle.BeatMatchLongMix, echoGenre.style)
+        // Salto de tanda con tempo parecido: sin prueba de bombo, tampoco se cuadra.
+        assertNotEquals(DjTransitionStyle.BeatMatchLongMix, echoGenre.style)
         assertEquals(8_000L, echoGenre.fadeDurationMs)
     }
 
@@ -385,9 +374,10 @@ class AudioAnalysisTest {
             incomingAudio = steady("b", 120.0),
             autoLength = true,
         )
-        assertEquals(DjTransitionStyle.BeatMatchLongMix, plan.style)
-        // 16 o 32 beats de 500 ms, y empieza en un tiempo fuerte (compás de 2 s).
-        assertTrue("dura ${plan.fadeDurationMs}", plan.fadeDurationMs == 8_000L || plan.fadeDurationMs == 16_000L)
+        // Sin compases (sin prueba de bombo) no se cuadra: bucle con roll de la saliente, también medido en beats.
+        assertEquals(DjTransitionStyle.LoopRollOut, plan.style)
+        // 8 o 16 beats de 500 ms, y empieza en un tiempo fuerte (compás de 2 s).
+        assertTrue("dura ${plan.fadeDurationMs}", plan.fadeDurationMs == 4_500L || plan.fadeDurationMs == 8_000L)
         assertEquals(0L, plan.outgoingFadeStartMs % 2_000L)
         assertEquals(plan.outgoingFadeStartMs, plan.loopStartMs)
         // Cerca del final: lo que queda tras la mezcla es poco.

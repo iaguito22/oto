@@ -34,7 +34,7 @@ internal fun SmartSpace(list: LocalPlaylist, currentId: String?, player: Desktop
     val shuffle = rememberListShuffle(player, list.id)
     val songActions = rememberSongActions(player, prefs, onSave, onArtist)
     var saving by remember(list.id) { mutableStateOf(false) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding=PaddingValues(bottom=28.dp+LocalFloatingDockInset.current), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item(key = "header") {
             Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
                 HoverAction(MobileIcons.arrowBack, "Volver", onClick = onBack)
@@ -112,7 +112,17 @@ internal fun SaveSongsDialog(name: String, tracks: List<Heard>, artwork: String?
 internal fun SmartRow(smart: List<LocalPlaylist>, palette: ArtworkPalette, onOpen: (LocalPlaylist) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Hecho con lo tuyo", style = OtoType.section)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+        val single = smart.singleOrNull()
+        if(single != null && LocalFloatingDockInset.current > 0.dp) {
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(palette.primary.copy(.07f)).clickable { onOpen(single) }.padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
+                PlaylistMosaic(single,palette.primary,Modifier.size(64.dp),radius=8.dp)
+                Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                    Text(single.name,style=OtoType.rowTitle,maxLines=2,overflow=TextOverflow.Ellipsis)
+                    Text("${single.songs.size} canciones",style=OtoType.rowSub,color=Color.White.copy(.5f))
+                }
+                Text("Ver lista",style=OtoType.rowSub,color=palette.primary,modifier=Modifier.padding(end=10.dp))
+            }
+        } else LazyRow(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
             items(smart, key = { it.id }) { l ->
                 Column(Modifier.width(150.dp).clip(RoundedCornerShape(12.dp)).clickable { onOpen(l) }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     PlaylistMosaic(l, palette.primary, Modifier.fillMaxWidth().aspectRatio(1f))
@@ -134,7 +144,7 @@ internal fun RecentSearches(list: List<Recent>?, onPick: (Recent) -> Unit, onFor
             Text("Busca lo que quieras", style = OtoType.section)
             Text("Canciones, artistas, álbumes o listas. Lo que busques se queda aquí.", style = OtoType.rowSub, color = Color.White.copy(alpha = .5f))
         }
-        else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        else -> LazyColumn(Modifier.fillMaxSize(), contentPadding=PaddingValues(bottom=20.dp+LocalFloatingDockInset.current), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             item(key = "title") { Text("RECIENTES", style = OtoType.label, color = Color.White.copy(alpha = .5f), modifier = Modifier.padding(start = 8.dp, bottom = 6.dp)) }
             items(list, key = { it.key }) { r ->
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).focusProperties { canFocus = false }.clickable { onPick(r) }.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {

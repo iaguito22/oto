@@ -51,6 +51,20 @@ data class RenderedDjBridge(
             val transitionMs = (dryBStartOffsetMs - preRollMs).coerceAtLeast(0L)
             val inside = when (spec.style) {
                 DjBridgeStyle.EnergyDropCut -> spec.pickupMs.coerceAtLeast(250L) + spec.silenceMs.coerceIn(160L, 3_200L)
+                DjBridgeStyle.OutroTail -> spec.outroIncomingOffsetMs ?: (spec.cueOutEndMs - spec.cueOutStartMs)
+                // Con cuadre de tempo el puente sigue después del cruce mientras B vuelve a 1× (ya sola): el cambio
+                // es a mitad del cruce, no a mitad de todo el tramo.
+                DjBridgeStyle.BeatMatchLongMix, DjBridgeStyle.FilterEcho ->
+                    if (spec.transitionDurationMs > 0L && (spec.style == DjBridgeStyle.BeatMatchLongMix ||
+                            DjTempoMatch.isStretched(spec.tempoMatchRatio) || spec.beatAligned == true)
+                    ) {
+                        min(transitionMs, spec.transitionDurationMs) / 2
+                    } else transitionMs / 2
+                // Fundido a tempo con B estirada: igual que el cuadre, el tramo sigue con la vuelta de B a 1× ya sola.
+                DjBridgeStyle.SmartFade ->
+                    if (spec.transitionDurationMs > 0L && spec.beatAligned == true && DjTempoMatch.isStretched(spec.tempoMatchRatio)) {
+                        min(transitionMs, spec.transitionDurationMs) / 2
+                    } else transitionMs / 2
                 else -> transitionMs / 2
             }
             return preRollMs + inside.coerceIn(0L, transitionMs)
@@ -105,7 +119,7 @@ data class RenderedDjBridge(
 }
 
 /**
- * Renderizador estéreo sample-accurate de los 5 estilos de transición DJ a partir de los tramos decodificados de A y B.
+ * Renderizador estéreo sample-accurate de las transiciones DJ a partir de los tramos decodificados de A y B.
  */
 object DjBridgeRenderer {
     fun renderSliceBridge(
@@ -121,13 +135,13 @@ object DjBridgeRenderer {
         fun msToFrameA(ms: Long): Int = (((ms - sliceAOriginMs).coerceAtLeast(0L) / 1000.0) * sampleRate).roundToInt()
         fun msToFrameB(ms: Long): Int = (((ms - sliceBOriginMs).coerceAtLeast(0L) / 1000.0) * sampleRate).roundToInt()
 
-        // Afinar la fase de los bombos sobre el PCM real en `BeatMatchLongMix` y en `FilterEcho` cuando entra a tempo:
-        // cubrimos hasta ±0.48 beats (sin tope de 260 ms para temas < 115 BPM) y sin pedir audio anterior al inicio del slice.
-        val filterEchoBeatAligned = spec.style == DjBridgeStyle.FilterEcho &&
-            spec.bpmA > 20.0 &&
-            spec.bpmB > 20.0 &&
-            (DjHarmonic.bpmRelation(spec.bpmA, spec.bpmB).relDiffPct <= 9.5 || abs(spec.tempoMatchRatio - 1.0) > 0.002)
-        val refinedShiftMs = if (spec.style == DjBridgeStyle.BeatMatchLongMix || filterEchoBeatAligned) {
+        // Afinar la fase de los bombos sobre el PCM real en `BeatMatchLongMix`, en `FilterEcho` cuando entra a tempo y en
+        // el fundido suave a tempo: cubrimos hasta ±0.48 beats (sin tope de 260 ms para temas < 115 BPM) y sin pedir
+        // audio anterior al inicio del slice.
+        val filterEchoBeatAligned = spec.style == DjBridgeStyle.FilterEcho && echoBeatAligned(spec)
+        val smartFadeLock = spec.style == DjBridgeStyle.SmartFade && smartFadeTempoLocked(spec) &&
+            lockFitsInSlice(spec, sliceB.size / 2, sliceBOriginMs, sampleRate)
+        val refinedShiftMs = if (spec.style == DjBridgeStyle.BeatMatchLongMix || filterEchoBeatAligned || smartFadeLock) {
             val monoA = DjDsp.stereoToMono(sliceA)
             val monoB = DjDsp.stereoToMono(sliceB)
             val ratio = beatMatchRatio(spec)
@@ -140,12 +154,13 @@ object DjBridgeRenderer {
             }
             val halfBeatInMs = (beatMs * 0.52 * ratio).coerceIn(80.0, 410.0)
             val availBeforeBMs = (spec.entryInMs - sliceBOriginMs).coerceAtLeast(0L).toDouble()
-            val minShiftMs = -min(halfBeatInMs, availBeforeBMs)
-            val maxShiftMs = if (availBeforeBMs >= halfBeatInMs * 0.7) {
+            val minShiftMs = max(-min(halfBeatInMs, availBeforeBMs), spec.kickShiftRangeMs?.first?.toDouble() ?: -420.0)
+            val naturalMaxShiftMs = if (availBeforeBMs >= halfBeatInMs * 0.7) {
                 halfBeatInMs
             } else {
                 (beatMs * 0.96 * ratio).coerceIn(halfBeatInMs, 800.0)
             }
+            val maxShiftMs = min(naturalMaxShiftMs, spec.kickShiftRangeMs?.last?.toDouble() ?: 800.0)
             DjDsp.kickPhaseShiftMs(
                 monoOut = monoA,
                 monoIn = monoB,
@@ -164,7 +179,10 @@ object DjBridgeRenderer {
         scaleStereoInPlace(preRoll, gainA)
 
         // Durante el puente usamos la relación LUFS calculada y, en el post-roll seco de B, convergemos exactamente a `gainB`.
+        // Sin subir por encima de la ganancia unidad: una entrante ya masterizada a ×1,45 entraba de lleno en el limitador
+        // durante toda la vuelta de tempo (se oía comprimida/distorsionada hasta el relevo al archivo).
         val mixInGain = (gainA * spec.incomingGainMatch).coerceIn(gainB * 0.65f, gainB * 1.45f)
+            .coerceAtMost(max(gainB, 1f))
 
         val transitionStereo: FloatArray
         val handoffBMs: Long
@@ -190,7 +208,12 @@ object DjBridgeRenderer {
                 handoffBMs = res.second
             }
             DjBridgeStyle.SmartFade -> {
-                val res = renderSmartFade(effectiveSpec, sliceA, sliceAOriginMs, sliceB, sliceBOriginMs, gainA, mixInGain, sampleRate)
+                val res = renderSmartFade(effectiveSpec, sliceA, sliceAOriginMs, sliceB, sliceBOriginMs, gainA, mixInGain, sampleRate, smartFadeLock)
+                transitionStereo = res.first
+                handoffBMs = res.second
+            }
+            DjBridgeStyle.OutroTail -> {
+                val res = renderOutroTail(effectiveSpec, sliceA, sliceAOriginMs, sliceB, sliceBOriginMs, gainA, mixInGain, sampleRate)
                 transitionStereo = res.first
                 handoffBMs = res.second
             }
@@ -226,6 +249,18 @@ object DjBridgeRenderer {
         val limited = DjDsp.truePeakLimiterStereo(merged, sampleRate, ceilingDb = -0.8)
         val postMsExact = (actualPostFrames * 1000.0 / sampleRate).roundToLong()
 
+        // Lo que de verdad lleva el WAV (para `oto.mix` y el cambio audible): velocidad de B y fase aplicadas, no las
+        // pedidas. Antes «velocidad B» repetía el ratio del plan aunque el estilo lo ignorase.
+        val applied = appliedTempoRatio(spec, smartFadeLock)
+        val appliedShift = if (spec.style == DjBridgeStyle.BeatMatchLongMix || filterEchoBeatAligned || smartFadeLock) {
+            refinedShiftMs.coerceIn(-420.0, 800.0)
+        } else 0.0
+        val reportedSpec = effectiveSpec.copy(
+            tempoMatchRatio = applied,
+            kickShiftMs = appliedShift,
+            beatAligned = if (spec.style == DjBridgeStyle.SmartFade && spec.beatAligned != null) smartFadeLock else effectiveSpec.beatAligned,
+        )
+
         return RenderedDjBridge(
             stereoPcm = limited,
             sampleRate = sampleRate,
@@ -234,8 +269,63 @@ object DjBridgeRenderer {
             dryBStartOffsetFrames = preRollFrames + transFrames,
             handoffBTrackMs = handoffBMs,
             endBTrackMs = handoffBMs + postMsExact,
-            spec = effectiveSpec,
+            spec = reportedSpec,
         )
+    }
+
+    private fun renderOutroTail(
+        spec: DjBridgeSpec,
+        sliceA: FloatArray,
+        originA: Long,
+        sliceB: FloatArray,
+        originB: Long,
+        gainA: Float,
+        gainB: Float,
+        sr: Int,
+    ): Pair<FloatArray, Long> {
+        fun frames(ms: Long) = (ms * sr / 1_000.0).roundToInt()
+        val aStart = frames(spec.cueOutStartMs - originA)
+        val aFrames = frames(spec.cueOutEndMs - spec.cueOutStartMs)
+        val incomingOffsetMs = spec.outroIncomingOffsetMs ?: (spec.cueOutEndMs - spec.cueOutStartMs)
+        val incomingOffset = frames(incomingOffsetMs)
+        val bMs = spec.transitionDurationMs - incomingOffsetMs
+        val bFrames = frames(bMs)
+        val bStart = frames(spec.entryInMs - originB)
+        // Codecs may end slightly before the declared duration or timestamp the first packet a few ms after zero.
+        // Keep that short padding in the bridge clock, and reject windows with missing music.
+        val codecPadding = frames(45)
+        require(aStart >= 0 && aFrames > 0 && aStart + aFrames <= sliceA.size / 2 + codecPadding)
+        require(incomingOffset in 1..aFrames && bStart >= -codecPadding && bFrames > 0 && bStart + bFrames <= sliceB.size / 2)
+        val dryA = DjDsp.sliceStereo(sliceA, aStart, aFrames)
+        val dryB = DjDsp.sliceStereo(sliceB, bStart, bFrames)
+        val mixed = FloatArray(max(aFrames, incomingOffset + bFrames) * 2)
+
+        // A stays at its playback gain up to its natural end. A quiet filtered tap gives it a tail over the intact B.
+        val edge = frames(12).coerceAtLeast(1)
+        val delay = min(frames(290), incomingOffset).coerceAtLeast(1)
+        val echoFrames = min(bFrames, frames(1_250L))
+        for (channel in 0..1) {
+            var low = 0f
+            for (i in 0 until aFrames) {
+                val exit = ((aFrames - i - 1).toFloat() / edge).coerceAtMost(1f)
+                mixed[i * 2 + channel] = dryA[i * 2 + channel] * gainA * smoothStep(exit)
+            }
+            for (i in 0 until echoFrames) {
+                val tapFrame = i % delay
+                low += (dryA[(incomingOffset - delay + tapFrame) * 2 + channel] - low) * 0.06f
+                val tapFalloff = 0.20f / (1 shl (i / delay).coerceAtMost(8))
+                val tapEdge = min(tapFrame, delay - 1 - tapFrame)
+                val echo = low * gainA * tapFalloff * smoothStep((tapEdge.toFloat() / edge).coerceAtMost(1f)) *
+                    (1f - smoothStep(i.toFloat() / echoFrames))
+                mixed[(incomingOffset + i) * 2 + channel] += echo
+            }
+            for (i in 0 until bFrames) {
+                val sinceFirstSample = i + min(bStart, 0)
+                val enter = smoothStep((sinceFirstSample.toFloat() / edge).coerceIn(0f, 1f))
+                mixed[(incomingOffset + i) * 2 + channel] += dryB[i * 2 + channel] * gainB * enter
+            }
+        }
+        return mixed to (spec.entryInMs + bMs)
     }
 
     /** 1. `lyric_loop`: repetición rítmica 1.0x fiel al pulso (sin chipmunk) + filtro progresivo + cola ping-pong sobre B. */
@@ -342,11 +432,15 @@ object DjBridgeRenderer {
         val ratio = beatMatchRatio(spec)
         val inStartFrame = (((lp.inEntryMs - originB) / 1000.0) * sr).roundToInt().coerceAtLeast(0)
         val phraseLeadFrames = max(((lp.inPhraseEndMs - lp.inEntryMs) / 1000.0 * sr).roundToInt(), (1.1 * sr).roundToInt())
-        val tailLeadFrames = (1.6 * sr).roundToInt()
+        // Tras la frase compartida B ya suena sola: vuelve a 1× en beats (ver `DjTempoMatch.returnGlideMs`).
+        val tailLeadFrames = max(
+            (1.6 * sr).roundToInt(),
+            ((DjTempoMatch.returnGlideSourceMs(spec.bpmA, ratio) / 1000.0) * sr).roundToInt(),
+        )
         val rawNeededB = phraseLeadFrames + tailLeadFrames
         val rawB = DjDsp.sliceStereo(sliceB, inStartFrame, rawNeededB)
         scaleStereoInPlace(rawB, gainB)
-        val stretchedB = if (abs(ratio - 1.0) > 0.004) {
+        val stretchedB = if (DjTempoMatch.isStretched(ratio)) {
             val speedB = FloatArray(rawB.size / 2) { i ->
                 if (i < phraseLeadFrames) {
                     ratio.toFloat()
@@ -431,7 +525,7 @@ object DjBridgeRenderer {
                 out[dst * 2 + 1] += stretchedB[i * 2 + 1] * gIn
             }
         }
-        val handoffBMs = if (abs(ratio - 1.0) > 0.004) {
+        val handoffBMs = if (DjTempoMatch.isStretched(ratio)) {
             blendContinuityHandoffB(
                 out = out,
                 total = total,
@@ -479,14 +573,16 @@ object DjBridgeRenderer {
         val shiftBMs = spec.kickShiftMs.coerceIn(-420.0, 800.0)
         val entryBFrame = (((spec.entryInMs + shiftBMs - originB).coerceAtLeast(0.0) / 1000.0) * sr).roundToInt()
         val overlapRawB = (aFrames * ratio).roundToInt().coerceAtLeast(sr)
-        val glideOutFrames = (1.6 * sr).roundToInt()
+        // Vuelta de B a su velocidad cuando A ya no suena: 8–16 beats según cuánto se estiró (antes 1,6 s fijos, que
+        // sonaban a acelerón o frenazo).
+        val glideOutFrames = ((DjTempoMatch.renderedGlideMs(spec.bpmA, ratio) / 1000.0) * sr).roundToInt()
         val glideRawB = (glideOutFrames * (ratio + 1.0) * 0.5).roundToInt().coerceAtLeast(sr / 2)
         val dryTailRawB = (0.20 * sr).roundToInt()
         val rawB = DjDsp.sliceStereo(sliceB, entryBFrame, overlapRawB + glideRawB + dryTailRawB)
         scaleStereoInPlace(rawB, gainB)
         val rawBFrames = rawB.size / 2
 
-        val stretchedB = if (abs(ratio - 1.0) > 0.002) {
+        val stretchedB = if (DjTempoMatch.isStretched(ratio)) {
             val speedB = FloatArray(rawBFrames) { i ->
                 when {
                     i < overlapRawB -> ratio.toFloat()
@@ -503,25 +599,17 @@ object DjBridgeRenderer {
         }
         val bFrames = stretchedB.size / 2
 
-        val prePadB = min((0.50 * sr).roundToInt(), entryBFrame)
         val approxEndB = entryBFrame + rawBFrames
-        val postPadB = min((0.50 * sr).roundToInt(), (sliceB.size / 2 - approxEndB).coerceAtLeast(0))
-        val warmB = FloatArray((prePadB + bFrames + postPadB) * 2)
-        if (prePadB > 0) {
-            val preB = DjDsp.sliceStereo(sliceB, entryBFrame - prePadB, prePadB)
-            scaleStereoInPlace(preB, gainB)
-            System.arraycopy(preB, 0, warmB, 0, prePadB * 2)
-        }
-        System.arraycopy(stretchedB, 0, warmB, prePadB * 2, bFrames * 2)
-        if (postPadB > 0) {
-            val postB = DjDsp.sliceStereo(sliceB, approxEndB, postPadB)
-            scaleStereoInPlace(postB, gainB)
-            System.arraycopy(postB, 0, warmB, (prePadB + bFrames) * 2, postPadB * 2)
-        }
-        val bandsBFull = DjDsp.linearPhaseThreeBandStereo(warmB, sr, lowHz = 160.0, highHz = 2_600.0)
-        val lowB = DjDsp.sliceStereo(bandsBFull.low, prePadB, bFrames)
-        val midB = DjDsp.sliceStereo(bandsBFull.mid, prePadB, bFrames)
-        val highB = DjDsp.sliceStereo(bandsBFull.high, prePadB, bFrames)
+        val (lowB, midB, highB) = threeBandOfStretchedB(
+            sliceB = sliceB,
+            entryBFrame = entryBFrame,
+            rawBFrames = rawBFrames,
+            stretchedB = stretchedB,
+            gainB = gainB,
+            sr = sr,
+            lowHz = 160.0,
+            highHz = 2_600.0,
+        )
 
         val total = max(aFrames, bFrames)
         val out = FloatArray(total * 2)
@@ -585,8 +673,10 @@ object DjBridgeRenderer {
         minHandoffMs: Long,
         sr: Int,
     ): Long {
-        val tailFrames = min((0.040 * sr).roundToInt(), bFrames / 4).coerceAtLeast(128)
-        val anchorFrameB = findBestContinuityEndFrame(
+        // Ventana de 250 ms (antes 40 ms): en un tramo casi callado entre dos golpes, 40 ms se parecen a cualquier
+        // otro silencio y el ancla caía en el borde de la búsqueda (medido: costura a +90 ms, un trozo de B repetido).
+        val tailFrames = min((0.250 * sr).roundToInt(), bFrames / 4).coerceAtLeast(128)
+        val matchedFrameB = findBestContinuityEndFrame(
             stretched = out,
             stretchedEndFrame = total,
             sliceB = sliceB,
@@ -594,6 +684,11 @@ object DjBridgeRenderer {
             sr = sr,
             winFrames = tailFrames,
         )
+        // El relevo público usa milisegundos enteros. Empalmar contra ese mismo sample evita que el redondeo
+        // posterior (hasta medio ms) cambie la fase justo al empezar el tramo seco, especialmente en tonos sostenidos.
+        val handoffMs = (originB + ((matchedFrameB * 1000.0) / sr).roundToLong()).coerceAtLeast(minHandoffMs)
+        val anchorFrameB = (((handoffMs - originB) * sr) / 1000.0).roundToInt()
+            .coerceIn(0, sliceB.size / 2)
         val xf = min((0.012 * sr).roundToInt(), min(total / 2, anchorFrameB))
         if (xf > 16) {
             for (k in 0 until xf) {
@@ -608,7 +703,7 @@ object DjBridgeRenderer {
                 }
             }
         }
-        return (originB + ((anchorFrameB * 1000.0) / sr).roundToLong()).coerceAtLeast(minHandoffMs)
+        return handoffMs
     }
 
     private fun findBestContinuityEndFrame(
@@ -647,10 +742,13 @@ object DjBridgeRenderer {
             return num / (kotlin.math.sqrt(e1 * e2) + 1e-8)
         }
 
+        // La posición calculada (`approxEndFrameB`) ya es buena: alejarse de ella cuesta un poco, y si nada se parece de
+        // verdad (correlación < 0,3) se queda ella.
+        fun distCost(c: Int): Double = 0.15 * abs(c - approxEndFrameB).toDouble() / searchRadius
         var cand = loEnd
         var coarseEnd = bestEnd
         while (cand <= hiEnd) {
-            val sc = corrAt(cand, 4)
+            val sc = corrAt(cand, 4) - distCost(cand)
             if (sc > bestScore) {
                 bestScore = sc
                 coarseEnd = cand
@@ -658,14 +756,17 @@ object DjBridgeRenderer {
             cand += 4
         }
         bestScore = Double.NEGATIVE_INFINITY
+        var bestCorr = 0.0
         for (fine in (coarseEnd - 6).coerceAtLeast(loEnd)..(coarseEnd + 6).coerceAtMost(hiEnd)) {
-            val sc = corrAt(fine, 1)
+            val corr = corrAt(fine, 1)
+            val sc = corr - distCost(fine)
             if (sc > bestScore) {
                 bestScore = sc
+                bestCorr = corr
                 bestEnd = fine
             }
         }
-        return bestEnd
+        return if (bestCorr >= 0.3) bestEnd else approxEndFrameB.coerceIn(winFrames, totalBFrames)
     }
 
     /** 3. `energy_drop_cut`: A entera y brillante hasta el corte + eco ping-pong/reverb con respiro a -36 dB + riser LPF en B al drop. */
@@ -856,31 +957,36 @@ object DjBridgeRenderer {
         val filteredFull = DjDsp.svfSweepStereo(rawAWithWarm, sr, hpfHz, highpass = true, resonance = 0.76f, steep24Db = false)
         val filteredA = DjDsp.sliceStereo(filteredFull, warmFrames, durFrames)
 
-        val tempoMatched = (spec.bpmA > 20.0 && spec.bpmB > 20.0 && DjHarmonic.bpmRelation(spec.bpmA, spec.bpmB).relDiffPct <= 9.5) ||
-            abs(spec.tempoMatchRatio - 1.0) > 0.002
+        val tempoMatched = echoBeatAligned(spec)
 
         val bStartIdx = filterEchoBStartFrames(spec, durFrames, tempoMatched, sr)
         val tailOutFrames = (1.8 * sr).roundToInt()
         val targetOutBFrames = (durFrames - bStartIdx) + tailOutFrames
+        // Con B estirada: tempo constante mientras suena A (si no, se desfasan) y vuelta a 1× ya sola.
+        val glideOutFrames = ((DjTempoMatch.renderedGlideMs(spec.bpmA, spec.tempoMatchRatio) / 1000.0) * sr).roundToInt()
         val shiftBMs = if (tempoMatched) spec.kickShiftMs.coerceIn(-420.0, 800.0) else 0.0
         val entryBFrame = (((spec.entryInMs + shiftBMs - originB).coerceAtLeast(0.0) / 1000.0) * sr).roundToInt()
-        val useRatio = tempoMatched && abs(spec.tempoMatchRatio - 1.0) > 0.002
+        val useRatio = tempoMatched && DjTempoMatch.isStretched(spec.tempoMatchRatio)
         val rawB: FloatArray
         val bFrames: Int
         val approxEndFrameB: Int
         if (useRatio) {
-            val ratio = spec.tempoMatchRatio.coerceIn(0.88, 1.12)
+            val ratio = DjTempoMatch.clampRatio(spec.tempoMatchRatio)
             val overlapOutFrames = (durFrames - bStartIdx).coerceAtLeast(1)
             val overlapRawB = (overlapOutFrames * ratio).roundToInt().coerceAtLeast(sr / 2)
-            val sliceRawB = DjDsp.sliceStereo(sliceB, entryBFrame, overlapRawB + tailOutFrames)
+            val glideRawB = (glideOutFrames * (ratio + 1.0) * 0.5).roundToInt()
+            val dryTailRawB = (0.20 * sr).roundToInt()
+            val sliceRawB = DjDsp.sliceStereo(sliceB, entryBFrame, overlapRawB + glideRawB + dryTailRawB)
             scaleStereoInPlace(sliceRawB, gainB)
             val nRawB = sliceRawB.size / 2
             val speedB = FloatArray(nRawB) { i ->
-                if (i < overlapRawB) {
-                    val u = smoothStep((i.toFloat() / max(1, overlapRawB - 1)).coerceIn(0f, 1f))
-                    (ratio + (1.0 - ratio) * u).toFloat()
-                } else {
-                    1.0f
+                when {
+                    i < overlapRawB -> ratio.toFloat()
+                    i < overlapRawB + glideRawB -> {
+                        val u = smoothStep(((i - overlapRawB).toFloat() / max(1, glideRawB - 1)).coerceIn(0f, 1f))
+                        (ratio + (1.0 - ratio) * u).toFloat()
+                    }
+                    else -> 1.0f
                 }
             }
             rawB = DjDsp.timeStretchStereo(sliceRawB, sr, speedB)
@@ -920,7 +1026,8 @@ object DjBridgeRenderer {
 
         // Eco y reverb alimentados solo al final agudo de A y extendidos libremente sobre el tramo de B.
         val total = max(durFrames, bStartIdx + bFrames)
-        val tailSpan = max(1, total - durFrames)
+        // La cola del eco se apaga en ~1,8 s aunque B siga más (vuelta a 1×): si no, el eco se alargaría con ella.
+        val tailSpan = max(1, min(total - durFrames, (1.8 * sr).roundToInt()))
         val filteredPadded = FloatArray(total * 2)
         System.arraycopy(filteredA, 0, filteredPadded, 0, durFrames * 2)
 
@@ -1021,7 +1128,13 @@ object DjBridgeRenderer {
         return out to handoffMs
     }
 
-    /** 5. `smart_fade`: curva S equal-power + FIR precalentado + cruce limpio de graves a 150 Hz. */
+    /**
+     * 5. `smart_fade`: curva S equal-power + FIR precalentado + cruce limpio de graves a 150 Hz.
+     *
+     * Con [tempoLocked] (el plan lo marca con `beatAligned = true` tras comprobar bombo en las dos y el límite de
+     * estiramiento) B entra en la fase de A medida sobre el PCM y, si hace falta, a tempo de A durante el fundido;
+     * después vuelve a 1× ya sola (mismas reglas que el cuadre de beats). Sin eso, el fundido de siempre a 1×.
+     */
     private fun renderSmartFade(
         spec: DjBridgeSpec,
         sliceA: FloatArray,
@@ -1031,7 +1144,9 @@ object DjBridgeRenderer {
         gainA: Float,
         gainB: Float,
         sr: Int,
+        tempoLocked: Boolean = false,
     ): Pair<FloatArray, Long> {
+        if (tempoLocked) return renderLockedSmartFade(spec, sliceA, originA, sliceB, originB, gainA, gainB, sr)
         val durFrames = (((spec.transitionDurationMs / 1000.0) * sr).roundToInt()).coerceIn(sr * 2, sr * 12)
         val startAFrame = (((spec.cueOutStartMs - originA) / 1000.0) * sr).roundToInt().coerceAtLeast(0)
         val entryBFrame = (((spec.entryInMs - originB) / 1000.0) * sr).roundToInt().coerceAtLeast(0)
@@ -1080,6 +1195,189 @@ object DjBridgeRenderer {
         val bConsumedMs = ((durFrames * 1000.0) / sr).roundToLong()
         return out to (spec.entryInMs + bConsumedMs)
     }
+
+    /** Fundido suave con B en fase (y a tempo de A si hace falta) y vuelta a 1× de B ya sola. */
+    private fun renderLockedSmartFade(
+        spec: DjBridgeSpec,
+        sliceA: FloatArray,
+        originA: Long,
+        sliceB: FloatArray,
+        originB: Long,
+        gainA: Float,
+        gainB: Float,
+        sr: Int,
+    ): Pair<FloatArray, Long> {
+        val durFrames = (((spec.transitionDurationMs / 1000.0) * sr).roundToInt()).coerceIn(sr * 2, sr * 12)
+        val startAFrame = (((spec.cueOutStartMs - originA) / 1000.0) * sr).roundToInt().coerceAtLeast(0)
+        val ratio = beatMatchRatio(spec)
+        val stretched = DjTempoMatch.isStretched(ratio)
+        val shiftBMs = spec.kickShiftMs.coerceIn(-420.0, 800.0)
+        val entryBFrame = (((spec.entryInMs + shiftBMs - originB).coerceAtLeast(0.0) / 1000.0) * sr).roundToInt()
+
+        val (lowA, midA, highA) = threeBandWithWarmupStereo(
+            slice = sliceA,
+            startFrame = startAFrame,
+            lengthFrames = durFrames,
+            sr = sr,
+            lowHz = 150.0,
+            highHz = 2_400.0,
+            scale = gainA,
+        )
+        val lowB: FloatArray
+        val midB: FloatArray
+        val highB: FloatArray
+        val bFrames: Int
+        var approxEndB = entryBFrame + durFrames
+        if (stretched) {
+            // Mismo reparto que el cuadre de beats: tempo constante mientras suena A, vuelta en beats ya sola, cola seca.
+            val overlapRawB = (durFrames * ratio).roundToInt().coerceAtLeast(sr)
+            val glideOutFrames = ((DjTempoMatch.renderedGlideMs(spec.bpmA, ratio) / 1000.0) * sr).roundToInt()
+            val glideRawB = (glideOutFrames * (ratio + 1.0) * 0.5).roundToInt().coerceAtLeast(sr / 2)
+            val dryTailRawB = (0.20 * sr).roundToInt()
+            val rawB = DjDsp.sliceStereo(sliceB, entryBFrame, overlapRawB + glideRawB + dryTailRawB)
+            scaleStereoInPlace(rawB, gainB)
+            val rawBFrames = rawB.size / 2
+            val speedB = FloatArray(rawBFrames) { i ->
+                when {
+                    i < overlapRawB -> ratio.toFloat()
+                    i < overlapRawB + glideRawB -> {
+                        val u = smoothStep(((i - overlapRawB).toFloat() / max(1, glideRawB - 1)).coerceIn(0f, 1f))
+                        (ratio + (1.0 - ratio) * u).toFloat()
+                    }
+                    else -> 1.0f
+                }
+            }
+            val stretchedB = DjDsp.timeStretchStereo(rawB, sr, speedB)
+            bFrames = stretchedB.size / 2
+            approxEndB = entryBFrame + rawBFrames
+            val bands = threeBandOfStretchedB(sliceB, entryBFrame, rawBFrames, stretchedB, gainB, sr, 150.0, 2_400.0)
+            lowB = bands.first
+            midB = bands.second
+            highB = bands.third
+        } else {
+            val bands = threeBandWithWarmupStereo(sliceB, entryBFrame, durFrames, sr, 150.0, 2_400.0, gainB)
+            lowB = bands.first
+            midB = bands.second
+            highB = bands.third
+            bFrames = durFrames
+        }
+
+        val total = max(durFrames, bFrames)
+        val out = FloatArray(total * 2)
+        for (i in 0 until total) {
+            if (i < durFrames) {
+                // Curvas del fundido con tempo cercano (las dos en fase: los graves pueden solaparse sin golpe doble).
+                val s = smoothStep(i.toFloat() / max(1, durFrames - 1))
+                val outG = cos(s * PI * 0.5).toFloat()
+                val inG = sin(s * PI * 0.5).toFloat()
+                val outLowMult = 1f - smoothStep(((s - 0.08f) / 0.50f).coerceIn(0f, 1f))
+                val inLowMult = 0.15f + 0.85f * smoothStep(((s - 0.35f) / 0.55f).coerceIn(0f, 1f))
+                var l = (lowA[i * 2] * outLowMult + midA[i * 2] + highA[i * 2]) * outG
+                var r = (lowA[i * 2 + 1] * outLowMult + midA[i * 2 + 1] + highA[i * 2 + 1]) * outG
+                if (i < bFrames) {
+                    l += (lowB[i * 2] * inLowMult + midB[i * 2] + highB[i * 2]) * inG
+                    r += (lowB[i * 2 + 1] * inLowMult + midB[i * 2 + 1] + highB[i * 2 + 1]) * inG
+                }
+                out[i * 2] = l
+                out[i * 2 + 1] = r
+            } else if (i < bFrames) {
+                out[i * 2] = lowB[i * 2] + midB[i * 2] + highB[i * 2]
+                out[i * 2 + 1] = lowB[i * 2 + 1] + midB[i * 2 + 1] + highB[i * 2 + 1]
+            }
+        }
+        val handoffMs = if (stretched) {
+            blendContinuityHandoffB(
+                out = out,
+                total = total,
+                bFrames = bFrames,
+                sliceB = sliceB,
+                approxEndFrameB = approxEndB,
+                originB = originB,
+                gainB = gainB,
+                minHandoffMs = (spec.entryInMs + shiftBMs).roundToLong().coerceAtLeast(originB),
+                sr = sr,
+            )
+        } else {
+            originB + (((entryBFrame + durFrames) * 1000.0) / sr).roundToLong()
+        }
+        return out to handoffMs
+    }
+
+    /** Las tres bandas de B ya estirada, con medio segundo de B seca a cada lado para precalentar el FIR. */
+    private fun threeBandOfStretchedB(
+        sliceB: FloatArray,
+        entryBFrame: Int,
+        rawBFrames: Int,
+        stretchedB: FloatArray,
+        gainB: Float,
+        sr: Int,
+        lowHz: Double,
+        highHz: Double,
+    ): Triple<FloatArray, FloatArray, FloatArray> {
+        val bFrames = stretchedB.size / 2
+        val prePadB = min((0.50 * sr).roundToInt(), entryBFrame)
+        val approxEndB = entryBFrame + rawBFrames
+        val postPadB = min((0.50 * sr).roundToInt(), (sliceB.size / 2 - approxEndB).coerceAtLeast(0))
+        val warmB = FloatArray((prePadB + bFrames + postPadB) * 2)
+        if (prePadB > 0) {
+            val preB = DjDsp.sliceStereo(sliceB, entryBFrame - prePadB, prePadB)
+            scaleStereoInPlace(preB, gainB)
+            System.arraycopy(preB, 0, warmB, 0, prePadB * 2)
+        }
+        System.arraycopy(stretchedB, 0, warmB, prePadB * 2, bFrames * 2)
+        if (postPadB > 0) {
+            val postB = DjDsp.sliceStereo(sliceB, approxEndB, postPadB)
+            scaleStereoInPlace(postB, gainB)
+            System.arraycopy(postB, 0, warmB, (prePadB + bFrames) * 2, postPadB * 2)
+        }
+        val bandsBFull = DjDsp.linearPhaseThreeBandStereo(warmB, sr, lowHz = lowHz, highHz = highHz)
+        return Triple(
+            DjDsp.sliceStereo(bandsBFull.low, prePadB, bFrames),
+            DjDsp.sliceStereo(bandsBFull.mid, prePadB, bFrames),
+            DjDsp.sliceStereo(bandsBFull.high, prePadB, bFrames),
+        )
+    }
+
+    /**
+     * Si el fundido suave va a tempo: lo pide el plan (`beatAligned = true`, que solo pone tras comprobar bombo al pulso
+     * en las dos y el límite de estiramiento según la voz de B), con los dos tempos, dentro del 8 % y con un ratio
+     * coherente con esos tempos (un plan incoherente no se fuerza: sonaría a golpes desfasados). Sin el dato, nunca.
+     */
+    internal fun smartFadeTempoLocked(spec: DjBridgeSpec): Boolean {
+        if (spec.style != DjBridgeStyle.SmartFade || spec.beatAligned != true) return false
+        if (spec.bpmA <= 20.0 || spec.bpmB <= 20.0 || spec.transitionDurationMs <= 0L) return false
+        if (DjTempoMatch.stretchPct(spec.tempoMatchRatio) > DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT) return false
+        val expected = DjHarmonic.bpmRelation(spec.bpmA, spec.bpmB).ratioOutOverIn
+        return abs(spec.tempoMatchRatio / expected - 1.0) <= LOCK_RATIO_TOLERANCE
+    }
+
+    /** Diferencia máxima entre el ratio del plan y el de sus BPM para fiarse de él (0,6 %: ~36 ms en 6 s a 120 BPM). */
+    private const val LOCK_RATIO_TOLERANCE = 0.006
+
+    /**
+     * Si el tramo decodificado de B alcanza para el fundido a tempo (cruce estirado + vuelta + cola + corrección de fase)
+     * y medio segundo de tramo seco. Si no, el fundido va a 1× sin tocar la fase: mejor eso que un relevo sin tramo seco.
+     */
+    private fun lockFitsInSlice(spec: DjBridgeSpec, sliceBFrames: Int, originB: Long, sr: Int): Boolean {
+        val needMs = DjTempoMatch.lockedCrossSourceMs(spec.transitionDurationMs, spec.bpmA, beatMatchRatio(spec)) + 500L
+        val sliceEndMs = originB + ((sliceBFrames * 1000.0) / sr).roundToLong()
+        return spec.entryInMs + needMs <= sliceEndMs
+    }
+
+    /** Velocidad de B que el renderizado aplica de verdad en cada estilo (1 si no la estira). */
+    internal fun appliedTempoRatio(spec: DjBridgeSpec, smartFadeLock: Boolean): Double {
+        val r = when (spec.style) {
+            DjBridgeStyle.BeatMatchLongMix -> beatMatchRatio(spec)
+            DjBridgeStyle.LyricLoopCut -> if (spec.lyricLoop != null) beatMatchRatio(spec) else filterEchoRatio(spec)
+            DjBridgeStyle.FilterEcho -> filterEchoRatio(spec)
+            DjBridgeStyle.SmartFade -> if (smartFadeLock) beatMatchRatio(spec) else 1.0
+            DjBridgeStyle.EnergyDropCut, DjBridgeStyle.OutroTail -> 1.0
+        }
+        return if (DjTempoMatch.isStretched(r)) r else 1.0
+    }
+
+    private fun filterEchoRatio(spec: DjBridgeSpec): Double =
+        if (echoBeatAligned(spec) && DjTempoMatch.isStretched(spec.tempoMatchRatio)) DjTempoMatch.clampRatio(spec.tempoMatchRatio) else 1.0
 
     private fun threeBandWithWarmupStereo(
         slice: FloatArray,
@@ -1135,9 +1433,17 @@ object DjBridgeRenderer {
         return 0
     }
 
+    /**
+     * `FilterEcho` con B a tempo y en fase: lo dice el plan (`beatAligned`). Solo en specs hechos a mano sin ese dato se
+     * deduce de los BPM como antes.
+     */
+    private fun echoBeatAligned(spec: DjBridgeSpec): Boolean = spec.beatAligned
+        ?: ((spec.bpmA > 20.0 && spec.bpmB > 20.0 && DjHarmonic.bpmRelation(spec.bpmA, spec.bpmB).relDiffPct <= 9.5) ||
+            DjTempoMatch.isStretched(spec.tempoMatchRatio))
+
     /** Velocidad a la que B va al tempo de A (`bpmA / bpmB efectivo`); 1 si falta alguno de los dos tempos. */
     private fun beatMatchRatio(spec: DjBridgeSpec): Double =
-        if (spec.bpmA > 20.0 && spec.bpmB > 20.0) spec.tempoMatchRatio.coerceIn(0.88, 1.12) else 1.0
+        if (spec.bpmA > 20.0 && spec.bpmB > 20.0) DjTempoMatch.clampRatio(spec.tempoMatchRatio) else 1.0
 
     private fun smoothStep(x: Float): Float {
         val c = x.coerceIn(0f, 1f)

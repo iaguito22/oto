@@ -20,12 +20,15 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -46,10 +49,15 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.Dp
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -66,6 +74,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import io.github.iaguito22.oto.dj.DjMode
 import io.github.iaguito22.oto.dj.DjReaction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -89,13 +99,30 @@ import org.json.JSONArray
 
 internal data class LibraryJump(val version:Int=0,val item:YTItem?=null,val local:String?=null,val artistId:String?=null,val artistName:String="")
 
+internal val LocalFloatingDockInset = staticCompositionLocalOf { 0.dp }
+
 private data class LibraryEdit(val kind:String,val id:String="",val value:String="")
+
+private data class LibraryDestination(
+    val key: String,
+    val depth: Int,
+    val section: String,
+    val preferences: String?,
+    val menu: MenuState,
+    val recents: Boolean,
+    val dj: Boolean,
+    val recap: Boolean,
+    val smart: LocalPlaylist?,
+    val list: LocalPlaylist?,
+    val folder: String?,
+)
 
 /** Biblioteca de escritorio: navegación lateral y un lienzo que cambia entre colección, búsqueda y escucha. */
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuController,importer:Importer,
-    account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={},playerVisible:Boolean=false,remoteLink:io.github.iaguito22.oto.remote.LocalLink?=null,following:io.github.iaguito22.oto.playback.NowPlaying?=null) {
+    account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={},playerVisible:Boolean=false,remoteLink:io.github.iaguito22.oto.remote.LocalLink?=null,following:io.github.iaguito22.oto.playback.NowPlaying?=null,showVolume:Boolean=true,embedded:Boolean=false,onEmbeddedSearch:()->Unit={},onEmbeddedLocation:(Int,String?)->Unit={ _,_ -> },
+    embeddedBack:Int=0,embeddedRecents:Boolean=false,onEmbeddedRecentsDismiss:()->Unit={},onEmbeddedRecentsFocus:(Boolean)->Unit={},onQuit:(()->Unit)?=null) {
     val lists by prefs.playlists.collectAsState(initial=emptyList())
     val liked by prefs.likedList.collectAsState(initial=LocalPlaylist(LIKED_ID,"Me gusta",emptyList()))
     val history by prefs.history.collectAsState(initial=emptyList())
@@ -106,7 +133,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     val state by menu.state.collectAsState()
     val np by player.state.collectAsState()
     val coverBeat by prefs.coverBeat.collectAsState(initial=true)
-    val pulse=rememberCoverPulse(np.playing,coverBeat,player::beat)
+    val pulse=if(embedded) remember { mutableFloatStateOf(0f) } else rememberCoverPulse(np.playing,coverBeat,player::beat)
     val qualityPlaying by player.currentQuality.collectAsState()
     val session by account.session.collectAsState()
     val cloudState by cloud.state.collectAsState()
@@ -123,8 +150,12 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     val scope=rememberCoroutineScope()
     val snackbar=remember {SnackbarHostState()}
     val searchFocus=remember {FocusRequester()}
-    LaunchedEffect(Unit){kotlinx.coroutines.delay(120);WindowWorkTrace.measure("biblioteca/foco") { searchFocus.requestFocus() }}
+    LaunchedEffect(Unit){kotlinx.coroutines.delay(120);if(!embedded)WindowWorkTrace.measure("biblioteca/foco") { searchFocus.requestFocus() }}
     var section by remember {mutableStateOf("Tu música")}
+    var preferencesPages by remember { mutableStateOf<List<String>>(emptyList()) }
+    val preferencesPage = preferencesPages.lastOrNull()
+    val libraryScrollState = rememberSaveableStateHolder()
+    var recentRowsHaveFocus by remember { mutableStateOf(false) }
     var local by remember {mutableStateOf<String?>(null)}
     var folder by remember {mutableStateOf<String?>(null)}
     var editor by remember {mutableStateOf<LibraryEdit?>(null)}
@@ -158,9 +189,80 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
         smart=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { io.github.iaguito22.oto.dj.Smart.lists(lists,liked.songs,history,plays,System.currentTimeMillis()) }.getOrDefault(emptyList()) }
         recap=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { io.github.iaguito22.oto.dj.Recap.of(plays) }.getOrNull() }
     }
-    fun home(name:String) { section=name;local=null;folder=null;smartOpen=null;recapOpen=false;djOpen=false;recentsOpen=false;menu.onQuery("");while(menu.state.value.pages.isNotEmpty())menu.closeDetail() }
-    LaunchedEffect(navigation.first) {if(navigation.first>0)home(if(navigation.second==1)"Explorar" else "Tu música")}
+    fun home(name:String) {
+        preferencesPages = emptyList()
+        section=name;local=null;folder=null;smartOpen=null;recapOpen=false;djOpen=false;recentsOpen=false;menu.onQuery("")
+        while(menu.state.value.pages.isNotEmpty())menu.closeDetail()
+    }
+    fun openPreferences(name: String) {
+        if (!embedded) { home(name); return }
+        val existing = preferencesPages.indexOf(name)
+        preferencesPages = if (existing >= 0) preferencesPages.take(existing + 1) else preferencesPages + name
+    }
+    LaunchedEffect(navigation.first) {
+        if (navigation.first > 0) when(navigation.second) {
+            1 -> home("Explorar")
+            2 -> home("Recientes")
+            3 -> home("Descargas")
+            4 -> openPreferences("Ajustes")
+            5 -> openPreferences("Cuenta")
+            6 -> { home("Tu música"); djOpen = true }
+            else -> home("Tu música")
+        }
+    }
+    // En una ventana la búsqueda externa y los recientes sustituyen la vista que estaba delante.
+    LaunchedEffect(state.query, embeddedRecents) {
+        if (embedded && (state.query.isNotBlank() || embeddedRecents)) {
+            preferencesPages = emptyList()
+            if (state.query.isNotBlank()) { local=null; smartOpen=null }
+        }
+    }
     LaunchedEffect(jump.version) { if(jump.version>0) { home("Tu música"); when { jump.item!=null -> menu.open(jump.item); jump.local==DOWNLOADS_ID -> home("Descargas"); jump.local?.startsWith(FOLDER_PREFIX)==true -> folder=jump.local.removePrefix(FOLDER_PREFIX); jump.local!=null -> local=jump.local; jump.artistId!=null -> menu.openArtist(jump.artistId,jump.artistName) } } }
+    LaunchedEffect(embeddedBack) {
+        if (embeddedBack > 0) when {
+            preferencesPages.isNotEmpty() -> preferencesPages = preferencesPages.dropLast(1)
+            state.query.isNotBlank() -> menu.onQuery("")
+            state.pages.isNotEmpty() -> menu.closeDetail()
+            djOpen -> djOpen = false
+            recapOpen -> recapOpen = false
+            smartOpen != null -> smartOpen = null
+            local != null -> local = null
+            folder != null -> folder = null
+            else -> home("Tu música")
+        }
+    }
+    LaunchedEffect(embedded, section, preferencesPage, local, state.query, state.pages, folder, smartOpen, recapOpen, djOpen) {
+        if (embedded) {
+            val index = when {
+                preferencesPage == "Ajustes" -> 4
+                preferencesPage == "Cuenta" -> 5
+                preferencesPage != null -> -1
+                state.query.isNotBlank() || state.pages.isNotEmpty() || folder != null -> -1
+                djOpen -> 6
+                section == "Explorar" -> 1
+                section == "Recientes" -> 2
+                section == "Descargas" -> 3
+                section == "Ajustes" -> 4
+                section == "Cuenta" -> 5
+                section == "Tu música" -> 0
+                else -> -1
+            }
+            onEmbeddedLocation(index, local.takeIf { preferencesPage == null })
+        }
+    }
+    @Composable fun PreferencesContent(page: String) {
+        when (page) {
+            "Ajustes" -> SettingsSpace(prefs, player, palette, session, importState, artworkBackground, onArtworkBackground,
+                backdropOpacity, onBackdropOpacity, shortcut, shortcutIssue, onShortcut,
+                onAccount = { openPreferences("Cuenta") }, onImport = { openPreferences("Importar") }, onDevices = onDevices, onQuit = onQuit)
+            "Cuenta" -> SettingsAndAccountPane(prefs, importer, account, cloud, login, session, cloudState, importState, quality,
+                dataSaver, shuffle, loop, player::setShuffle, player::setLoop, palette, { openPreferences("Importar") },
+                accountOnly = true, onAccountFromMobile = onAccountFromMobile)
+            "Importar" -> ImportPane(importer, prefs, palette, {
+                if (embedded) preferencesPages = preferencesPages.dropLast(1) else home("Ajustes")
+            }, { home("Tu música") })
+        }
+    }
     fun openItem(item:YTItem) {if(item is SongItem)player.play(item) else {local=null;menu.onQuery("");menu.open(item)}}
     fun openArtist(id:String,name:String) {home("Tu música");menu.openArtist(id,name)}
     val songActions=rememberSongActions(player,prefs,onSave,::openArtist)
@@ -182,9 +284,9 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     )
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide=maxWidth>800.dp
-        val contentWidth=maxWidth-(if(wide)176.dp else 62.dp)-44.dp
+        val contentWidth=maxWidth-(if(embedded)0.dp else if(wide)176.dp else 62.dp)-44.dp
         Row(Modifier.fillMaxSize()) {
-            Column(Modifier.width(if(wide)176.dp else 62.dp).fillMaxHeight().padding(horizontal=12.dp,vertical=16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+            if(!embedded) Column(Modifier.width(if(wide)176.dp else 62.dp).fillMaxHeight().padding(horizontal=12.dp,vertical=16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
                 if(wide) Spacer(Modifier.height(58.dp))
                 listOf("Tu música" to MobileIcons.libraryMusic,"Explorar" to Icons.Rounded.Explore,"Recientes" to MobileIcons.history,"Descargas" to MobileIcons.download).forEach { (name,icon) ->
                     LibraryNavigation(name,icon,wide,section==name) { home(name) }
@@ -245,7 +347,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         }
                     }
                 }
-                if(wide) {
+                if(!showVolume) {
+                } else if(wide) {
                     Column(verticalArrangement=Arrangement.spacedBy((-7).dp)) {
                     FineSlider(volume,player::setVolume,Modifier.padding(horizontal=8.dp),label="Volumen")
                     Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically) {
@@ -262,9 +365,10 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 }
                 LibraryNavigation("Ajustes",MobileIcons.settings,wide,section=="Ajustes") { home("Ajustes") }
             }
-            Column(Modifier.weight(1f).fillMaxHeight().padding(start=16.dp,end=28.dp,top=18.dp,bottom=12.dp),verticalArrangement=Arrangement.spacedBy(20.dp)) {
+            val libraryPadding = if (embedded) Modifier else Modifier.padding(start=16.dp,end=28.dp,top=18.dp,bottom=12.dp)
+            Column(Modifier.weight(1f).fillMaxHeight().then(libraryPadding),verticalArrangement=Arrangement.spacedBy(20.dp)) {
                 // Dispositivos junto al buscador, pero fuera de él.
-                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                if(!embedded) Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                 Row(Modifier.weight(1f).height(48.dp).clip(CircleShape).background(Color.White.copy(alpha=.045f)).padding(start=16.dp,end=6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                     Icon(MobileIcons.search,null,Modifier.size(18.dp),tint=Color.White.copy(alpha=.35f))
                     BasicTextField(state.query,{menu.onQuery(it);local=null;smartOpen=null},Modifier.weight(1f).onFocusChanged { onSearchFocus(it.isFocused);searchHasFocus=it.isFocused;if(!it.isFocused && !pressingRecents)recentsOpen=false }.focusRequester(searchFocus).onPointerEvent(PointerEventType.Press){recentsOpen=true}.onPreviewKeyEvent { e -> if(e.type==KeyEventType.KeyDown && e.key==Key.Escape && recentsOpen){recentsOpen=false;true} else false },textStyle=OtoType.body.copy(color=Color.White),cursorBrush=SolidColor(Color.White),singleLine=true,decorationBox={field -> if(state.query.isBlank())Text("Buscar canciones, artistas o listas",style=OtoType.body,color=Color.White.copy(alpha=.36f));field()})
@@ -276,15 +380,60 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 }
                 val panelModifier = if(floatingPanel) Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFF171A18).copy(alpha=.35f)).padding(16.dp) else Modifier
                 Column(Modifier.weight(1f).fillMaxWidth().then(panelModifier),verticalArrangement=Arrangement.spacedBy(20.dp)) {
-                val page=state.pages.lastOrNull() as? Page.Remote
-                val remoteSongs=page?.songs
                 val selected=(if(local==LIKED_ID)liked else lists.firstOrNull{it.id==local})
-                val title=when {state.query.isNotBlank()->"Resultados";page!=null->page.item.title;selected!=null->selected.name;folder!=null->folder!!;else->section}
-                val showRecents=recentsOpen && state.query.isBlank()
-                if(selected==null && smartOpen==null && !recapOpen && !djOpen && !showRecents && page?.item !is ArtistItem && page?.item !is AlbumItem && page?.item !is PlaylistItem) Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-                    if(local!=null||page!=null||folder!=null)IconButton(onClick={local=null;folder=null;if(page!=null)menu.closeDetail()}){Icon(MobileIcons.arrowBack,"Volver",Modifier.size(20.dp))}
+                val showRecents=preferencesPage==null && (recentsOpen || embedded && embeddedRecents) && state.query.isBlank()
+                val (routeKey, depth) = when {
+                    !embedded -> section to 0
+                    preferencesPage != null -> "preferences:$preferencesPage" to (4 + preferencesPages.size)
+                    showRecents -> "recentSearches" to 1
+                    state.query.isNotBlank() -> "search" to 1
+                    djOpen -> "dj" to 1
+                    recapOpen -> "recap" to 1
+                    smartOpen != null -> "smart:${smartOpen?.id}" to 2
+                    selected != null -> "list:${selected.id}" to 2
+                    state.pages.isNotEmpty() -> {
+                        val item = (state.pages.lastOrNull() as? Page.Remote)?.item
+                        "remote:${item?.javaClass?.simpleName}:${item?.id}" to (1 + state.pages.size)
+                    }
+                    folder != null -> "folder:$folder" to 1
+                    else -> "section:$section" to 0
+                }
+                val destination = LibraryDestination(routeKey, depth, section, preferencesPage, state, showRecents,
+                    djOpen, recapOpen, smartOpen, selected, folder)
+                val travel = with(LocalDensity.current) { 14.dp.roundToPx() }
+                AnimatedContent(destination, Modifier.weight(1f).fillMaxWidth().clipToBounds(),
+                    contentKey = { it.key }, transitionSpec = {
+                        if (embedded) {
+                            val direction = if (targetState.depth < initialState.depth) -1 else 1
+                            (fadeIn(tween(210, delayMillis = 35)) + slideInVertically(tween(245)) { direction * travel })
+                                .togetherWith(fadeOut(tween(135)) + slideOutVertically(tween(180)) { -direction * travel / 2 })
+                        } else {
+                            (fadeIn(tween(260)) + slideInVertically(spring(dampingRatio=.8f,stiffness=280f)) { it / 5 }) togetherWith
+                                (fadeOut(tween(160)) + slideOutVertically(tween(200)) { -it / 8 })
+                        }
+                    }, label = "libraryDestination") { screen ->
+                val state = screen.menu
+                val page = state.pages.lastOrNull() as? Page.Remote
+                val remoteSongs = page?.songs
+                val selected = screen.list
+                val preferencesPage = screen.preferences
+                val animatedSection = preferencesPage ?: screen.section
+                val showRecents = screen.recents
+                val immersiveArtist = embedded && screen.key.startsWith("remote:") && page?.item is ArtistItem
+                val pagePadding = if (embedded) Modifier.padding(start=if(immersiveArtist)0.dp else 28.dp,
+                    end=if(immersiveArtist)0.dp else 28.dp, top=if(immersiveArtist)0.dp else 22.dp,bottom=12.dp) else Modifier
+                Column(Modifier.fillMaxSize().then(pagePadding).focusProperties {
+                    onEnter = { if (screen.key != destination.key) cancelFocusChange() }
+                }.focusGroup(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                val title=preferencesPage ?: when {
+                    state.query.isNotBlank()->"Resultados";page!=null->page.item.title;selected!=null->selected.name
+                    else->screen.folder ?: screen.section
+                }
+                if(!(embedded && preferencesPage==null && (state.query.isNotBlank() || screen.section=="Explorar" && page==null)) && (preferencesPage!=null || selected==null && screen.smart==null && !screen.recap && !screen.dj && !showRecents && page?.item !is ArtistItem && page?.item !is AlbumItem && page?.item !is PlaylistItem)) Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                    if(preferencesPage==null && (selected!=null||page!=null||screen.folder!=null))IconButton(onClick={local=null;folder=null;if(page!=null)menu.closeDetail()}){Icon(MobileIcons.arrowBack,"Volver",Modifier.size(20.dp))}
+                    if(embedded && preferencesPage!=null)IconButton(onClick={preferencesPages=preferencesPages.dropLast(1)}){Icon(MobileIcons.arrowBack,"Volver",Modifier.size(20.dp))}
                     Text(title,style=OtoType.display,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f))
-                    if(section=="Tu música"&&selected==null&&page==null&&state.query.isBlank()){
+                    if(preferencesPage==null && screen.section=="Tu música"&&selected==null&&page==null&&state.query.isBlank()){
                         Box {
                             HoverAction(Icons.Rounded.GridView,"Tamaño de las listas",onClick={sizeMenu=true})
                             LibraryDropdownMenu(expanded=sizeMenu,onDismissRequest={sizeMenu=false},shape=RoundedCornerShape(18.dp)) {
@@ -301,30 +450,41 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     }
                 }
                 Box(Modifier.weight(1f)) {
-                    AnimatedContent(section, transitionSpec = {
-                        val direction = if (targetState == "Ajustes") 1 else if (initialState == "Ajustes") -1 else 1
-                        (fadeIn(tween(260)) + slideInVertically(spring(dampingRatio=.8f,stiffness=280f)) { direction * it / 5 }) togetherWith
-                            (fadeOut(tween(160)) + slideOutVertically(tween(200)) { -direction * it / 8 })
-                    }, label="librarySection") { animatedSection ->
-                    CascadeScope(listOf(animatedSection,showRecents,state.query.isNotBlank(),smartOpen,recapOpen,djOpen,selected?.id,page?.item,folder)) {
+                    val sectionBody: @Composable () -> Unit = {
                     when {
-                        showRecents -> Box(Modifier.fillMaxSize().onPointerEvent(PointerEventType.Press,pass=androidx.compose.ui.input.pointer.PointerEventPass.Initial){pressingRecents=true}.onPointerEvent(PointerEventType.Release,pass=androidx.compose.ui.input.pointer.PointerEventPass.Final){scope.launch{kotlinx.coroutines.delay(80);pressingRecents=false;if(!searchHasFocus)recentsOpen=false}}) { RecentSearches(recents,onPick={ r ->
+                        embedded && animatedSection in setOf("Ajustes", "Cuenta", "Importar") -> PreferencesContent(animatedSection)
+                        showRecents -> Box(Modifier.fillMaxSize().onFocusChanged {
+                            recentRowsHaveFocus = it.hasFocus
+                            if (embedded) onEmbeddedRecentsFocus(it.hasFocus || pressingRecents)
+                        }.focusGroup().onPointerEvent(PointerEventType.Press,pass=androidx.compose.ui.input.pointer.PointerEventPass.Initial) {
+                            pressingRecents=true
+                            if (embedded) onEmbeddedRecentsFocus(true)
+                        }.onPointerEvent(PointerEventType.Release,pass=androidx.compose.ui.input.pointer.PointerEventPass.Final) {
+                            scope.launch {
+                                kotlinx.coroutines.delay(80)
+                                pressingRecents=false
+                                if (embedded) onEmbeddedRecentsFocus(recentRowsHaveFocus)
+                                else if(!searchHasFocus)recentsOpen=false
+                            }
+                        }) { RecentSearches(recents,onPick={ r ->
                             scope.launch { memory.remember(r) }
                             val item=r.item()
                             recentsOpen=false
+                            if(embedded)onEmbeddedRecentsDismiss()
                             if(item==null) menu.onQuery(r.title) else { focusManager.clearFocus();openItem(item) }
                         },onForget={ r -> scope.launch { memory.forget(r) } }) }
                         state.query.isNotBlank() -> SearchSpace(state,lists,np.id,player,menu,prefs,palette,onSave,onOpen=::openItem,onLocal={local=it;menu.onQuery("")},onArtist=::openArtist,onRemember=::rememberSearch)
-                        djOpen -> DjSpace(player,palette,onBack={djOpen=false},onFail={ m -> scope.launch{snackbar.showSnackbar(m)} })
-                        recapOpen && recap!=null -> {
+                        screen.dj -> DjSpace(player,palette,onBack={djOpen=false},onFail={ m -> scope.launch{snackbar.showSnackbar(m)} },embedded=embedded)
+                        screen.recap && recap!=null -> {
                             val art=remember(lists,liked,history) { (history+liked.songs+lists.flatMap{it.songs}).filter{it.artwork!=null}.associate{it.id to it.artwork} }
                             RecapSpace(recap!!,palette,{ art[it] },onPlay={ s -> player.play(Heard(s.id,s.title,s.artist,art[s.id],s.artistId).toSong()) },onArtist={id,name->recapOpen=false;openArtist(id,name)},onBack={recapOpen=false})
                         }
-                        smartOpen!=null -> SmartSpace(smartOpen!!,np.id,player,prefs,palette,onSave,::openArtist,onBack={smartOpen=null})
+                        screen.smart!=null -> SmartSpace(screen.smart,np.id,player,prefs,palette,onSave,::openArtist,onBack={smartOpen=null})
                         selected!=null -> LocalPlaylistView(selected,np.id,player,prefs,downloads,palette,onSave,
-                            onBack={local=null},onFind={home("Tu música");searchFocus.requestFocus()},
+                            onBack={local=null},onFind={home("Tu música");if(embedded)onEmbeddedSearch() else searchFocus.requestFocus()},
                             onArtist={id,name->home("Tu música");menu.openArtist(id,name)},
-                            actions=if(selected.id==LIKED_ID) listOf(ContextMenuItem(if(selected.id in wanted) "Quitar la descarga" else "Descargar") {scope.launch { prefs.setDownloadList(selected.id,selected.id !in wanted) }}) else listMenu(selected))
+                            actions=if(selected.id==LIKED_ID) listOf(ContextMenuItem(if(selected.id in wanted) "Quitar la descarga" else "Descargar") {scope.launch { prefs.setDownloadList(selected.id,selected.id !in wanted) }}) else listMenu(selected),
+                            coverGlow=embedded)
                         page!=null && page.item is ArtistItem -> ArtistSpace(page,np.id,player,prefs,palette,onSave,onBack={menu.closeDetail()},onOpen=::openItem,onArtist={id,name->menu.openArtist(id,name)})
                         page!=null && (page.item is AlbumItem || page.item is PlaylistItem) -> AlbumSpace(page,np.id,player,prefs,palette,onSave,onBack={menu.closeDetail()},onArtist={id,name->menu.openArtist(id,name)})
                         page!=null -> {
@@ -334,16 +494,20 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                     Button(enabled=remoteSongs.isNotEmpty(),onClick={player.playAll(remoteSongs,0,page.item)}){Text("Reproducir")}
                                 }
                                 if(remoteSongs.isNotEmpty())SongList(remoteSongs.map{it.toHeard()},np.id,{i->player.playAll(remoteSongs,i,page.item)},onSave,player,prefs,onArtist=::openArtist)
-                                else LazyColumn {page.shelves.forEach{shelf->item{Text(shelf.title,style=OtoType.section)};items(shelf.items){item->LibraryLine(item.title,"",item.thumbnail,{openItem(item)})}}}
+                                else LazyColumn(contentPadding=PaddingValues(bottom=LocalFloatingDockInset.current)) {page.shelves.forEach{shelf->item{Text(shelf.title,style=OtoType.section)};items(shelf.items){item->LibraryLine(item.title,"",item.thumbnail,{openItem(item)})}}}
                             }}
                         }
-                        animatedSection=="Ajustes" -> SettingsSpace(prefs,player,palette,session,importState,artworkBackground,onArtworkBackground,backdropOpacity,onBackdropOpacity,shortcut,shortcutIssue,onShortcut,onAccount={home("Cuenta")},onImport={home("Importar")},onDevices=onDevices)
-                        animatedSection=="Cuenta" -> SettingsAndAccountPane(prefs,importer,account,cloud,login,session,cloudState,importState,quality,dataSaver,shuffle,loop,player::setShuffle,player::setLoop,palette,{home("Importar")}, accountOnly = true, onAccountFromMobile = onAccountFromMobile)
-                        animatedSection=="Importar" -> ImportPane(importer,prefs,palette,{home("Ajustes")},{home("Tu música")})
+                        animatedSection in setOf("Ajustes", "Cuenta", "Importar") -> PreferencesContent(animatedSection)
                         animatedSection=="Descargas" -> DownloadsSpace(player,prefs,downloads,palette,np.id,onOpen={local=it},onSave=onSave,workScope=scope,onArtist=::openArtist)
                         animatedSection=="Recientes" -> SongList(history,np.id,{i->player.play(history[i].toSong())},onSave,player,prefs,onArtist=::openArtist)
-                        animatedSection=="Explorar" -> LazyColumn(verticalArrangement=Arrangement.spacedBy(24.dp)) {
-                            item {Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){state.chips.forEach{chip->FilterChip(selected=state.chip==chip.title,onClick={menu.onChip(chip.title)},label={Text(chip.title)})}}}
+                        animatedSection=="Explorar" && embedded -> CaelestiaHome(state.shelves, lists, liked, history,
+                            state.chips.map { it.title }, state.chip, menu::onChip, state.homeError, menu::loadHome,
+                            onLocal = { local = it }, onOpen = ::openItem, hasPersonal = recap?.empty == false || smart.isNotEmpty(), personal = {
+                                recap?.takeIf { !it.empty }?.let { r -> RecapCard(r,palette) { recapOpen=true } }
+                                if(smart.isNotEmpty()) SmartRow(smart,palette) { smartOpen=it }
+                            })
+                        animatedSection=="Explorar" -> LazyColumn(contentPadding=PaddingValues(bottom=LocalFloatingDockInset.current),verticalArrangement=Arrangement.spacedBy(24.dp)) {
+                            item {Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){state.chips.forEach{chip->FilterChip(selected=state.chip==chip.title,onClick={menu.onChip(chip.title)},label={Text(chip.title)},shape=CircleShape,border=if(embedded)null else FilterChipDefaults.filterChipBorder(enabled=true,selected=state.chip==chip.title),colors=FilterChipDefaults.filterChipColors(containerColor=if(embedded)Color.White.copy(.08f) else Color.Transparent))}}}
                             recap?.takeIf { !it.empty && state.chip==null }?.let { r -> item(key="recap") { RecapCard(r,palette) { recapOpen=true } } }
                             if(smart.isNotEmpty() && state.chip==null) item(key="smart") { SmartRow(smart,palette) { smartOpen=it } }
                             if(state.homeError!=null)item{TextButton(onClick=menu::loadHome){Text("Volver a cargar Explorar")}}
@@ -353,7 +517,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         else -> {
                             // Mismo orden que el móvil: el de tus listas (compartido) y los sitios del DJ y Me gusta.
                             val shelf=remember(lists,folders){shelfOf(lists,folders)}
-                            val inFolder=folder
+                            val inFolder=screen.folder
                             val folderLists=if(inFolder!=null) lists.filter{it.folder==inFolder} else emptyList()
                             val (pinnedShelf,rest)=shelf.partition{it.key in pinned}
                             val top=pinnedShelf.toMutableList().apply {
@@ -397,7 +561,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                         onPlay={player.playDj(DjMode.Normal) {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ")}}}
                                     ) {djOpen=true}
                                     e.special!=null -> PlaylistContextMenu(listOf(ContextMenuItem(if(LIKED_ID in wanted) "Quitar la descarga" else "Descargar") {scope.launch { prefs.setDownloadList(LIKED_ID,LIKED_ID !in wanted) }})) {
-                                        PlaylistCard("Me gusta","${liked.songs.size} canciones",null,modifier,special="liked",accent=palette.primary,lifted=dragging,onPlay=if(liked.songs.isNotEmpty()){{player.playLocal(liked,null,true)}}else null) {local=LIKED_ID}
+                                        PlaylistCard("Me gusta",songCount(liked.songs.size),null,modifier,special="liked",accent=palette.primary,lifted=dragging,onPlay=if(liked.songs.isNotEmpty()){{player.playLocal(liked,null,true)}}else null) {local=LIKED_ID}
                                     }
                                     e.folder!=null -> PlaylistContextMenu(folderMenu(e.folder)) {
                                         PlaylistCard(e.folder,folderCount(e.lists.size),null,modifier,special="folder",accent=palette.primary,lifted=dragging,folderLists=e.lists,
@@ -408,7 +572,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                     } }
                                 }
                             }
-                            LazyVerticalGrid(columns=GridCells.FixedSize(featuredWidth),state=grid,verticalArrangement=Arrangement.spacedBy(18.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(bottom=28.dp)) {
+                            LazyVerticalGrid(columns=GridCells.FixedSize(featuredWidth),state=grid,verticalArrangement=Arrangement.spacedBy(18.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(bottom=28.dp+LocalFloatingDockInset.current)) {
                                 if(inFolder==null) item(key="featured",span={GridItemSpan(maxLineSpan)}) {
                                     Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
                                         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
@@ -448,7 +612,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                     }
                                 }
                                 if(inFolder!=null && folderLists.isEmpty())item(span={GridItemSpan(maxLineSpan)}){EmptyLibrary("Esta carpeta está vacía. Añade listas con «Añadir o quitar listas».")}
-                                if(folder==null && history.isNotEmpty()) {
+                                if(inFolder==null && history.isNotEmpty()) {
                                     item(key="recent-title",span={GridItemSpan(maxLineSpan)}) {Text("Oído hace poco",style=OtoType.section)}
                                     items(history.distinctBy{it.id}.take(8),key={"recent:${it.id}"},span={GridItemSpan(maxLineSpan)}) {h->val actions=songActions(h,null);PlaylistContextMenu(actions){LibraryLine(h.title,h.artist,h.artwork,{player.play(h.toSong())}){if(h.id==np.id)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=Color.White.copy(alpha=.7f));SongMenuButton(h.title,actions)}}}
                                 }
@@ -456,12 +620,16 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         }
                     }
                     }
+                    if (embedded) {
+                        libraryScrollState.SaveableStateProvider(screen.key, sectionBody)
+                    } else CascadeScope(listOf(animatedSection,showRecents,state.query.isNotBlank(),screen.smart,screen.recap,screen.dj,selected?.id,page?.item,screen.folder), sectionBody)
                     }
+                }
                 }
                 }
             }
         }
-        OtoSnackbarHost(snackbar,Modifier.align(Alignment.BottomCenter).padding(24.dp))
+        OtoSnackbarHost(snackbar,Modifier.align(Alignment.BottomCenter).padding(start=24.dp,end=24.dp,bottom=24.dp+LocalFloatingDockInset.current))
     }
     editor?.let {edit ->
         var text by remember(edit){mutableStateOf(edit.value)}
@@ -642,7 +810,7 @@ private fun LibraryNavigation(name:String,icon:androidx.compose.ui.graphics.vect
     }) { content() } }
 }
 
-@Composable internal fun LibraryArt(url:String?,modifier:Modifier=Modifier,rounded:Boolean=true) {
+@Composable internal fun LibraryArt(url:String?,modifier:Modifier=Modifier,rounded:Boolean=true,alignment:Alignment=Alignment.Center) {
     var pixels by remember { mutableIntStateOf(0) }
     val previous=remember(url) { object { var value:ImageBitmap?=null } }
     Box(modifier.onSizeChanged { if(it.width>0 && it.height>0)pixels=artworkSize(maxOf(it.width,it.height)) }.then(if(rounded) Modifier.clip(RoundedCornerShape(12.dp)) else Modifier).background(Color.White.copy(alpha=.045f)),contentAlignment=Alignment.Center) {
@@ -663,7 +831,8 @@ private fun LibraryNavigation(name:String,icon:androidx.compose.ui.graphics.vect
                 val scale=maxOf(size.width/image.width,size.height/image.height)
                 val width=(size.width/scale).roundToInt().coerceIn(1,image.width)
                 val height=(size.height/scale).roundToInt().coerceIn(1,image.height)
-                drawImage(image,srcOffset=IntOffset((image.width-width)/2,(image.height-height)/2),srcSize=IntSize(width,height),
+                val sourceOffset=alignment.align(IntSize(width,height),IntSize(image.width,image.height),androidx.compose.ui.unit.LayoutDirection.Ltr)
+                drawImage(image,srcOffset=sourceOffset,srcSize=IntSize(width,height),
                     dstSize=IntSize(size.width.roundToInt(),size.height.roundToInt()),filterQuality=FilterQuality.Low)
             }
         }
@@ -677,7 +846,7 @@ private fun LibraryNavigation(name:String,icon:androidx.compose.ui.graphics.vect
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val grow by animateFloatAsState(if(hovered)1f else 0f,Motion.hover(),label="cardHover")
-    Column(modifier.cascadeIn().hoverable(interaction).clickable(interactionSource=interaction,indication=null,onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+    Column(modifier.cascadeIn().hoverable(interaction).pointerHoverIcon(PointerIcon.Hand).clickable(interactionSource=interaction,indication=null,onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
         val cardShape=RoundedCornerShape(12.dp)
         LibraryArt(url,Modifier.fillMaxWidth().aspectRatio(1f).graphicsLayer {
             val s=.97f+.03f*grow;scaleX=s;scaleY=s
@@ -697,7 +866,7 @@ internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $
     val grow by animateFloatAsState(if(hovered)1f else 0f,Motion.hover(),label="playlistHover")
     val playVisibility by animateFloatAsState(if(hovered && onPlay!=null)1f else 0f,Motion.hover(),label="playlistPlay")
     val elevation by animateFloatAsState(if(lifted)1f else 0f,tween(140),label="dragLift")
-    Column(modifier.cascadeIn().graphicsLayer { alpha=1f-.08f*elevation }.hoverable(interaction).clickable(interactionSource=interaction,indication=null,enabled=!lifted,onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+    Column(modifier.cascadeIn().graphicsLayer { alpha=1f-.08f*elevation }.hoverable(interaction).pointerHoverIcon(PointerIcon.Hand).clickable(interactionSource=interaction,indication=null,enabled=!lifted,onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f),contentAlignment=Alignment.Center) {
             // Se eleva con sombra y un pequeño rebote; solo capa gráfica, sin volver a medir la cuadrícula.
             val cardShape=RoundedCornerShape(12.dp)
@@ -724,7 +893,7 @@ internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $
                     else -> if(playlist != null) PlaylistMosaic(playlist,accent,Modifier.fillMaxSize()) else LibraryArt(url,Modifier.fillMaxSize())
                 }
             }
-            if(onPlay!=null) Box(Modifier.align(Alignment.BottomEnd).padding(10.dp).graphicsLayer { alpha=playVisibility;scaleX=.8f+.2f*playVisibility;scaleY=.8f+.2f*playVisibility }.size(38.dp).background(Color.White.copy(alpha=.94f),CircleShape).clickable(interactionSource=remember { MutableInteractionSource() },indication=null,enabled=hovered,onClick=onPlay),contentAlignment=Alignment.Center) {Canvas(Modifier.size(18.dp).semantics { contentDescription="Reproducir $title" }) {
+            if(onPlay!=null) Box(Modifier.align(Alignment.BottomEnd).padding(10.dp).graphicsLayer { alpha=playVisibility;scaleX=.8f+.2f*playVisibility;scaleY=.8f+.2f*playVisibility }.size(38.dp).background(Color.White.copy(alpha=.94f),CircleShape).pointerHoverIcon(PointerIcon.Hand).clickable(interactionSource=remember { MutableInteractionSource() },indication=null,enabled=hovered,onClick=onPlay),contentAlignment=Alignment.Center) {Canvas(Modifier.size(18.dp).semantics { contentDescription="Reproducir $title" }) {
                 val path=Path().apply { moveTo(size.width*.32f,size.height*.16f);lineTo(size.width*.82f,size.height*.5f);lineTo(size.width*.32f,size.height*.84f);close() }
                 drawPath(path,Color(0xFF171A18),style=Stroke(1.8.dp.toPx(),cap=StrokeCap.Round,join=StrokeJoin.Round))
             }}
@@ -736,9 +905,14 @@ internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable internal fun PlaylistContextMenu(items:List<ContextMenuItem>,content:@Composable ()->Unit) {
     var open by remember { mutableStateOf(false) }
-    Box(Modifier.onPointerEvent(PointerEventType.Press) { if(it.buttons.isSecondaryPressed) { open=true;it.changes.forEach { change->change.consume() } } }) {
+    var at by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+    var height by remember { mutableIntStateOf(0) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    Box(Modifier.onSizeChanged { height = it.height }.onPointerEvent(PointerEventType.Press) { if(it.buttons.isSecondaryPressed) { at = it.changes.first().position; open=true;it.changes.forEach { change->change.consume() } } }) {
         content()
-        LibraryDropdownMenu(expanded=open,onDismissRequest={open=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(220.dp)) {
+        // El menú sale donde se hizo clic derecho (el desplazamiento se cuenta desde la esquina inferior izquierda de la fila).
+        LibraryDropdownMenu(expanded=open,onDismissRequest={open=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(220.dp),
+            offset=with(density){ DpOffset(at.x.toDp(), (at.y - height).toDp()) }) {
             items.forEach { item -> DropdownMenuItem(text={Text(item.label,style=OtoType.rowSub,color=if(item.label.startsWith("Eliminar")) Danger else Color.White.copy(alpha=.85f))},onClick={open=false;item.onClick()}) }
         }
     }
@@ -747,14 +921,14 @@ internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val glow by animateFloatAsState(if(hovered).055f else 0f,tween(160),label="songHover")
-    Row(Modifier.fillMaxWidth().cascadeIn().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha=glow)).hoverable(interaction).clickable(interactionSource=interaction,indication=null,onClick=click).padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
+    Row(Modifier.fillMaxWidth().cascadeIn().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha=glow)).hoverable(interaction).pointerHoverIcon(PointerIcon.Hand).clickable(interactionSource=interaction,indication=null,onClick=click).padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
         LibraryArt(url,Modifier.size(44.dp));Column(Modifier.weight(1f)){Text(title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(sub,style=OtoType.rowSub,maxLines=1,color=Color.White.copy(alpha=.4f))};trailing()
     }
 }
 @Composable private fun EmptyLibrary(text:String){Text(text,Modifier.padding(vertical=24.dp),style=OtoType.body,color=Color.White.copy(alpha=.4f))}
 @Composable private fun SongList(songs:List<Heard>,current:String?,play:(Int)->Unit,save:(Heard)->Unit,player:DesktopPlayerConnection,prefs:Prefs,listId:String?=null,onArtist:((String,String)->Unit)?=null) {
     val songActions=rememberSongActions(player,prefs,save,onArtist)
-    LazyColumn(verticalArrangement=Arrangement.spacedBy(2.dp)) {
+    LazyColumn(contentPadding=PaddingValues(bottom=LocalFloatingDockInset.current),verticalArrangement=Arrangement.spacedBy(2.dp)) {
         itemsIndexed(songs,key={i,h->"${h.id}:$i"}){i,h ->
             val actions=songActions(h,listId)
             PlaylistContextMenu(actions) { LibraryLine(h.title,h.artist,h.artwork,{play(i)}) {if(h.id==current)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=Color.White.copy(alpha=.7f));SongMenuButton(h.title,actions)} }
@@ -806,5 +980,84 @@ internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $
         Box(Modifier.size(22.dp).clip(CircleShape).background(if(saved) palette.primary else Color.Transparent).border(1.5.dp,if(saved) palette.primary else Color.White.copy(alpha=.38f),CircleShape).semantics { contentDescription=if(saved) "Guardado" else "No guardado" },contentAlignment=Alignment.Center) {
             if(saved) Icon(MobileIcons.check,null,Modifier.size(15.dp),tint=Color(0xFF101010))
         }
+    }
+}
+
+
+private data class HomeShortcut(val key: String, val title: String, val artwork: String?, val action: () -> Unit)
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CaelestiaHome(shelves: List<Shelf>?, lists: List<LocalPlaylist>, liked: LocalPlaylist, history: List<Heard>,
+    moods: List<String>, mood: String?, onMood: (String) -> Unit, error: String?, onRetry: () -> Unit,
+    onLocal: (String) -> Unit, onOpen: (YTItem) -> Unit, hasPersonal: Boolean, personal: @Composable () -> Unit) {
+    var filter by remember { mutableIntStateOf(0) }
+    var moodMenu by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val visibleShelves = shelves.orEmpty().mapNotNull { shelf ->
+        val items = shelf.items.filter { when(filter) { 1 -> it is SongItem || it is AlbumItem; 2 -> it is PlaylistItem; else -> true } }
+        if(items.isEmpty()) null else shelf.copy(items = items)
+    }
+    val shortcuts = buildList {
+        if(filter != 1) {
+            add(HomeShortcut("local:${liked.id}", liked.name, liked.songs.firstOrNull()?.artwork) { onLocal(liked.id) })
+            lists.take(8).forEach { list -> add(HomeShortcut("local:${list.id}", list.name, list.songs.firstOrNull()?.artwork) { onLocal(list.id) }) }
+        }
+        if(filter != 2) history.take(8).forEach { song -> add(HomeShortcut("remote:${song.id}", song.title, song.artwork) { onOpen(song.toSong()) }) }
+        visibleShelves.flatMap { it.items }.take(12).forEach { item -> add(HomeShortcut("remote:${item.id}", item.title, item.thumbnail) { onOpen(item) }) }
+    }.distinctBy { it.key }.take(8)
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = LocalFloatingDockInset.current), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item(key = "filters") {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("Todo", "Música", "Listas").forEachIndexed { index, label ->
+                    FilterChip(selected = filter == index, onClick = { filter = index }, label = { Text(label) }, shape = CircleShape, border = null,
+                        colors = FilterChipDefaults.filterChipColors(containerColor = Color.White.copy(.08f), selectedContainerColor = Color.White, selectedLabelColor = Color(0xFF121212)))
+                }
+                Spacer(Modifier.weight(1f))
+                if(moods.isNotEmpty()) Box {
+                    FilterChip(selected = mood != null, onClick = { moodMenu = true }, label = { Text(mood ?: "Ánimo", style = OtoType.rowSub, maxLines = 1) }, trailingIcon = { Icon(androidx.compose.material.icons.Icons.Rounded.ArrowDropDown, null, Modifier.size(18.dp)) }, shape = CircleShape, border = null, colors = FilterChipDefaults.filterChipColors(containerColor = Color.White.copy(.08f)))
+                    LibraryDropdownMenu(moodMenu, { moodMenu = false }) {
+                        moods.forEach { label -> DropdownMenuItem(text = { Text(label) }, onClick = { moodMenu = false; onMood(label) }) }
+                    }
+                }
+            }
+        }
+        if(shortcuts.isNotEmpty()) item(key = "shortcuts") {
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val columns = if(maxWidth >= 560.dp) 4 else 2
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    shortcuts.chunked(columns).forEach { row ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            row.forEach { item ->
+                                Row(Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(8.dp)).background(Color.White.copy(.08f)).clickable(onClick = item.action), verticalAlignment = Alignment.CenterVertically) {
+                                    LibraryArt(item.artwork, Modifier.size(48.dp), rounded = false)
+                                    Text(item.title, Modifier.weight(1f).padding(horizontal = 8.dp), style = OtoType.rowTitle.copy(fontSize = 12.sp, lineHeight = 16.sp), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                            repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+                        }
+                    }
+                }
+            }
+        }
+        if(filter == 0 && mood == null && hasPersonal) item(key = "personal") { Column(verticalArrangement = Arrangement.spacedBy(16.dp)) { personal() } }
+        if(error != null) item { TextButton(onClick = onRetry) { Text("Volver a cargar") } }
+        if(shelves == null) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        visibleShelves.forEachIndexed { index, shelf -> item(key = "shelf:$index:${shelf.title}") {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                val key = "$index:${shelf.title}"
+                val all = key in expanded
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(shelf.title, Modifier.weight(1f), style = OtoType.section, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    TextButton(onClick = { expanded = if(all) expanded - key else expanded + key }) { Text(if(all) "Mostrar menos" else "Mostrar todos", style = OtoType.rowSub, color = Color.White.copy(.65f)) }
+                }
+                if(all) FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    shelf.items.forEach { item -> LibraryCard(item.title, if(item is SongItem)item.artists.joinToString { it.name } else "", item.thumbnail, Modifier.width(144.dp)) { onOpen(item) } }
+                } else Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    shelf.items.take(8).forEach { item -> LibraryCard(item.title, if(item is SongItem)item.artists.joinToString { it.name } else "", item.thumbnail, Modifier.width(144.dp)) { onOpen(item) } }
+                }
+            }
+        } }
+        if(shelves != null && visibleShelves.isEmpty()) item { Text("No hay recomendaciones de este tipo por ahora", style = OtoType.rowSub, color = Color.White.copy(.5f)) }
     }
 }

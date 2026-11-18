@@ -1,5 +1,6 @@
 package io.github.iaguito22.oto.desktop.playback
 
+import io.github.iaguito22.oto.dj.SongSection
 import io.github.iaguito22.oto.dj.AdhdPlanner
 import io.github.iaguito22.oto.dj.AdhdSegment
 import io.github.iaguito22.oto.dj.DjTransitionPlan
@@ -204,5 +205,77 @@ class DesktopDjPlaybackTest {
             plan = echoPlan,
         )
         assertEquals(TransitionAction.StartCrossfade(2_800L, echoPlan), adhdEcho)
+    }
+
+    @Test
+    fun rapidSegmentTimerCannotOverrideALaterSafePlanButANoMixPlanStillLeavesAtTheSegment() {
+        fun evaluate(plan: DjTransitionPlan) = DesktopTransitionPlanner.evaluate(
+            positionMs = 106_000L, durationMs = 210_000L, playing = true, buffering = false,
+            configuredFadeSeconds = 6, ramSaver = false, crossfadeSupported = true,
+            nextReady = true, adhdSegment = sampleSegment, plan = plan,
+        )
+        val delayed = DjTransitionPlan(style = DjTransitionStyle.SmoothEqualPower,
+            fadeDurationMs = 6_000L, outgoingFadeStartMs = 125_000L, incomingStartMs = 0L)
+        assertEquals(TransitionAction.None, evaluate(delayed))
+        // Sin mezcla, el trozo sale por su salida corta (antes sonaba hasta el final de la canción).
+        assertEquals(TransitionAction.FinishTrackNow, evaluate(delayed.copy(fadeDurationMs = 0L)))
+        assertEquals(null, DesktopTransitionPlanner.mixWindow(210_000L, 6, false, true,
+            sampleSegment, delayed.copy(fadeDurationMs = 0L)))
+    }
+
+    @Test
+    fun aNoMixPlanStillWaitsForTheChorusToEndBeforeTheShortExit() {
+        val noMix = DjTransitionPlan(style = DjTransitionStyle.SmoothEqualPower,
+            fadeDurationMs = 0L, outgoingFadeStartMs = 210_000L, incomingStartMs = 0L)
+        val chorus = listOf(SongSection(90_000L, 130_000L, 1.0))
+        fun at(position: Long) = DesktopTransitionPlanner.evaluate(
+            positionMs = position, durationMs = 210_000L, playing = true, buffering = false,
+            configuredFadeSeconds = 6, ramSaver = false, crossfadeSupported = true,
+            nextReady = true, adhdSegment = sampleSegment, plan = noMix, outgoingSections = chorus,
+        )
+        assertEquals(TransitionAction.None, at(106_000L))
+        assertEquals(TransitionAction.None, at(130_200L))
+        assertEquals(TransitionAction.FinishTrackNow, at(130_600L))
+    }
+
+    @Test
+    fun rapidFallbackWithNoDeckOrRamSaverWaitsForLateLyrics() {
+        val chorus = listOf(SongSection(90_000L, 130_000L, 1.0))
+        for (ramSaver in listOf(false, true)) {
+            fun at(position: Long) = DesktopTransitionPlanner.evaluate(
+                positionMs = position, durationMs = 210_000L, playing = true, buffering = false,
+                configuredFadeSeconds = 6, ramSaver = ramSaver, crossfadeSupported = true,
+                nextReady = false, adhdSegment = sampleSegment, outgoingSections = chorus,
+            )
+            assertEquals(TransitionAction.None, at(106_000L))
+            assertEquals(TransitionAction.None, at(130_200L))
+            assertEquals(TransitionAction.FinishTrackNow, at(130_600L))
+        }
+    }
+
+    @Test
+    fun seekingPastTheSegmentEndIntoANewChorusDoesNotTriggerAForcedExit() {
+        val oldSegment = sampleSegment.copy(endMs = 90_000L, fadeOutStartMs = 84_000L)
+        val chorus = listOf(SongSection(100_000L, 130_000L, 1.0))
+        fun at(position: Long) = DesktopTransitionPlanner.evaluate(
+            positionMs = position, durationMs = 210_000L, playing = true, buffering = false,
+            configuredFadeSeconds = 6, ramSaver = true, crossfadeSupported = true,
+            nextReady = false, adhdSegment = oldSegment, outgoingSections = chorus,
+        )
+        assertEquals(TransitionAction.None, at(110_000L))
+        assertEquals(TransitionAction.None, at(99_900L))
+        assertEquals(TransitionAction.FinishTrackNow, at(130_600L))
+    }
+
+    @Test
+    fun preparedPlanIsNotRepeatedlyStartedWhenSeekingIntoAChorus() {
+        val plan = DjTransitionPlan(style = DjTransitionStyle.SmoothEqualPower,
+            fadeDurationMs = 6_000L, outgoingFadeStartMs = 90_000L, incomingStartMs = 0L)
+        assertEquals(TransitionAction.None, DesktopTransitionPlanner.evaluate(
+            positionMs = 110_000L, durationMs = 210_000L, playing = true, buffering = false,
+            configuredFadeSeconds = 6, ramSaver = false, crossfadeSupported = true,
+            nextReady = true, adhdSegment = sampleSegment, plan = plan,
+            outgoingSections = listOf(SongSection(100_000L, 130_000L, 1.0)),
+        ))
     }
 }

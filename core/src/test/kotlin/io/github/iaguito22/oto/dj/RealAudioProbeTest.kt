@@ -69,6 +69,11 @@ class RealAudioProbeTest {
             // Lo mismo con solo el primer minuto (lo que había antes de bajarla entera).
             AudioAnalyzer.PROBE = null
             val head = AudioAnalyzer.analyzePcm16Bytes(f.nameWithoutExtension, bytes.copyOf(minOf(bytes.size, 22_050 * 2 * 60)), 22_050, 1)
+            // Bombo en el pulso por compás (lo que pide el cuadre de beats): mediana y % de compases que llegan al mínimo.
+            val kb = m.bars.map { it.kickOnBeat }.filter { it >= 0.0 }.sorted()
+            val kbMedian = if (kb.isEmpty()) -1.0 else kb[kb.size / 2]
+            val kbOk = if (kb.isEmpty()) 0.0 else kb.count { it >= DjTempoMatch.MIN_KICK_ON_BEAT } * 100.0 / kb.size
+            report.append("%-12s bombo %.2f (%3.0f %% compases ≥ %.2f)\n".format(f.nameWithoutExtension, kbMedian, kbOk, DjTempoMatch.MIN_KICK_ON_BEAT))
             report.append(
                 "%-12s %5.0f s  BPM %-7s fiab %.2f  rejilla %3d  intro %5d  drop %6d  outro %6d  (%d ms) | 60 s: %-7s %.2f |%s\n".format(
                     f.nameWithoutExtension, m.durationMs / 1000.0, m.bpm?.let { "%.2f".format(it) } ?: "?",

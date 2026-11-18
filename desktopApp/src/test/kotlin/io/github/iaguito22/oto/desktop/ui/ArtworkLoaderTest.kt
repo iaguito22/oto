@@ -1,14 +1,47 @@
 package io.github.iaguito22.oto.desktop.ui
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.*
 import org.junit.Assert.*
 import org.junit.Test
+import org.jetbrains.skia.Image
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
+import javax.imageio.ImageIO
 
 class ArtworkLoaderTest {
+    @Test fun monochromeCoverUsesWhiteEvenWithSmallColoredDetails() {
+        for (redColumns in listOf(0, 3)) {
+            val palette = coverPalette(redColumns)
+            assertEquals(Color.White, palette.primary)
+            assertEquals(Color.White, palette.secondary)
+            assertEquals(Color.White, palette.tertiary)
+        }
+    }
+
+    @Test fun coverWithSubstantialColorKeepsItsHue() {
+        val accent = coverPalette(redColumns = 40).primary
+        assertTrue(accent.red > accent.green + 0.25f)
+        assertEquals(accent.green, accent.blue, 0.001f)
+    }
+
+    private fun coverPalette(redColumns: Int): ArtworkPalette {
+        val image = BufferedImage(100, 100, BufferedImage.TYPE_INT_RGB)
+        for (y in 0 until image.height) {
+            for (x in 0 until image.width) {
+                val gray = y * 255 / (image.height - 1)
+                image.setRGB(x, y, if (x < redColumns) 0xD12C2C else gray * 0x010101)
+            }
+        }
+        val png = ByteArrayOutputStream().also { ImageIO.write(image, "png", it) }.toByteArray()
+        return Image.makeFromEncoded(png).use { ArtworkLoader.extractPalette(it.toComposeImageBitmap()) }
+    }
+
     @Test fun concurrentViewsShareOneDownloadAndFailedLoadsCanRetry():Unit=runBlocking {
         val requests=AtomicInteger()
         val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),0)

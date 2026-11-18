@@ -8,22 +8,31 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.PlayArrow
 import com.metrolist.innertube.models.SongItem
 import io.github.iaguito22.oto.*
 import io.github.iaguito22.oto.desktop.playback.*
 import io.github.iaguito22.oto.importer.songKey
 import io.github.iaguito22.oto.playback.Radio
 import kotlinx.coroutines.*
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
 import kotlin.random.Random
 
 @Composable
-internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:DesktopPlayerConnection,prefs:Prefs,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onBack:()->Unit,onFind:()->Unit,onArtist:(String,String)->Unit,actions:List<ContextMenuItem>) {
+internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:DesktopPlayerConnection,prefs:Prefs,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onBack:()->Unit,onFind:()->Unit,onArtist:(String,String)->Unit,actions:List<ContextMenuItem>,coverGlow:Boolean=false) {
+    // Igual que en el modo de ventanas en las dos interfaces (lo prefiere Iago); el hueco del dock sigue en contentPadding.
+    val immersive = false
+    val scroll = rememberLazyListState()
     val scope=rememberCoroutineScope()
     val flipped by prefs.sortFlipped.collectAsState(initial=emptySet())
     val wanted by prefs.downloadLists.collectAsState(initial=emptySet())
@@ -38,10 +47,30 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
     val got=list.songs.count { entries[it.id]?.state==DesktopDownloads.State.Done }
     fun play(index:Int?) {player.playLocal(shown,index,newest)}
     val songActions=rememberSongActions(player,prefs,onSave,onArtist)
-    LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=28.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val compactHeader = immersive && maxWidth < 560.dp
+    val wideHeader = immersive && maxWidth >= 600.dp
+    val transport: @Composable () -> Unit = {
+            Row(Modifier.fillMaxWidth().padding(vertical=4.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                FilledIconButton(onClick={play(null)},modifier=Modifier.size(if(compactHeader)40.dp else 48.dp),colors=IconButtonDefaults.filledIconButtonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))) { Icon(Icons.Rounded.PlayArrow,"Reproducir lista",Modifier.size(28.dp)) }
+                HoverAction(MobileIcons.shuffle,if(shuffle) "Desactivar aleatorio" else "Activar aleatorio",onClick={player.setShuffle(!shuffle,list.id)},tint=if(shuffle)palette.primary else Color.White.copy(.6f))
+                Spacer(Modifier.weight(1f))
+                if(list.songs.size>1) TextButton(onClick={scope.launch { prefs.flipSort(list.id) }},contentPadding=PaddingValues(horizontal=6.dp)) {
+                    Text(if(newest)"Recientes" else "Tu orden",style=OtoType.rowSub,color=Color.White.copy(.65f))
+                    Icon(MobileIcons.swapVert,null,Modifier.padding(start=6.dp).size(16.dp))
+                }
+                Box {
+                    HoverAction(MobileIcons.moreHoriz,"Opciones de la lista",onClick={menuOpen=true})
+                    LibraryDropdownMenu(menuOpen,{menuOpen=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(230.dp)) {
+                        actions.forEach { action -> DropdownMenuItem(text={Text(action.label,style=OtoType.rowSub,color=if(action.label.startsWith("Eliminar"))Danger else Color.White)},onClick={menuOpen=false;action.onClick()}) }
+                    }
+                }
+            }
+    }
+    LazyColumn(Modifier.fillMaxSize(),state=scroll,contentPadding=PaddingValues(bottom=28.dp+LocalFloatingDockInset.current),verticalArrangement=Arrangement.spacedBy(4.dp)) {
         item(key="header") {
-            Column(Modifier.fillMaxWidth().padding(bottom=24.dp)) {
-                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+            Column(Modifier.fillMaxWidth().padding(bottom=if(immersive)8.dp else 24.dp)) {
+                if(!immersive || list.songs.isEmpty()) Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                     HoverAction(MobileIcons.arrowBack,"Volver",onClick=onBack)
                     Spacer(Modifier.weight(1f))
                     Box {
@@ -51,12 +80,14 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
                         }
                     }
                 }
-                Row(Modifier.fillMaxWidth().padding(top=12.dp,start=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(24.dp)) {
-                    PlaylistMosaic(list,palette.primary,Modifier.size(140.dp))
+                Row(Modifier.fillMaxWidth().padding(top=if(immersive)4.dp else 12.dp,start=if(coverGlow)16.dp else if(immersive)0.dp else 8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(24.dp)) {
+                    val glow = if (coverGlow) Modifier.playlistCoverGlow(palette.primary) else Modifier
+                    PlaylistMosaic(list,palette.primary,Modifier.size(if(compactHeader)80.dp else 140.dp).then(glow))
                     Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                        Text(list.name,style=OtoType.display,maxLines=3,overflow=TextOverflow.Ellipsis)
-                        Text("${list.songs.size} canciones" + if(downloaded) { if(got==list.songs.size) " · descargada" else " · descargando ($got de ${list.songs.size})" } else "",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
-                        if(list.songs.isNotEmpty()) Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        Text(list.name,style=if(compactHeader)OtoType.title.copy(fontSize=24.sp,lineHeight=28.sp) else OtoType.display,maxLines=if(immersive)2 else 3,overflow=TextOverflow.Ellipsis)
+                        Text(songCount(list.songs.size) + if(downloaded) { if(got==list.songs.size) " · descargada" else " · descargando ($got de ${list.songs.size})" } else "",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
+                        if(wideHeader && list.songs.isNotEmpty()) transport()
+                        if(!immersive && list.songs.isNotEmpty()) Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                             Button(onClick={play(null)},colors=ButtonDefaults.buttonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))) {Text("Reproducir",fontWeight=FontWeight.SemiBold)}
                             HoverAction(MobileIcons.shuffle,if(shuffle) "Desactivar aleatorio" else "Activar aleatorio",onClick={player.setShuffle(!shuffle,list.id)},tint=if(shuffle)palette.primary else Color.White.copy(alpha=.6f))
                         }
@@ -64,7 +95,10 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
                 }
             }
         }
-        if(list.songs.size>1) item(key="sort") {
+        if(immersive && !wideHeader && list.songs.isNotEmpty()) item(key="transport") {
+            transport()
+        }
+        if(!immersive && list.songs.size>1) item(key="sort") {
             Row(Modifier.clip(CircleShape).clickable {scope.launch{prefs.flipSort(list.id)}}.padding(horizontal=8.dp,vertical=10.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                 Icon(MobileIcons.swapVert,null,Modifier.size(18.dp),tint=Color.White.copy(alpha=.5f))
                 Text(if(newest)"Lo último que añadiste, arriba" else "Lo primero que añadiste, arriba",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
@@ -79,15 +113,34 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
         itemsIndexed(shown.songs,key={i,h->"${h.id}:$i"}) { i,h ->
             val actions=songActions(h,list.id)
             PlaylistContextMenu(actions) {
+                // Como en Oto: carátula, título y artista; sin columnas de tabla.
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable{play(i)}.padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
                     LibraryArt(h.artwork,Modifier.size(48.dp))
-                    Column(Modifier.weight(1f)){Text(h.title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis);Text(h.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.45f),maxLines=1,overflow=TextOverflow.Ellipsis)}
+                    Column(Modifier.weight(1f)){Text(h.title,style=OtoType.rowTitle,color=if(h.id==currentId)palette.primary else Color.White,maxLines=1,overflow=TextOverflow.Ellipsis);Text(h.artist,style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),maxLines=1,overflow=TextOverflow.Ellipsis)}
                     if(h.id==currentId)Icon(MobileIcons.graphicEq,"Sonando",Modifier.size(17.dp),tint=palette.primary)
                     SongMenuButton(h.title,actions)
                 }
             }
         }
         if(list.songs.isNotEmpty()) item(key="suggestions") { PlaylistSuggestions(list,currentId,player,prefs,palette,songActions) }
+    }
+    }
+}
+
+private fun Modifier.playlistCoverGlow(accent: Color) = drawWithCache {
+    val radius = 14.dp.toPx()
+    val spread = 15.dp.toPx()
+    onDrawBehind {
+        for (ring in 16 downTo 1) {
+            val fraction = ring / 16f
+            val outset = spread * fraction
+            drawRoundRect(
+                color = accent.copy(alpha = (1f - fraction) * 0.023f),
+                topLeft = Offset(-outset, -outset),
+                size = Size(size.width + 2 * outset, size.height + 2 * outset),
+                cornerRadius = CornerRadius(radius + outset),
+            )
+        }
     }
 }
 
@@ -98,12 +151,12 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
     return modes[listId]?.shuffle ?: default
 }
 
-@Composable internal fun PlaylistMosaic(list:LocalPlaylist,accent:Color,modifier:Modifier=Modifier) {
+@Composable internal fun PlaylistMosaic(list:LocalPlaylist,accent:Color,modifier:Modifier=Modifier,radius:Dp=14.dp) {
     val arts=remember(list){list.songs.take(4).map{it.artwork}}
-    Box(modifier.clip(RoundedCornerShape(14.dp)).background(Color.White.copy(alpha=.04f)),contentAlignment=Alignment.Center) {
+    Box(modifier.clip(RoundedCornerShape(radius)).background(Color.White.copy(alpha=.04f)),contentAlignment=Alignment.Center) {
         if(list.id==LIKED_ID) Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(accent,lerp(accent,Color(0xFF121212),.55f)))),contentAlignment=Alignment.Center){Icon(MobileIcons.favorite,null,Modifier.fillMaxSize(.42f),tint=Color(0xFF121212))}
         else if(arts.size>1) Column(Modifier.fillMaxSize()) { for(row in 0..1) Row(Modifier.weight(1f)) { for(col in 0..1) LibraryArt(arts.getOrNull(row*2+col),Modifier.weight(1f).fillMaxHeight(),rounded=false) } }
-        else if(arts.isNotEmpty()) LibraryArt(arts.first(),Modifier.fillMaxSize())
+        else if(arts.isNotEmpty()) LibraryArt(arts.first(),Modifier.fillMaxSize(),rounded=false)
         else Icon(MobileIcons.libraryMusic,null,Modifier.size(38.dp),tint=Color.White.copy(alpha=.22f))
     }
 }
@@ -140,3 +193,5 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
         }
     }
 }
+
+internal fun songCount(count: Int): String = if (count == 1) "1 canción" else "$count canciones"

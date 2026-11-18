@@ -81,6 +81,95 @@ class GenresTest {
     }
 
     @Test
+    fun withAllGenresTheDjRarelyHopsBetweenGenres() = runBlocking {
+        val catalog = object : Catalog {
+            override suspend fun artist(id: String) = null
+            override suspend fun songs(info: ArtistInfo) = emptyList<Track>()
+            override suspend fun radio(id: String) = emptyList<Track>()
+            override suspend fun find(name: String) = null
+        }
+        fun genreOf(t: Track) = when {
+            t.title.startsWith("urb") -> "Urbano latino"
+            t.title.startsWith("rock") || t.title == "mix rock" -> "Rock"
+            t.title == "mix pop" -> "Pop"
+            else -> null
+        }
+        // Como una biblioteca de verdad: cada estilo repartido en varias listas (no todos sus artistas se «parecen»).
+        fun list(id: String, prefix: String, artists: List<String>) = LocalPlaylist(id, id, (1..8).map { i ->
+            val a = artists[(i - 1) % artists.size]
+            Heard("$prefix-$id-$i", "$prefix $id $i", a, null, a)
+        })
+        val wide = Profile(
+            listOf(
+                list("u1", "urb", listOf("Duki", "Myke")), list("u2", "urb", listOf("Eladio", "Quevedo")),
+                list("u3", "urb", listOf("Bad Bunny", "Feid")),
+                list("r1", "rock", listOf("Muse", "Arctic")), list("r2", "rock", listOf("Blur", "Oasis")),
+                list("r3", "rock", listOf("Pixies", "Strokes")),
+                LocalPlaylist("m", "mixta", listOf(Heard("urb-m", "urb m", "Feid", null, "Feid"), Heard("rock-m", "rock m", "Muse", null, "Muse"))),
+            ),
+            emptyList(), emptyList(), emptyList(), now, ZoneId.of("UTC"),
+        )
+        var hops = 0
+        var pairs = 0
+        for (seed in 1..8) {
+            val dj = Dj(wide, catalog, Memory(null), this, Random(seed), mode = DjMode.Adhd, genreOf = ::genreOf)
+            val picks = listOfNotNull(dj.start()) + (1..14).mapNotNull { dj.next() }
+            val genres = picks.mapNotNull(::genreOf)
+            hops += genres.zipWithNext().count { (a, b) -> a != b }
+            pairs += (genres.size - 1).coerceAtLeast(0)
+        }
+        // Con «Todo» sigue pudiendo cambiar de estilo (puentes, saltos), pero no a cada tanda. Antes: 5 de 112.
+        assertTrue("cambios de género con «Todo»: $hops de $pairs", hops <= 2)
+    }
+
+    @Test
+    fun withAllGenresALongSessionStillChangesStyleNowAndThen() = runBlocking {
+        val catalog = object : Catalog {
+            override suspend fun artist(id: String) = null
+            override suspend fun songs(info: ArtistInfo) = emptyList<Track>()
+            override suspend fun radio(id: String) = emptyList<Track>()
+            override suspend fun find(name: String) = null
+        }
+        fun genreOf(t: Track) = when {
+            t.title.startsWith("urb") -> "Urbano latino"
+            t.title.startsWith("rock") -> "Rock"
+            else -> null
+        }
+        fun list(id: String, prefix: String, artists: List<String>) = LocalPlaylist(id, id, (1..14).map { i ->
+            val a = artists[(i - 1) % artists.size]
+            Heard("$prefix-$id-$i", "$prefix $id $i", a, null, a)
+        })
+        val wide = Profile(
+            listOf(
+                list("u1", "urb", listOf("Duki", "Myke")), list("u2", "urb", listOf("Eladio", "Quevedo")),
+                list("u3", "urb", listOf("Bad Bunny", "Feid")), list("u4", "urb", listOf("Rauw", "Mora")),
+                list("r1", "rock", listOf("Muse", "Arctic")), list("r2", "rock", listOf("Blur", "Oasis")),
+                list("r3", "rock", listOf("Pixies", "Strokes")), list("r4", "rock", listOf("Cure", "Smiths")),
+            ),
+            emptyList(), emptyList(), emptyList(), now, ZoneId.of("UTC"),
+        )
+        var sessionsThatChanged = 0
+        var shortRuns = 0
+        for (seed in 1..6) {
+            val dj = Dj(wide, catalog, Memory(null), this, Random(seed), mode = DjMode.Adhd, genreOf = ::genreOf)
+            val picks = listOfNotNull(dj.start()) + (1..45).mapNotNull { dj.next() }
+            assertEquals("sesión entera (semilla $seed)", 46, picks.size)
+            val genres = picks.mapNotNull(::genreOf)
+            assertEquals(picks.size, genres.size)
+            // Tramos seguidos de un mismo género.
+            val runs = genres.fold(mutableListOf<Int>()) { acc, g ->
+                if (acc.isEmpty() || genres[acc.sum() - 1] != g) acc += 1 else acc[acc.lastIndex]++
+                acc
+            }
+            if (runs.size > 1) sessionsThatChanged++
+            shortRuns += runs.dropLast(1).count { it < 6 }
+        }
+        // En ~45 trozos (≈ 1 h de DJ rápido) cambia de estilo alguna vez, y no tras tandas sueltas.
+        assertTrue("sesiones que cambian de estilo: $sessionsThatChanged de 6", sessionsThatChanged >= 4)
+        assertTrue("tramos cortos de un género: $shortRuns", shortRuns <= 2)
+    }
+
+    @Test
     fun skippingTheTandaMovesAway() = runBlocking {
         val p = profile()
         val catalog = object : Catalog {

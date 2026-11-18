@@ -773,7 +773,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
 private const val RESTART_MS = 3_000L
 
 /** Lo que la interfaz sabe de la próxima mezcla (ver [PlayerConnection.djMix]). */
-data class NextMix(val startMs: Long, val switchMs: Long, val state: MixUiState?) {
+data class NextMix(val startMs: Long, val switchMs: Long, val state: MixUiState?, val styleLabel: String? = null) {
     val ready: Boolean get() = state == MixUiState.Ready
     val preparing: Boolean get() = state == MixUiState.Preparing
 
@@ -784,7 +784,7 @@ data class NextMix(val startMs: Long, val switchMs: Long, val state: MixUiState?
             val start = extras.getLong(SESSION_DJ_MIX_START_MS, -1L).takeIf { it >= 0L }
                 ?: return if (state == MixUiState.Preparing) NextMix(-1L, -1L, state) else null
             val switch = extras.getLong(SESSION_DJ_MIX_SWITCH_MS, -1L).takeIf { it >= start } ?: start
-            return NextMix(start, switch, state)
+            return NextMix(start, switch, state, extras.getString(SESSION_DJ_MIX_LABEL))
         }
     }
 }

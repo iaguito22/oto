@@ -48,6 +48,7 @@ private val LOOP = booleanPreferencesKey("loop")
 private val PLAYLIST_MODES = stringPreferencesKey("playlist_modes")
 private val CROSSFADE = intPreferencesKey("crossfade")
 private val SMART_MIX = booleanPreferencesKey("smart_mix")
+private val SMART_MIX_MODE = stringPreferencesKey("smart_mix_mode")
 private val SMART_MIX_SECONDS = intPreferencesKey("smart_mix_seconds")
 private val DJ_MOOD = stringPreferencesKey("dj_mood")
 private val DJ_MODE = stringPreferencesKey("dj_mode")
@@ -68,6 +69,11 @@ const val LIKED_ID = "liked"
 const val DEFAULT_CROSSFADE = 3
 /** Mezcla inteligente activada por defecto (curva equal-power y transición de EQ cuando hay fundido). */
 const val DEFAULT_SMART_MIX = true
+enum class SmartMixMode(val label: String) {
+    Off("No"), FastDj("Solo DJ rápido"), Always("Siempre");
+
+    fun enabled(isFastDj: Boolean) = this == Always || (this == FastDj && isFastDj)
+}
 /** Lo que dura la mezcla inteligente si no se toca, y entre qué valores se elige (deslizador de Ajustes). */
 const val DEFAULT_SMART_MIX_SECONDS = 10
 val SMART_MIX_RANGE = 2..20
@@ -173,10 +179,19 @@ class Prefs(
      * Mezcla inteligente tipo Apple Music: curva en S y cruce progresivo de graves. Va aparte del fundido: si está
      * activada manda ella, con su propia duración ([smartMixSeconds]); si no, se usa el fundido normal ([crossfade]).
      */
-    val smartMix: Flow<Boolean> = store.data.map { it[SMART_MIX] ?: DEFAULT_SMART_MIX }.distinctUntilChanged()
+    val smartMixMode: Flow<SmartMixMode> = store.data.map { preferences ->
+        SmartMixMode.entries.firstOrNull { it.name == preferences[SMART_MIX_MODE] }
+            ?: if (preferences[SMART_MIX] == false) SmartMixMode.Off else SmartMixMode.Always
+    }.distinctUntilChanged()
+
+    suspend fun setSmartMixMode(mode: SmartMixMode) {
+        store.edit { it[SMART_MIX_MODE] = mode.name; it[SMART_MIX] = mode != SmartMixMode.Off }
+    }
+
+    val smartMix: Flow<Boolean> = smartMixMode.map { it != SmartMixMode.Off }.distinctUntilChanged()
 
     suspend fun setSmartMix(on: Boolean) {
-        store.edit { it[SMART_MIX] = on }
+        setSmartMixMode(if (on) SmartMixMode.Always else SmartMixMode.Off)
     }
 
     /** Lo que dura la mezcla inteligente, en segundos ([SMART_MIX_RANGE]). */
@@ -197,11 +212,12 @@ class Prefs(
     /** Activa/desactiva la mezcla inteligente con el mismo selector de tiempos (`0` = No, `>0` = segundos). */
     suspend fun setSmartMixChoice(seconds: Int) {
         if (seconds <= 0) {
-            store.edit { it[SMART_MIX] = false }
+            setSmartMixMode(SmartMixMode.Off)
         } else {
             val clamped = seconds.coerceIn(SMART_MIX_RANGE)
             store.edit {
                 it[SMART_MIX] = true
+                it[SMART_MIX_MODE] = SmartMixMode.Always.name
                 it[SMART_MIX_SECONDS] = clamped
             }
         }

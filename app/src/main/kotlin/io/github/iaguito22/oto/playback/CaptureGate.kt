@@ -42,6 +42,27 @@ class CaptureGate {
     private var encoding = C.ENCODING_INVALID
     private var channels = 0
     private var rate = 0
+    @Volatile private var fadeAfterFlushMs = 0L
+    @Volatile private var activeFadeMs = 0L
+    @Volatile private var fadeFramesLeft = 0
+    private var fadeTotalFrames = 0
+
+    /** Entrada tras recuperar una búsqueda: la rampa viaja en el PCM, aunque el AudioTrack arranque tarde. */
+    fun fadeInAfterFlush(durationMs: Long) {
+        fadeAfterFlushMs = durationMs.coerceIn(0L, 1_000L)
+    }
+
+    /** Si el seek no produjo flush, retirar la petición al terminar su recuperación. */
+    fun clearPendingFade() {
+        fadeAfterFlushMs = 0L
+    }
+
+    private fun recoveryGain(): Float {
+        if (fadeFramesLeft <= 0) return 1f
+        val g = 1f - fadeFramesLeft.toFloat() / fadeTotalFrames.coerceAtLeast(1)
+        fadeFramesLeft--
+        return g
+    }
 
     /** Cierra (o abre) sin rampa: para un reproductor que aún no suena. */
     fun set(open: Boolean) {
@@ -57,6 +78,11 @@ class CaptureGate {
 
     fun onFlush() {
         snapNext = true
+        val requested = fadeAfterFlushMs
+        if (requested > 0L) {
+            activeFadeMs = requested
+            fadeAfterFlushMs = 0L
+        }
     }
 
     /** El renderer empieza a leer un tramo nuevo (otra canción): con qué desfase saldrá su audio. */
@@ -84,7 +110,7 @@ class CaptureGate {
     }
 
     /** Si el audio pasaría sin tocar (abierta, a nivel 1 y sin rampa): entonces ni se copia. */
-    fun passthrough(): Boolean = open && !snapNext && gain == 1f && level() == 1f
+    fun passthrough(): Boolean = open && !snapNext && activeFadeMs == 0L && fadeFramesLeft == 0 && gain == 1f && level() == 1f
 
     /** Aplica la puerta a `[from, to)` de [buffer] (bytes PCM entrelazados), en su sitio. */
     fun apply(buffer: ByteBuffer, from: Int, to: Int) {
@@ -93,7 +119,13 @@ class CaptureGate {
             snapNext = false
             gain = target
         }
-        if (gain == 1f && target == 1f) return
+        val fadeMs = activeFadeMs
+        if (fadeMs > 0L && rate > 0) {
+            fadeTotalFrames = (fadeMs * rate / 1000L).toInt().coerceAtLeast(1)
+            fadeFramesLeft = fadeTotalFrames
+            activeFadeMs = 0L
+        }
+        if (gain == 1f && target == 1f && fadeFramesLeft == 0) return
         val ch = channels.coerceAtLeast(1)
         val step = 1f / max(1f, RAMP_SECONDS * rate)
         val b = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
@@ -102,9 +134,10 @@ class CaptureGate {
                 var i = from
                 while (i + 2 * ch <= to) {
                     gain = next(gain, target, step)
+                    val recovery = recoveryGain()
                     for (c in 0 until ch) {
                         val at = i + 2 * c
-                        b.putShort(at, (b.getShort(at) * gain).toInt().toShort())
+                        b.putShort(at, (b.getShort(at) * gain * recovery).toInt().toShort())
                     }
                     i += 2 * ch
                 }
@@ -113,9 +146,10 @@ class CaptureGate {
                 var i = from
                 while (i + 4 * ch <= to) {
                     gain = next(gain, target, step)
+                    val recovery = recoveryGain()
                     for (c in 0 until ch) {
                         val at = i + 4 * c
-                        b.putFloat(at, b.getFloat(at) * gain)
+                        b.putFloat(at, b.getFloat(at) * gain * recovery)
                     }
                     i += 4 * ch
                 }

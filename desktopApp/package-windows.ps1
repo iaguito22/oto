@@ -22,5 +22,7 @@ try {
     [IO.File]::WriteAllText("$resources/overrides.wxi",'<?xml version="1.0" encoding="utf-8"?><Include><?define OtoResourceDir="'+$resourceXml+'" ?></Include>')
     & "$env:JAVA_HOME/bin/jpackage.exe" --type msi --app-image "$PSScriptRoot/build/compose/binaries/main/app/Oto" --dest $dist --name Oto --app-version $version --vendor iaguito22 --description 'Oto - Tu música, a tu manera' --resource-dir $resources --install-dir 'Oto Desktop' --win-per-user-install --win-dir-chooser --win-shortcut --win-menu --win-menu-group Oto --win-upgrade-uuid '8f45e92a-3c74-4b2e-9a81-56e8049a1201' --win-help-url 'https://github.com/iaguito22/oto/issues' --win-update-url 'https://github.com/iaguito22/oto/releases' --verbose
     if ($LASTEXITCODE) { throw 'No se pudo crear el instalador MSI.' }
-    Get-Item "$dist/Oto-$version.msi"
+    $msi=Get-Item "$dist/Oto-$version.msi"
+    & "$PSScriptRoot/packaging/windows/build-setup.ps1" -Msi $msi.FullName -Version $version -Destination $dist
+    $msi
 } finally { Pop-Location }

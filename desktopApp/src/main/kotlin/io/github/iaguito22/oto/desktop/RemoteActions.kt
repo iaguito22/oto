@@ -24,23 +24,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import io.github.iaguito22.oto.remote.LocalLink
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 /** Controles del equipo remoto; la cola se abre solo cuando hace falta. */
 @Composable
-internal fun RemoteActions(link: LocalLink) {
+internal fun RemoteActions(link: LocalLink, queueInitiallyExpanded: Boolean = false, showTransport: Boolean = true,
+    onError: ((String) -> Unit)? = null) {
     val state by link.remote.collectAsState()
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
     var pending by remember { mutableStateOf(false) }
+    fun showError(message: String) { if (onError != null) onError(message) else error = message }
     fun send(action: String, fill: (JSONObject) -> Unit = {}) {
         if (pending) return
         pending = true
         error = null
         scope.launch {
             try { link.command(JSONObject().put("action", action).also(fill)) }
-            catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; error = e.message ?: "No se pudo completar la acción" }
+            catch (_: TimeoutCancellationException) { showError("El dispositivo no ha respondido") }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { showError(e.message ?: "No se pudo completar la acción") }
             finally { pending = false }
         }
     }
@@ -53,7 +59,7 @@ internal fun RemoteActions(link: LocalLink) {
         ?: queue?.optJSONObject(current)?.optString("artwork")
     val accent = MaterialTheme.colorScheme.primary
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Surface(shape = RoundedCornerShape(24.dp), color = accent.copy(alpha = .055f)) {
+        if (showTransport) Surface(shape = RoundedCornerShape(24.dp), color = accent.copy(alpha = .055f)) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     RemoteArtwork(artwork, Modifier.size(72.dp).clip(RoundedCornerShape(16.dp)))
@@ -84,7 +90,7 @@ internal fun RemoteActions(link: LocalLink) {
                 }
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (showTransport) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Icon(Icons.AutoMirrored.Rounded.VolumeUp, "Volumen del dispositivo", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface.copy(alpha = .5f))
             var volume by remember { mutableStateOf<Float?>(null) }
             val level = volume ?: remote.optDouble("volume", .5).toFloat().coerceIn(0f, 1f)
@@ -92,7 +98,7 @@ internal fun RemoteActions(link: LocalLink) {
             Text("${(level * 100).toInt()} %", Modifier.width(42.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .5f))
             if (hasSong) RemoteIcon(Icons.Rounded.FavoriteBorder, "Alternar Me gusta", !pending) { send("like") }
         }
-        var expanded by remember { mutableStateOf(false) }
+        var expanded by remember(queueInitiallyExpanded) { mutableStateOf(queueInitiallyExpanded) }
         var shown by remember(id) { mutableIntStateOf(8) }
         val count = queue?.length() ?: 0
         RemoteDisclosure("Cola", if(count==1) "1 canción" else "$count canciones", expanded, { expanded = !expanded })

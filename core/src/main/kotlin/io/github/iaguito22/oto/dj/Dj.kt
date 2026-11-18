@@ -1,6 +1,7 @@
 package io.github.iaguito22.oto.dj
 
 import io.github.iaguito22.oto.lyrics.Lyrics
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.joinAll
@@ -27,6 +28,46 @@ data class DjPickInfo(
     val bridgeTo: String? = null,
     val adhdSegment: AdhdSegment? = null,
 )
+
+/**
+ * Un cambio en la cola del DJ por tempo ([Dj.retuneUpcomingTempo]): la canción [removed] no se podía cuadrar con
+ * [previous] y entra [replacement] (o, agotados los intentos, vuelve la original).
+ */
+data class DjTempoSwap(
+    val previous: Track,
+    val removed: Track,
+    val verdict: DjTempoMatch.TempoVerdict,
+    /** La que queda en su lugar (null: no salió ninguna). */
+    val replacement: Track?,
+    /** Lo que ya se sabe de la nueva frente a [previous] (lo normal: sin medir hasta que se precargue). */
+    val replacementVerdict: DjTempoMatch.TempoVerdict?,
+    /** Se agotaron los intentos y vuelve la primera que eligió el DJ. */
+    val restoredOriginal: Boolean,
+    val attempt: Int,
+    val nextUp: List<DjPickInfo>,
+) {
+    /** Para `oto.mix`: «DJ: X cambiada por tempo (A 100 → X 128, estira 22 %) → Y 104». */
+    fun describe(): String {
+        if (restoredOriginal) {
+            return "DJ: ninguna encaja con «${previous.title}» tras $attempt intentos; vuelve «${replacement?.title ?: "?"}»"
+        }
+        val why = when (verdict.fit) {
+            DjTempoMatch.TempoFit.NoKick -> "sin bombo al pulso"
+            DjTempoMatch.TempoFit.NoPulse -> "sin pulso claro"
+            else -> "estira ${pct(verdict.stretchPct)} %"
+        }
+        val next = replacement?.let { r ->
+            val v = replacementVerdict
+            val bpm = v?.bpmB?.takeIf { it > 0.0 }?.let { bpm(it) } ?: "BPM sin medir"
+            "«${r.title}» $bpm"
+        } ?: "ninguna"
+        return "DJ: «${removed.title}» cambiada por tempo (${previous.title} ${bpm(verdict.bpmA)} → " +
+            "${removed.title} ${bpm(verdict.bpmB)}, $why) → $next (intento $attempt/${Dj.MAX_TEMPO_SWAPS})"
+    }
+
+    private fun bpm(v: Double) = if (v > 0.0) "%.0f".format(v) else "?"
+    private fun pct(v: Double) = "%.1f".format(v)
+}
 
 /**
  * El DJ, para cuando no sabes qué poner. Pincha por tandas, como uno de verdad: cada tanda gira alrededor de un
@@ -70,7 +111,10 @@ class Dj(
         val tanda: String? = null,
         val reason: String? = null,
         val isBridge: Boolean = false,
-    )
+    ) {
+        /** El salto ya enfrió su rama (lo cuentan [heard] y [react]: que no cuente dos veces). */
+        var skipApplied = false
+    }
 
     private class Candidate(
         val track: Track,
@@ -154,7 +198,18 @@ class Dj(
     private val links = HashMap<String, HashSet<String>>()
     /** Tuyas que salen en la radio de lo que suena: encajan con la tanda. */
     private val inRadio = HashSet<String>()
-    private val banned = HashSet<String>()
+    /**
+     * Artistas apartados tras un salto rápido → elecciones que les quedan fuera. El primer salto los aparta un rato
+     * ([BAN_FIRST]); el segundo de la sesión, mucho más ([BAN_AGAIN]). Guardarla u oírla entera los devuelve.
+     */
+    private val banned = HashMap<String, Int>()
+    private val skippedArtists = HashMap<String, Int>()
+
+    /** Lo que una reacción cambió en la tanda [anchorKey] (ver [syncReactionIntoSnapshots]). */
+    private class RegionNudge(val anchorKey: String, val values: Map<String, Double>, val lower: Boolean)
+    private val nudges = ArrayList<RegionNudge>()
+    /** Tanda → saltos seguidos tras la última reacción: manda sobre lo guardado de antes de ella. */
+    private var reactionSkips: Pair<String, Int>? = null
     /** Artistas nuevos con los que te quedaste: se acercan a su tanda. */
     private val warm = HashSet<String>()
     private val boosts = ArrayList<Boost>()
@@ -167,6 +222,72 @@ class Dj(
     private val trackTandas = HashMap<String, String>()
     private val trackReasons = HashMap<String, String>()
     private var pendingRemate: Remate? = null
+
+    /** Para las pruebas: hay un Remate armado. */
+    internal val remateArmed get() = pendingRemate != null
+
+    /** Para las pruebas: elecciones que le quedan al refuerzo de esa canción y su fuerza (null si no hay). */
+    internal fun boostOf(trackKey: String): Pair<Int, Double>? =
+        boosts.firstOrNull { it.track.key == trackKey }?.let { it.remaining to it.strength }
+
+    /**
+     * Canciones apartadas de la cola por tempo: no salen en las próximas [TEMPO_SKIP_PICKS] elecciones (no es un
+     * veto: ni se castiga al artista ni se aparta para siempre). Clave: id y key → elecciones que quedan.
+     */
+    private val tempoSkipped = HashMap<String, Int>()
+
+    /** Lo que ya se intentó para el hueco detrás de [prev] (por identidad: si cambia lo de antes, se empieza de cero). */
+    private class TempoSlot(val prev: StagedPick, val original: StagedPick) {
+        var attempts = 0
+        /** Agotados los intentos: no se insiste en este hueco. Encajar NO cierra: se vuelve a mirar en cada llamada. */
+        var exhausted = false
+        /** La que ya se anunció que encaja (para no repetirlo en el registro). */
+        var notedFit: StagedPick? = null
+    }
+
+    private val tempoSlots = ArrayList<TempoSlot>()
+
+    /** Cambios por tempo desde la última confirmada: tope por canción para que no haya cascadas de precargas. */
+    private var tempoSwapsSinceCommit = 0
+
+    /**
+     * Estado de la cola y de la revisión por tempo antes de una revisión, para deshacerla si mientras tanto cambió lo
+     * que suena (el PC mueve el índice sin esperar al candado del DJ). Sin red ni elecciones confirmadas en medio:
+     * [retuneUpcomingTempo] solo toca la cola preparada y su propio estado.
+     */
+    class TempoCheckpoint internal constructor(internal val restore: () -> Boolean)
+
+    fun tempoCheckpoint(): TempoCheckpoint {
+        val saved = upcoming.toList()
+        val skipped = HashMap(tempoSkipped)
+        val slots = tempoSlots.map { s ->
+            TempoSlot(s.prev, s.original).also {
+                it.attempts = s.attempts
+                it.exhausted = s.exhausted
+                it.notedFit = s.notedFit
+            }
+        }
+        val swaps = tempoSwapsSinceCommit
+        return TempoCheckpoint {
+            // Si se confirmó alguna de la cola entretanto (avance), el punto ya no vale.
+            if (saved.any { s -> s.candidate.track.key in keys || s.candidate.track.id in keys }) {
+                false
+            } else {
+                upcoming.clear()
+                saved.forEach { upcoming.addLast(it) }
+                tempoSkipped.clear()
+                tempoSkipped.putAll(skipped)
+                tempoSlots.clear()
+                tempoSlots += slots
+                tempoSwapsSinceCommit = swaps
+                committedSnapshot?.let(::restoreSnapshot)
+                true
+            }
+        }
+    }
+
+    /** Deja la cola y la revisión como en [cp] (no deshace elecciones confirmadas: si hubo alguna, no hace nada). */
+    fun rollbackTempo(cp: TempoCheckpoint): Boolean = cp.restore()
 
     /** La tanda: su centro y los artistas que la forman, con lo cerca que están (0–1). */
     private lateinit var anchor: Profile.Artist
@@ -202,9 +323,9 @@ class Dj(
         blockLen = minOf(blockLen, block)
     }
 
+    /** Con un género elegido, la tanda es de ese género (aunque el artista sea más de otro); si no, el suyo. */
     private fun formatTanda(a: Profile.Artist): String? =
-        a.songs.values.mapNotNull(genreOf).groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
-            ?: genre?.name
+        genre?.name ?: a.songs.values.mapNotNull(genreOf).groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
 
     /** Género activo de la tanda actual si se conoce (sin «Como …»); null si no se sabe. */
     val currentGenre: String?
@@ -215,6 +336,8 @@ class Dj(
      */
     val tanda: String?
         get() {
+            // Recién elegido un género, la tanda ya es de él (sin esperar a la próxima canción).
+            genre?.let { return it.name }
             val lastPick = picks.lastOrNull()
             if (lastPick != null) return lastPick.tanda
             val snap = committedSnapshot
@@ -258,7 +381,7 @@ class Dj(
      * sea de un artista tuyo de ese género o llegue por uno.
      */
     private fun genreFit(track: Track, vias: Set<String>): Double {
-        val g = genre ?: return 1.0
+        val g = genre ?: return looseGenreFit(track)
         if (track.key in g.songs) return 1.0
         val known = genreOf(track)
         return when {
@@ -268,6 +391,52 @@ class Dj(
             vias.any { it in g.artists } -> 0.6
             else -> 0.1
         }
+    }
+
+    /** El género principal de [a] (lo más repetido de lo suyo), o null si no se sabe. */
+    private fun mainGenre(a: Profile.Artist): String? {
+        if (mainGenres.containsKey(a.key)) return mainGenres[a.key]
+        return a.songs.values.mapNotNull(genreOf).groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
+            .also { mainGenres[a.key] = it }
+    }
+
+    /** Caché de [mainGenre] para una elección; se vacía en cada una porque los géneros van llegando de la red. */
+    private val mainGenres = HashMap<String, String?>()
+
+    /**
+     * Con «Todo» (sin género elegido) el género de la tanda que suena guía sin obligar: antes cualquier canción valía
+     * igual y en DJ rápido (tandas de 3–5 trozos) se pasaba de pop en inglés a reguetón sin transición (medido el 17/11).
+     */
+    private fun looseGenreFit(track: Track): Double {
+        if (!::anchor.isInitialized) return 1.0
+        val tandaGenre = mainGenre(anchor) ?: return 1.0
+        val known = genreOf(track) ?: return LOOSE_UNKNOWN_GENRE_FIT
+        return if (known == tandaGenre) 1.0 else LOOSE_OTHER_GENRE_FIT
+    }
+
+    /**
+     * Con «Todo», cuánto pesa [a] como centro de la siguiente tanda según el género de la que acaba ([fromGenre]). Cuanto
+     * más se lleva en ese género, más fácil es cambiar: variedad poco a poco, no un salto a cada tanda (en una hora de
+     * DJ rápido, sin esto, 4 de cada 6 sesiones de prueba no cambiaban nunca de estilo).
+     */
+    private fun genreContinuity(a: Profile.Artist, fromGenre: String?): Double {
+        if (genre != null || fromGenre == null) return 1.0
+        val g = mainGenre(a) ?: return LOOSE_UNKNOWN_ANCHOR_FIT
+        if (g == fromGenre) return 1.0
+        val streak = genreStreak(fromGenre)
+        return when {
+            streak >= LOOSE_FREE_AFTER_PICKS -> 1.0
+            streak >= LOOSE_EASIER_AFTER_PICKS -> LOOSE_EASIER_ANCHOR_FIT
+            else -> LOOSE_OTHER_ANCHOR_FIT
+        }
+    }
+
+    /** Cuántas elecciones seguidas (hechas y ya preparadas) llevan la etiqueta de tanda [g], contando desde la última. */
+    private fun genreStreak(g: String): Int {
+        var n = 0
+        for (i in upcoming.indices.reversed()) { if (upcoming[i].tanda == g) n++ else return n }
+        for (i in picks.indices.reversed()) { if (picks[i].tanda == g) n++ else return n }
+        return n
     }
 
     /** Para elegir el centro de una tanda: cuánto de lo suyo es del género elegido. */
@@ -294,9 +463,13 @@ class Dj(
         /** La forma de la canción, de su letra sincronizada ([SongSections.of]); vacía si no hay. */
         sections: List<SongSection> = emptyList(),
         audio: AudioMetrics? = analysisCache?.get(track.id),
+        /** La canción ya suena desde aquí: solo se elige su salida ([AdhdPlanner.segment]). */
+        fixedStartMs: Long? = null,
+        /** La salida no puede empezar antes de esto (la que suena solo se alarga hacia delante). */
+        minFadeStartMs: Long = 0L,
     ): AdhdSegment? {
         if (track.id in fullTrackIds) return null
-        return track.adhdSegment(durationMs, crossfadeMs, mood, sections, audio)?.also { seg ->
+        return track.adhdSegment(durationMs, crossfadeMs, mood, sections, audio, fixedStartMs, minFadeStartMs)?.also { seg ->
             picks.lastOrNull { it.track.id == track.id }?.let { it.adhdSegment = seg }
         }
     }
@@ -517,6 +690,7 @@ class Dj(
      * ni los cooldowns de sesión.
      */
     suspend fun vetoNextUp(trackId: String, refillCount: Int = 3): List<DjPickInfo> {
+        drain()
         vetoed += trackId
         val stagedIdx = upcoming.indexOfFirst { it.candidate.track.id == trackId }
         if (stagedIdx >= 0) {
@@ -548,7 +722,180 @@ class Dj(
         return nextUp()
     }
 
+    private fun tempoOf(id: String): DjTempoMatch.TempoProfile? = analysisCache?.tempoProfile(id)
+
+    /**
+     * Revisa la cola preparada: si una canción (nunca la siguiente inmediata, cuyo puente ya se prepara) no se podrá
+     * cuadrar con la de antes (tempo a más del 6 %, u 8 % si entra sin voz, contando mitad o doble, o sin bombo al
+     * pulso), la cambia por otra elegida igual que la original (lo normal: de la misma tanda; si la tanda se queda sin
+     * nada, el DJ pasa a otra como siempre). La apartada no sale en unas pocas elecciones, sin castigar a su artista. Como mucho
+     * [MAX_TEMPO_SWAPS] cambios por hueco; si ninguna encaja, vuelve la original. Solo cambia algo con análisis de las
+     * dos (lo sin medir se deja: se mira otra vez cuando llegue). Hace como mucho un cambio por llamada: lo nuevo
+     * hay que precargarlo y analizarlo antes de juzgarlo.
+     *
+     * [note] recibe avisos para el registro (p. ej. que la nueva sí encaja).
+     */
+    suspend fun retuneUpcomingTempo(
+        refillCount: Int = 3,
+        /** Ids que no se pueden tocar (la que suena, la siguiente del reproductor, lo que se está preparando). */
+        protect: Set<String> = emptySet(),
+        note: (String) -> Unit = {},
+    ): DjTempoSwap? {
+        if (!::anchor.isInitialized || analysisCache == null) return null
+        tempoSlots.removeAll { slot -> upcoming.none { it === slot.prev } }
+        // Nada en o antes de una protegida: cambiar un hueco rehace todo lo de detrás.
+        val firstFree = maxOf(1, upcoming.indexOfLast { it.candidate.track.id in protect } + 1)
+        for (i in firstFree until upcoming.size) {
+            val prev = upcoming[i - 1]
+            val cur = upcoming[i]
+            val slot = tempoSlots.firstOrNull { it.prev === prev }
+            if (slot?.exhausted == true) continue
+            // Siempre con los perfiles de ahora: un análisis entero puede cambiar lo que dijo el principio, y la de
+            // este hueco puede haber cambiado (veto, otro relleno).
+            val verdict = DjTempoMatch.tempoVerdict(
+                tempoOf(prev.candidate.track.id),
+                tempoOf(cur.candidate.track.id),
+                maxStretchPct = incomingStretchLimit(cur),
+            )
+            when {
+                verdict.fit == DjTempoMatch.TempoFit.Fits -> {
+                    if (slot != null && slot.attempts > 0 && slot.notedFit !== cur) {
+                        slot.notedFit = cur
+                        note(
+                            "DJ: «${cur.candidate.track.title}» encaja con «${prev.candidate.track.title}» " +
+                                "(${"%.0f".format(verdict.bpmA)} → ${"%.0f".format(verdict.bpmB)}, estira ${"%.1f".format(verdict.stretchPct)} %)",
+                        )
+                    }
+                }
+                verdict.incomingBlocks -> {
+                    val s = slot ?: TempoSlot(prev, cur).also { tempoSlots += it }
+                    // El presupuesto limita elecciones nuevas, nunca la vuelta a la original.
+                    if (s.attempts >= MAX_TEMPO_SWAPS || tempoSwapsSinceCommit >= MAX_TEMPO_SWAPS_PER_SONG) {
+                        s.exhausted = true
+                        if (cur === s.original) continue
+                        restoreTempoOriginal(i, s, verdict, refillCount)?.let { return it }
+                        continue
+                    }
+                    s.attempts++
+                    tempoSwapsSinceCommit++
+                    val removed = cur.candidate.track
+                    setAside(removed)
+                    val replacement = replaceFrom(i, prev, refillCount)
+                    if (replacement == null) {
+                        // No salió otra: vuelve la original (si no lo era ya) y no se insiste. Si tampoco puede volver
+                        // (vetada), la cola ya está recortada: se devuelve igual el cambio para que quien llama
+                        // publique la cola de verdad (si no, el reproductor seguiría con la quitada).
+                        s.exhausted = true
+                        return restoreTempoOriginal(i, s, verdict, refillCount, attemptOverride = s.attempts)
+                            ?: DjTempoSwap(
+                                previous = prev.candidate.track,
+                                removed = removed,
+                                verdict = verdict,
+                                replacement = null,
+                                replacementVerdict = null,
+                                restoredOriginal = false,
+                                attempt = s.attempts,
+                                nextUp = nextUp(),
+                            )
+                    }
+                    val newVerdict = DjTempoMatch.tempoVerdict(tempoOf(prev.candidate.track.id), tempoOf(replacement.id))
+                    return DjTempoSwap(
+                        previous = prev.candidate.track,
+                        removed = removed,
+                        verdict = verdict,
+                        replacement = replacement,
+                        replacementVerdict = newVerdict,
+                        restoredOriginal = false,
+                        attempt = s.attempts,
+                        nextUp = nextUp(),
+                    )
+                }
+                // Sin medir: se espera.
+            }
+        }
+        return null
+    }
+
+    /**
+     * Lo que se puede estirar la entrante [cur]: 8 % solo si su letra dice que entra sin voz (los primeros 45 s desde
+     * donde empieza a sonar); sin letra, el 6 % de cuando canta (casi todo lo que suena canta pronto).
+     */
+    private fun incomingStretchLimit(cur: StagedPick): Double =
+        stretchLimitOf(cur.candidate.track.id, cur.adhdSegment?.startMs ?: 0L)
+
+    /**
+     * Dónde empezará a sonar [track]: el inicio de su trozo en DJ rápido (el mismo que tendrá en la cola), si no el
+     * principio. Así la elección mira la voz en el mismo sitio que la revisión de la cola.
+     */
+    private fun entryOf(track: Track): Long {
+        if (mode != DjMode.Adhd || track.id in fullTrackIds) return 0L
+        upcoming.firstOrNull { it.candidate.track.id == track.id }?.let { return it.adhdSegment?.startMs ?: 0L }
+        return track.adhdSegment(mood = mood, audio = analysisCache?.get(track.id))?.startMs ?: 0L
+    }
+
+    private fun stretchLimitOf(trackId: String, fromMs: Long): Double {
+        val lyrics = lyricsPeek?.invoke(trackId) as? Lyrics.Synced ?: return DjTempoMatch.MAX_STRETCH_PCT
+        val vocals = DjLyricMatcher.vocalOccupancyRatio(lyrics, fromMs, fromMs + 45_000L) ?: return DjTempoMatch.MAX_STRETCH_PCT
+        return DjTempoMatch.maxStretchPct(vocals)
+    }
+
+    private fun setAside(t: Track) {
+        tempoSkipped[t.id] = TEMPO_SKIP_PICKS
+        tempoSkipped[t.key] = TEMPO_SKIP_PICKS
+    }
+
+    /** Quita de la cola desde [index] y la vuelve a llenar detrás de [prev]. Devuelve la nueva en [index]. */
+    private suspend fun replaceFrom(index: Int, prev: StagedPick, refillCount: Int): Track? {
+        val keep = upcoming.take(index)
+        upcoming.clear()
+        keep.forEach { upcoming.addLast(it) }
+        committedSnapshot?.let(::restoreSnapshot)
+        prepareNextUp(refillCount)
+        return upcoming.getOrNull(index)?.takeIf { upcoming[index - 1] === prev }?.candidate?.track
+    }
+
+    /** Agotados los intentos: vuelve la primera que eligió el DJ para ese hueco (si sigue valiendo). */
+    private suspend fun restoreTempoOriginal(
+        index: Int,
+        slot: TempoSlot,
+        lastVerdict: DjTempoMatch.TempoVerdict,
+        refillCount: Int,
+        attemptOverride: Int = slot.attempts,
+    ): DjTempoSwap? {
+        val original = slot.original
+        val o = original.candidate.track
+        // Vetada por el usuario o ya sonada: no vuelve.
+        val stillFree = o.key !in keys && o.id !in keys && "~" + o.base !in keys && o.id !in vetoed && o.key !in vetoed &&
+            upcoming.none { it.candidate.track.id == o.id }
+        val current = upcoming.getOrNull(index)
+        if (!stillFree || current === original) return null
+        val removed = current?.candidate?.track
+        removed?.let(::setAside)
+        tempoSkipped.remove(o.id)
+        tempoSkipped.remove(o.key)
+        val keep = upcoming.take(index)
+        upcoming.clear()
+        keep.forEach { upcoming.addLast(it) }
+        upcoming.addLast(original)
+        original.tanda?.let { trackTandas[o.id] = it } ?: trackTandas.remove(o.id)
+        trackReasons[o.id] = original.reason
+        committedSnapshot?.let(::restoreSnapshot)
+        prepareNextUp(refillCount)
+        return DjTempoSwap(
+            previous = slot.prev.candidate.track,
+            removed = removed ?: o,
+            verdict = lastVerdict,
+            replacement = o,
+            replacementVerdict = null,
+            restoredOriginal = true,
+            attempt = attemptOverride,
+            nextUp = nextUp(),
+        )
+    }
+
     private suspend fun planNextCandidate(waitForNetwork: Boolean): Candidate? {
+        drain()
+        mainGenres.clear()
         relaxLevel = 0
         val moodMismatch = ::anchor.isInitialized && (anchorMoodScore(anchor) < 0.72 || artistGenreShare(anchor) < 0.3)
         val remateCandidate = if (!jumpAway && skips < 2 && !moodMismatch) {
@@ -582,6 +929,7 @@ class Dj(
 
     /** Cuánto te quedaste con [id]: actualiza memoria y dispara enfriamiento o refuerzo en vivo. */
     fun heard(id: String, ms: Long, dur: Long) {
+        drain()
         val p = picks.lastOrNull { it.track.id == id && it.reward == null } ?: return
         val bypassAdhd = id in fullTrackIds
         val clipDur = if (mode == DjMode.Adhd && !bypassAdhd) {
@@ -603,12 +951,16 @@ class Dj(
             isFastSkip -> applyFastSkip(p)
             isFullListen -> applyBoost(p, DjReaction.FullListen)
             r < SKIPPED -> applyFastSkip(p)
-            else -> skips = 0
+            else -> {
+                skips = 0
+                syncReactionIntoSnapshots(emptyMap())
+            }
         }
     }
 
     /** Reacción explícita en vivo (salto rápido, escucha completa, me gusta o guardado en lista). */
     fun react(id: String, reaction: DjReaction) {
+        drain()
         val p = picks.lastOrNull { it.track.id == id } ?: return
         when (reaction) {
             DjReaction.FastSkip -> {
@@ -630,9 +982,15 @@ class Dj(
         }
     }
 
-    /** Espera a lo que se esté pidiendo (para las pruebas). */
-    suspend fun settle() {
-        while (jobs.any { it.isActive }) jobs.toList().joinAll()
+    /** Espera a lo que se esté pidiendo. Sin tope: solo para pruebas; [planNextCandidate] la llama con [WAIT_MS]. */
+    internal suspend fun settle() {
+        // Aplicar lo que llegó puede pedir más (conocer a los citados): se espera hasta que no quede nada.
+        while (true) {
+            drain()
+            val active = jobs.filter { it.isActive }
+            if (active.isEmpty()) break
+            active.joinAll()
+        }
     }
 
     // ---- Elegir ----
@@ -813,7 +1171,8 @@ class Dj(
         val far = region.keys.flatMap { links[it].orEmpty() }.distinct()
             .mapNotNull(profile.artists::get)
             .filter { it.key !in region && it.songs.isNotEmpty() && allowed(it.key) && profile.sim(anchor, it) < FAR && it.songs.values.any(::ok) }
-        val linked = weighted(far) { it.affinity.pow(0.7) * artistMoodAndCooldownWeight(it) }
+        val farGenre = if (genre == null) mainGenre(anchor) else null
+        val linked = weighted(far) { it.affinity.pow(0.7) * artistMoodAndCooldownWeight(it) * genreContinuity(it, farGenre) }
         val from = anchor
         val skipped = skips >= 2
         setAnchor(linked ?: chooseAnchor(anchor, requireAvailableTrack = true) ?: chooseAnchor(anchor) ?: return null)
@@ -906,6 +1265,9 @@ class Dj(
             val w = ((bothSyn + bpmBonus + genreBonus + collabBonus).coerceAtLeast(0.05)) *
                 candMoodFit *
                 candGenreFit *
+                // Con «Todo», un puente a otro estilo solo si es una colaboración de verdad; si no, pesa como cualquier
+                // cambio de tanda a otro género (medido el 17/11: «puente» de Harry Styles a reguetón por la vibra).
+                (if (explicitCollab) 1.0 else genreContinuity(dest, fromGenre)) *
                 artistMoodAndCooldownWeight(dest) *
                 cand.weight *
                 consensusBonus *
@@ -1161,26 +1523,42 @@ class Dj(
      * puente las cuadra; muy distinto solo puede ir con filtro, fundido o corte. Sin análisis de la candidata, un
      * poco menos que una que encaja seguro. En DJ rápido se mezcla cada minuto y pico: pesa más.
      */
+    /** Para las pruebas: lo que pesa el tempo de [track] detrás de la última de la cola (o la que suena). */
+    internal fun tempoFitOf(track: Track): Double = tempoFit(track)
+
     private fun tempoFit(track: Track): Double {
         val prev = effectiveLastPick() ?: return 1.0
-        val prevAudio = analysisCache?.get(prev.track.id)?.takeIf {
-            it.bpm != null && (it.bpmConfidence >= 0.25 || it.beatGrid.size >= 8)
-        } ?: return 1.0
-        val candAudio = analysisCache?.get(track.id)?.takeIf {
-            it.bpm != null && (it.bpmConfidence >= 0.25 || it.beatGrid.size >= 8)
-        } ?: return 0.78
-        val prevBpm = prevAudio.bpm ?: return 1.0
-        val candBpm = candAudio.bpm ?: return 0.78
-        val diffPct = DjHarmonic.bpmRelation(prevBpm, candBpm).relDiffPct
-        val sure = minOf(prevAudio.bpmConfidence, candAudio.bpmConfidence) >= AudioMetrics.BEAT_MATCH_CONFIDENCE ||
-            (prevAudio.beatGrid.size >= 8 && candAudio.beatGrid.size >= 8)
+        // Del índice de tempo: sobrevive a las subidas de versión del análisis (si no, tras cada una, a ciegas).
+        // Mismo umbral de pulso que el puente: con pulso dudoso el puente no cuadra y el tempo da igual.
+        val a = tempoOf(prev.track.id)?.takeIf { DjTempoMatch.isBeatMatchReady(it) } ?: return 1.0
+        // La saliente sin bombo (medida entera) no se cuadra con nada: el tempo de la candidata no cambia la mezcla.
+        if (a.kickWhole && a.kickKnown && a.kickShare < DjTempoMatch.MIN_KICK_SHARE) return 1.0
+        val b = tempoOf(track.id) ?: return 0.78
+        // Sabida y sin pulso claro (también la entera sin BPM, bpm 0): no se cuadrará. A medias, aún sin medir.
+        if (!DjTempoMatch.isBeatMatchReady(b)) return if (b.wholeSong) 0.6 else 0.78
+        // Lo mismo que mira el puente: lo que hay que estirar B (contando mitad o doble).
+        val stretch = DjTempoMatch.stretchPct(DjHarmonic.bpmRelation(a.bpm, b.bpm).ratioOutOverIn)
+        val sure = minOf(a.confidence, b.confidence) >= AudioMetrics.BEAT_MATCH_CONFIDENCE ||
+            (a.gridBeats >= 8 && b.gridBeats >= 8)
+        // Sin bombo en la candidata el puente no cuadra aunque el tempo encaje: apenas suma.
+        val kickFactor = when {
+            // Mismo criterio que la revisión: sin bombo solo con la entera o bastantes compases (no por una intro).
+            b.kickKnown && b.kickShare < DjTempoMatch.MIN_KICK_SHARE &&
+                (b.kickWhole || b.kickBars >= DjTempoMatch.MIN_KICK_BARS_PARTIAL) -> 0.2
+            b.kickKnown && a.kickKnown -> 1.1
+            else -> 1.0
+        }
         val gain = when {
-            diffPct <= 4.0 -> 1.35
-            diffPct <= 9.5 -> 0.95
-            diffPct <= 14.0 -> 0.10
-            diffPct >= 20.0 -> -0.68
+            stretch <= 4.0 -> 1.35
+            stretch <= DjTempoMatch.MAX_STRETCH_PCT -> 0.95
+            // Solo se cuadra si entra sin voz (mismo criterio que la revisión de la cola: si no, la elige y luego la cambia).
+            stretch <= DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT &&
+                stretchLimitOf(track.id, entryOf(track)) > DjTempoMatch.MAX_STRETCH_PCT -> 0.95
+            stretch <= 14.0 -> 0.10
+            stretch >= 20.0 -> -0.68
             else -> -0.35
-        }.let { if (it > 0.0 && !sure) it * 0.65 else it } * (if (mode == DjMode.Adhd) 1.25 else 1.0)
+        }.let { if (it > 0.0) it * kickFactor * (if (sure) 1.0 else 0.65) else it } *
+            (if (mode == DjMode.Adhd) 1.25 else 1.0)
         val lyric = if (lyricsPeek != null && DjLyricMatcher.hasSharedSingablePhrase(lyricsPeek.invoke(prev.track.id), lyricsPeek.invoke(track.id))) 0.35 else 0.0
         return (1.0 + gain + lyric).coerceIn(0.22, 3.0)
     }
@@ -1254,6 +1632,7 @@ class Dj(
         blockLen = s.blockLen
         skips = s.skips
         jumpAway = s.jumpAway
+        applyNudges(s.anchor.key)
     }
 
     private fun invalidateUpcoming() {
@@ -1306,12 +1685,24 @@ class Dj(
         if (c.track.base.length >= 4) keys += "~" + c.track.base
         memory.rememberSong(c.track, now)
         advanceWindowCounters()
+        tempoSwapsSinceCommit = 0
+        if (tempoSkipped.isNotEmpty()) {
+            val it = tempoSkipped.entries.iterator()
+            while (it.hasNext()) {
+                val e = it.next()
+                e.setValue(e.value - 1)
+                if (e.value <= 0) it.remove()
+            }
+        }
         pendingRemate?.let {
             it.remaining--
             if (it.remaining <= 0) pendingRemate = null
         }
         block++
         if (::anchor.isInitialized) {
+            // Ya suena otra tanda: lo que las reacciones cambiaron en las anteriores no vale si se vuelve a ellas.
+            nudges.removeAll { it.anchorKey != anchor.key }
+            if (reactionSkips?.first != anchor.key) reactionSkips = null
             val snap = snapshot()
             pickSnapshots += snap
             committedSnapshot = snap
@@ -1333,11 +1724,18 @@ class Dj(
             cb.remaining--
             if (cb.remaining <= 0) cIt.remove()
         }
+        val banIt = banned.entries.iterator()
+        while (banIt.hasNext()) {
+            val e = banIt.next()
+            e.setValue(e.value - 1)
+            if (e.value <= 0) banIt.remove()
+        }
     }
 
     private fun ok(t: Track): Boolean {
         // Enfriamiento obligatorio de canción en la sesión actual: nunca se repite una misma canción.
         if (t.id in vetoed || t.key in vetoed) return false
+        if (t.id in tempoSkipped || t.key in tempoSkipped) return false
         if (t.key in keys || t.id in keys || "~" + t.base in keys) return false
         if (upcoming.any {
                 val u = it.candidate.track
@@ -1391,8 +1789,11 @@ class Dj(
     // ---- Reacción en vivo ----
 
     private fun applyFastSkip(p: Pick) {
+        if (p.skipApplied) return
+        p.skipApplied = true
         skips++
-        banned += p.track.who
+        val times = skippedArtists.merge(p.track.who, 1, Int::plus) ?: 1
+        banned.merge(p.track.who, if (times >= 2) BAN_AGAIN else BAN_FIRST, ::maxOf)
         val vibe = effectiveVibe(p.track, p.vias)
         cooledBranches += CooldownBranch(p.track.who, p.vias, vibe, remaining = 6)
 
@@ -1413,25 +1814,69 @@ class Dj(
         }
         // Enfriar también las vías de la región para pivotar hacia otra dirección a partir de los nuevos huecos
         // (sin borrar de golpe las que el usuario ya ve preparadas en la cola NextUp).
+        val cooled = HashMap<String, Double>()
         for (v in p.vias + p.track.who) {
-            region[v]?.let { region[v] = (it * 0.45).coerceAtLeast(0.05) }
+            region[v]?.let { cooled[v] = (it * 0.45).coerceAtLeast(0.05) }
         }
+        region.putAll(cooled)
+        syncReactionIntoSnapshots(cooled, onlyLower = true)
         log("skip rápido (<20s): enfriando rama de ${p.track.artist}")
     }
 
+    /**
+     * Lleva lo que cambió una reacción (el contador de saltos y la tanda) a los estados guardados: al de la última
+     * confirmada y a los de la cola preparada. Sin esto, preparar la cola o pasar a la siguiente vuelve a un estado
+     * de antes de la reacción y el salto o la escucha entera no cambian nada.
+     */
+    private fun syncReactionIntoSnapshots(changes: Map<String, Double>, onlyLower: Boolean = false) {
+        if (!::anchor.isInitialized) return
+        // No se tocan los estados guardados (la cola por tempo los sigue por identidad): se apunta el ajuste y
+        // [restoreSnapshot] lo aplica a cualquier estado de la misma tanda.
+        reactionSkips = anchor.key to skips
+        if (changes.isNotEmpty()) {
+            nudges += RegionNudge(anchor.key, HashMap(changes), onlyLower)
+            while (nudges.size > MAX_NUDGES) nudges.removeAt(0)
+        }
+    }
+
+    private fun applyNudges(anchorKey: String) {
+        reactionSkips?.let { (k, n) -> if (k == anchorKey) skips = n }
+        for (n in nudges) {
+            if (n.anchorKey != anchorKey) continue
+            for ((k, v) in n.values) {
+                val old = region[k]
+                when {
+                    n.lower -> if (old != null) region[k] = minOf(old, v)
+                    old == null -> region[k] = v
+                    else -> region[k] = maxOf(old, v)
+                }
+            }
+        }
+    }
+
     private fun applyBoost(p: Pick, reaction: DjReaction) {
-        skips = 0
+        // Me gusta es pasajero (Iago lo usa para algo del momento, no para decir «esto es lo mío»): empuja poco,
+        // menos que oírla entera, no borra los saltos seguidos, no saca al artista del apartado ni arma Remate.
+        // Guardarla u oírla entera sí.
+        // (Los saltos a cero se apuntan para la cola en el syncReactionIntoSnapshots de abajo.)
+        if (reaction != DjReaction.Like) {
+            skips = 0
+            banned.remove(p.track.who)
+            skippedArtists.remove(p.track.who)
+        }
         val strength = when (reaction) {
             DjReaction.Save -> 3.0
-            DjReaction.Like -> 2.8
             DjReaction.FullListen -> 2.1
+            DjReaction.Like -> 1.2
             DjReaction.FastSkip -> 0.0
         }
         val vibe = effectiveVibe(p.track, p.vias)
         // Evitar duplicar exactamente el mismo boost si ya existe para la misma canción y reacción igual o mayor.
         val existing = boosts.firstOrNull { it.track.key == p.track.key }
         if (existing != null) {
-            existing.remaining = 5
+            // Una reacción más floja (Me gusta tras Guardar) no alarga el refuerzo que ya había; una igual
+            // (dos Me gusta) o más fuerte lo renueva entero.
+            if (strength >= existing.strength) existing.remaining = 5
             if (strength > existing.strength) {
                 boosts.remove(existing)
                 boosts += Boost(p.track, p.vias, vibe, remaining = 5, strength = strength)
@@ -1440,15 +1885,19 @@ class Dj(
             boosts += Boost(p.track, p.vias, vibe, remaining = 5, strength = strength)
         }
         // Mantener viva la zona de la tanda y traer más temas afines.
-        region.merge(p.track.who, 0.9, ::maxOf)
-        p.vias.forEach { region.merge(it, 0.6, ::maxOf) }
+        val warmed = LinkedHashMap<String, Double>()
+        p.vias.forEach { warmed[it] = 0.6 }
+        warmed[p.track.who] = 0.9
+        for ((k, v) in warmed) region.merge(k, v, ::maxOf)
+        syncReactionIntoSnapshots(warmed)
         if (p.kind != Kind.FAMILIAR) {
             follow(p.track)
-            val explicitRemate = reaction == DjReaction.Like || reaction == DjReaction.Save
+            val explicitRemate = reaction == DjReaction.Save
             val targetDisc = if (mood == DjMood.Descubrir) 0.65 else 0.10
             val total = totalPicksIncludingStaged().coerceAtLeast(1)
             val actualDisc = totalDiscoveryIncludingStaged().toDouble() / total
-            if (explicitRemate || (mood != DjMood.Descubrir && actualDisc >= targetDisc)) {
+            val ratioRemate = reaction != DjReaction.Like && mood != DjMood.Descubrir && actualDisc >= targetDisc
+            if (explicitRemate || ratioRemate) {
                 pendingRemate = Remate(
                     vibe = vibe,
                     vias = p.vias + p.track.who,
@@ -1458,7 +1907,8 @@ class Dj(
                 )
             }
         }
-        if (p.kind == Kind.FAMILIAR || reaction == DjReaction.Like || reaction == DjReaction.Save) {
+        // Me gusta tampoco pide radio, ni con una familiar: es lo del momento, no un rumbo para la sesión.
+        if (reaction != DjReaction.Like && (p.kind == Kind.FAMILIAR || reaction == DjReaction.Save)) {
             radio(p.track)
         }
         log("refuerzo (${reaction.name}): ${p.track.artist} — ${p.track.title}")
@@ -1545,9 +1995,11 @@ class Dj(
         } else base
         if (filtered.isEmpty()) return null
         val options = filtered.filter { it.songs.size >= 2 }.ifEmpty { filtered }
+        // Saltar el ambiente busca justo otra cosa: ahí no se tira del género de la tanda que se deja.
+        val fromGenre = if (genre == null && from != null && !jumpAway) mainGenre(from) else null
         val weight = { a: Profile.Artist ->
             a.affinity.pow(0.65) * artistMoodAndCooldownWeight(a) * branchMultiplier(a.key, setOf(a.key), a.vibe) *
-                artistGenreShare(a).pow(1.5)
+                artistGenreShare(a).pow(1.5) * genreContinuity(a, fromGenre)
         }
         val avoided = if (avoidedRegions.isNotEmpty()) avoidedRegions else region.keys
         if (from != null && jumpAway) {
@@ -1561,50 +2013,76 @@ class Dj(
             return weighted(options, weight)
         }
         if (from == null || random.nextDouble() < JUMP) return weighted(options, weight)
-        val kin = options.map { it to profile.sim(from, it) }.filter { it.second >= 0.03 && it.first.key !in region }
+        // Con «Todo», los del mismo género que la tanda que acaba también son opción aunque no se parezcan tanto: si
+        // no, solo quedaban parientes de otro estilo y el peso por género no tenía a quién favorecer.
+        // Tras una racha larga en ese género, también los de otros estilos, aunque no se parezcan (si no, nunca cambiaba).
+        val longStreak = fromGenre != null && genreStreak(fromGenre) >= LOOSE_EASIER_AFTER_PICKS
+        val kin = options.map { it to profile.sim(from, it) }.filter { (a, s) ->
+            a.key !in region && (s >= 0.03 || (fromGenre != null && (longStreak || mainGenre(a) == fromGenre)))
+        }
         return weighted(kin) { (a, s) -> weight(a) * exp(-((s - 0.15) / 0.12).pow(2)) }?.first ?: weighted(options, weight)
     }
 
     /** Lo que fue centro hace poco tarda en volver a serlo (casi nada hoy, la mitad en tres días…). */
-    private fun cooldown(a: Profile.Artist) = memory.anchors[a.key]?.let { 1 - 0.9 * exp(-(now - it).toDouble() / (5 * DAY)) } ?: 1.0
+    private fun cooldown(a: Profile.Artist) = memory.anchors[a.key]?.let { 1 - 0.9 * exp(-(now - it).coerceAtLeast(0L).toDouble() / (5 * DAY)) } ?: 1.0
 
     /** Cuanto más tiempo sin oírla, mejor (hasta tres meses). Si no se sabe, como si hiciera bastante. */
-    private fun forgotten(t: Track) = profile.heardAt[t.key]?.let { minOf(1.0, sqrt((now - it).toDouble() / (90 * DAY))) } ?: 0.8
+    private fun forgotten(t: Track) = profile.heardAt[t.key]?.let { minOf(1.0, sqrt((now - it).coerceAtLeast(0L).toDouble() / (90 * DAY))) } ?: 0.8
 
     // ---- Lo que se pide fuera ----
 
     /** Lo de un artista tuyo: las suyas que no tienes, a quién se parece y, de ahí, artistas nuevos. */
+    /**
+     * Lo que se pide fuera solo trae datos: lo que cambian ([pool], [region], [cited], [links]…) se deja en [inbox] y
+     * lo aplica [drain] en el hilo del DJ, antes de elegir, reaccionar o esperar. En el PC las peticiones van en otro
+     * hilo que la elección y, si tocaban el estado a la vez, podían romperlo (ConcurrentModificationException).
+     */
+    private val inbox = ConcurrentLinkedQueue<() -> Unit>()
+
+    private fun post(change: () -> Unit) {
+        inbox += change
+    }
+
+    private fun drain() {
+        while (true) (inbox.poll() ?: break).invoke()
+        jobs.removeAll { !it.isActive }
+    }
+
     private fun explore(a: Profile.Artist) {
         if (!explored.add(a.key)) return
+        val known = a.id ?: memory.ids[a.key]
         jobs += scope.launch {
-            val id = a.id ?: memory.ids[a.key] ?: catalog.find(a.name)?.also { memory.ids[a.key] = it } ?: return@launch
+            val id = known ?: catalog.find(a.name)?.also { found -> post { memory.ids[a.key] = found } } ?: return@launch
             val info = catalog.artist(id) ?: return@launch
-            for ((rid, name) in info.related) {
-                val b = profile.find(rid, name)
-                if (b != null && b.songs.isNotEmpty()) link(a.key, b.key) else cite(rid, a.key)
-            }
-            catalog.songs(info).forEachIndexed { rank, t ->
-                if (t.who == a.key || t.artistId == id) {
-                    if (t.key !in profile.weight) {
-                        add(
-                            Candidate(
-                                track = t,
-                                kind = Kind.DEEP,
-                                vias = setOf(a.key),
-                                weight = 1.15 / (1.0 + rank * 0.45),
-                                consensusCount = if (a.affinity >= 0.4) 2 else 1,
-                                sourceRank = rank,
-                            ),
-                        )
+            val songs = catalog.songs(info)
+            post {
+                for ((rid, name) in info.related) {
+                    val b = profile.find(rid, name)
+                    if (b != null && b.songs.isNotEmpty()) link(a.key, b.key) else cite(rid, a.key)
+                }
+                songs.forEachIndexed { rank, t ->
+                    if (t.who == a.key || t.artistId == id) {
+                        if (t.key !in profile.weight) {
+                            add(
+                                Candidate(
+                                    track = t,
+                                    kind = Kind.DEEP,
+                                    vias = setOf(a.key),
+                                    weight = 1.15 / (1.0 + rank * 0.45),
+                                    consensusCount = if (a.affinity >= 0.4) 2 else 1,
+                                    sourceRank = rank,
+                                ),
+                            )
+                        }
                     }
                 }
+                meet()
             }
-            meet()
         }
     }
 
     /** Conoce a los artistas nuevos más citados desde la tanda: sus canciones más oídas y si hacen de puente. */
-    private suspend fun meet() {
+    private fun meet() {
         val best = cited.values.filter { it.id !in met }
             .map { c ->
                 val baseScore = c.by.sumOf { k ->
@@ -1615,10 +2093,18 @@ class Dj(
             .filter { it.second > 0 }
             .sortedByDescending { it.second }
             .take(3)
+            .map { it.first }
+            .filter { met.add(it.id) }
+        if (best.isEmpty()) return
+        jobs += scope.launch {
+            val found = best.mapNotNull { c -> catalog.artist(c.id)?.let { c to it } }
+            if (found.isNotEmpty()) post { meetFound(found) }
+        }
+    }
+
+    private fun meetFound(found: List<Pair<Cited, ArtistInfo>>) {
         val anchorGenres = anchor.songs.values.mapNotNull(genreOf).toSet()
-        for ((c, _) in best) {
-            if (!met.add(c.id)) continue
-            val info = catalog.artist(c.id) ?: continue
+        for ((c, info) in found) {
             val who = artistKey(info.name)
             // Los tuyos a los que él se parece también lo citan, aunque no salga en sus páginas.
             val mine = info.related.mapNotNull { (id, n) -> profile.find(id, n)?.takeIf { it.songs.isNotEmpty() } }
@@ -1675,7 +2161,14 @@ class Dj(
         if (!radioSeeded.add(t.id)) return
         val center = if (::anchor.isInitialized) anchor.key else t.who
         jobs += scope.launch {
-            catalog.radio(t.id).drop(1).forEachIndexed { rank, r ->
+            val found = catalog.radio(t.id).drop(1)
+            post { radioFound(found, center) }
+        }
+    }
+
+    private fun radioFound(found: List<Track>, center: String) {
+        run {
+            found.forEachIndexed { rank, r ->
                 pool[r.key]?.let {
                     it.weight *= 1.45
                     it.consensusCount += 1
@@ -1722,23 +2215,25 @@ class Dj(
         if (!explored.add(t.who)) return
         jobs += scope.launch {
             val info = catalog.artist(id) ?: return@launch
-            for ((rid, name) in info.related) {
-                val b = profile.find(rid, name)
-                if (b != null && b.songs.isNotEmpty()) region.merge(b.key, 0.5, ::maxOf) else cite(rid, t.who)
+            post {
+                for ((rid, name) in info.related) {
+                    val b = profile.find(rid, name)
+                    if (b != null && b.songs.isNotEmpty()) region.merge(b.key, 0.5, ::maxOf) else cite(rid, t.who)
+                }
+                info.top.filter { it.who == t.who && it.key !in profile.weight }.forEachIndexed { rank, s ->
+                    add(
+                        Candidate(
+                            track = s,
+                            kind = Kind.NEW,
+                            vias = setOf(t.who),
+                            weight = 0.95 / (1.0 + rank * 0.5),
+                            consensusCount = 2,
+                            sourceRank = rank,
+                        ),
+                    )
+                }
+                meet()
             }
-            info.top.filter { it.who == t.who && it.key !in profile.weight }.forEachIndexed { rank, s ->
-                add(
-                    Candidate(
-                        track = s,
-                        kind = Kind.NEW,
-                        vias = setOf(t.who),
-                        weight = 0.95 / (1.0 + rank * 0.5),
-                        consensusCount = 2,
-                        sourceRank = rank,
-                    ),
-                )
-            }
-            meet()
         }
     }
 
@@ -1821,6 +2316,19 @@ class Dj(
 
     companion object {
         const val FAST_SKIP_MS = 20_000L
+        /** Elecciones que un artista queda fuera tras el primer salto rápido de la sesión, y tras el segundo. */
+        const val BAN_FIRST = 6
+        const val BAN_AGAIN = 30
+        private const val MAX_NUDGES = 16
+
+        /** Cambios por tempo como mucho por hueco de la cola; luego vuelve la original. */
+        const val MAX_TEMPO_SWAPS = 3
+
+        /** Cambios por tempo como mucho mientras suena una canción (entre todos los huecos). */
+        const val MAX_TEMPO_SWAPS_PER_SONG = 4
+
+        /** Elecciones que una canción apartada por tempo no puede volver a salir. */
+        const val TEMPO_SKIP_PICKS = 8
         private val JUNK_TITLE = Regex("""\([^)]*\bmixed\b[^)]*\)|\bmix cut\b|\b(abgt|asot|gdjb)\s?\d+|\b(intro|interlude|outro|skit|karaoke)\b""", RegexOption.IGNORE_CASE)
         private val JUNK_ARTIST = Regex("""kidz bop|karaoke|tribute|rockabye baby|\b8[- ]bit\b""", RegexOption.IGNORE_CASE)
         /** La primera es siempre tuya (sin esperar a la red). */
@@ -1831,6 +2339,15 @@ class Dj(
         private const val FAR = 0.06
         /** Cuántos cambios de tanda sin puente van a cualquier otra parte de lo tuyo. */
         private const val JUMP = 0.12
+        // Con «Todo»: canciones y centros de tanda de otro género que la tanda que suena (ver [looseGenreFit]).
+        private const val LOOSE_OTHER_GENRE_FIT = 0.4
+        private const val LOOSE_UNKNOWN_GENRE_FIT = 0.85
+        private const val LOOSE_OTHER_ANCHOR_FIT = 0.2
+        private const val LOOSE_UNKNOWN_ANCHOR_FIT = 0.6
+        // Llevando muchas seguidas del mismo género, cambiar de estilo cuesta menos (≈ 3 tandas) y luego nada (≈ 4–5).
+        private const val LOOSE_EASIER_AFTER_PICKS = 9
+        private const val LOOSE_FREE_AFTER_PICKS = 14
+        private const val LOOSE_EASIER_ANCHOR_FIT = 0.5
         private const val SKIPPED = 0.15
         /** Lo que no tiene nada que ver con la anterior aún puede salir, pero mucho menos. */
         private const val FLOW_FLOOR = 0.04

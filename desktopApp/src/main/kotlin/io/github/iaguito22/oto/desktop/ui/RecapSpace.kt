@@ -58,7 +58,7 @@ internal fun RecapSpace(recap: Recap, palette: ArtworkPalette, artwork: (String)
     // Las barras crecen al entrar, con un poco de rebote.
     val grow = remember { Animatable(0f) }
     LaunchedEffect(Unit) { grow.animateTo(1f, spring(dampingRatio = .62f, stiffness = 120f)) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding=PaddingValues(bottom=28.dp+LocalFloatingDockInset.current), verticalArrangement = Arrangement.spacedBy(28.dp)) {
         item(key = "header") {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 HoverAction(MobileIcons.arrowBack, "Volver", onClick = onBack)

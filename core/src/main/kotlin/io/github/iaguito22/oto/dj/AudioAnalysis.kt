@@ -346,7 +346,7 @@ data class AudioMetrics(
         private const val MAX_ANCHOR_DISTANCE_MS = 12_000L
         private const val WHOLE_SLACK_MS = 8_000L
         /** Sube al cambiar lo que se calcula: lo guardado con una versión anterior se vuelve a analizar. */
-        const val VERSION = 4
+        const val VERSION = 5
 
         fun fromJson(o: JSONObject): AudioMetrics? {
             val id = o.optString("id").ifEmpty { return null }
@@ -410,6 +410,7 @@ data class AudioMetrics(
 object AudioAnalyzer {
     private const val LOW_CUT_HZ = 150.0
     private const val HIGH_CUT_HZ = 2_000.0
+    private const val HAT_CUT_HZ = 3_000.0
     private const val MIN_BPM = 62.0
     private const val MAX_BPM = 186.0
     private const val PREFERRED_CENTER_BPM = 118.0
@@ -442,6 +443,13 @@ object AudioAnalyzer {
         private var bassSum = 0.0
         private var midSum = 0.0
         private var highSum = 0.0
+        // Agudos limpios (paso alto de 4 polos a 3 kHz, 24 dB/oct) solo para probar que hay batería: la banda `high`
+        // (señal menos graves) deja pasar residuo de un bajo fuerte.
+        private val alphaHat = (1.0 / (1.0 + 2.0 * PI * HAT_CUT_HZ / rate)).toFloat()
+        private val hatX = FloatArray(4)
+        private val hatY = FloatArray(4)
+        private var hatSum = 0.0
+        private val hatEnv = FloatArrayBuilder()
         private var kwSum = 0.0
         private var countInFrame = 0
 
@@ -536,6 +544,14 @@ object AudioAnalyzer {
             hp2 += alphaMid * (hp1 - hp2)
             val mid = hp2 - lp2
             val high = x - hp2
+            var hat = x
+            for (st in 0 until 4) {
+                val y = alphaHat * (hatY[st] + hat - hatX[st])
+                hatX[st] = hat
+                hatY[st] = y
+                hat = y
+            }
+            hatSum += (hat * hat).toDouble()
             fullSum += (x * x).toDouble()
             bassSum += (lp2 * lp2).toDouble()
             midSum += (mid * mid).toDouble()
@@ -563,6 +579,8 @@ object AudioAnalyzer {
                 bassEnv.add(sqrt(bassSum / frameSamples).toFloat())
                 midEnv.add(sqrt(midSum / frameSamples).toFloat())
                 highEnv.add(sqrt(highSum / frameSamples).toFloat())
+                hatEnv.add(sqrt(hatSum / frameSamples).toFloat())
+                hatSum = 0.0
                 kwEnv.add((kwSum / frameSamples).toFloat())
                 fullSum = 0.0
                 bassSum = 0.0
@@ -620,6 +638,7 @@ object AudioAnalyzer {
                 bassEnv.add(sqrt(bassSum / countInFrame).toFloat())
                 midEnv.add(sqrt(midSum / countInFrame).toFloat())
                 highEnv.add(sqrt(highSum / countInFrame).toFloat())
+                hatEnv.add(sqrt(hatSum / countInFrame).toFloat())
                 kwEnv.add((kwSum / countInFrame).toFloat())
             }
             return analyzeEnvelopes(
@@ -629,6 +648,7 @@ object AudioAnalyzer {
                 frameMs = frameMs,
                 midEnv = midEnv.toArray(),
                 highEnv = highEnv.toArray(),
+                hatEnv = hatEnv.toArray(),
                 kwEnv = kwEnv.toArray(),
                 specTimeMs = specTimeMs.toArray(),
                 specHarsh = specHarsh.toArray(),
@@ -675,6 +695,7 @@ object AudioAnalyzer {
         frameMs: Double,
         midEnv: FloatArray? = null,
         highEnv: FloatArray? = null,
+        hatEnv: FloatArray? = null,
         kwEnv: FloatArray? = null,
         specTimeMs: FloatArray? = null,
         specHarsh: FloatArray? = null,
@@ -833,6 +854,7 @@ object AudioAnalyzer {
             bassEnv = bassEnv,
             midEnv = midEnv,
             highEnv = highEnv,
+            hatEnv = hatEnv,
             kwEnv = kwEnv,
             onset = onset,
             bassRef = bassRef,
@@ -962,6 +984,7 @@ object AudioAnalyzer {
         bassEnv: FloatArray,
         midEnv: FloatArray?,
         highEnv: FloatArray?,
+        hatEnv: FloatArray?,
         kwEnv: FloatArray?,
         onset: FloatArray,
         bassRef: Float,
@@ -1037,6 +1060,98 @@ object AudioAnalyzer {
             } else {
                 boundaries[boundaries.lastIndex] = durationMs
             }
+        }
+
+        // Golpes de graves: subida de la envolvente de graves en ~30 ms, medida contra el nivel de graves de la canción
+        // (`bassRef`). Un bombo sube casi todo su nivel de golpe; unos hi-hats o un bajo sostenido apenas la mueven.
+        val riseFrames = (30.0 / frameMs).roundToInt().coerceAtLeast(1)
+        val bassHits = FloatArray(n) { k -> if (k < riseFrames) 0f else (bassEnv[k] - bassEnv[k - riseFrames]).coerceAtLeast(0f) }
+        val hitRef = bassRef
+        val hitWin = (35.0 / frameMs).roundToInt().coerceAtLeast(1)
+        fun hitNear(ms: Double): Float {
+            val c = (ms / frameMs).roundToInt()
+            var m = 0f
+            for (k in (c - hitWin).coerceAtLeast(1)..(c + hitWin).coerceAtMost(n - 1)) if (bassHits[k] > m) m = bassHits[k]
+            return m
+        }
+        // Golpes agudos (subida de la envolvente de agudos): caja, hi-hats, el clic del bombo. Prueban que hay batería;
+        // un bajo o un piano solos casi no los dan. Sin envolvente de agudos, la curva de golpes general.
+        val highSrc = hatEnv?.takeIf { it.size >= n } ?: highEnv ?: onset
+        val highHits = FloatArray(n) { k -> if (k < riseFrames || k >= highSrc.size) 0f else (highSrc[k] - highSrc[k - riseFrames]).coerceAtLeast(0f) }
+        val highRef = highHits.filter { it > 0f }.sorted().let { if (it.isEmpty()) 0f else it[(it.size * 9) / 10] }
+        // Sin agudos de verdad (un bajo solo: lo que pasa del filtro de 24 dB/oct es residuo) no hay batería que probar.
+        // Los golpes de batería llegan a ~−20 dB de los graves (×0,1); el residuo de un bajo, muy por debajo de ×0,02.
+        // Nivel de los picos de agudos (percentil 97: golpes cortos como un clic o un hi-hat seco cuentan aunque el resto
+        // del tiempo no haya agudos).
+        val highLevel = hatEnv?.takeIf { it.size >= n }?.let { percentile(it, 0.97) }
+            ?: highEnv?.let { percentile(it, 0.97) } ?: Float.MAX_VALUE
+        val hasHighs = highLevel >= bassRef * 0.02f
+        // Rasgo propio del bombo: el grave cae rápido tras el golpe (en ~120 ms baja al menos un 25 % desde su pico; un bajo sostenido cae ~10 %). Un
+        // bajo o la mano izquierda de un piano sostienen la nota y no caen así.
+        val decayFrames = (120.0 / frameMs).roundToInt().coerceAtLeast(2)
+        val peakWin = (60.0 / frameMs).roundToInt().coerceAtLeast(1)
+        fun decaysFast(ms: Double): Boolean {
+            val c = (ms / frameMs).roundToInt()
+            var peakIdx = -1
+            var peak = 0f
+            for (k in (c - hitWin).coerceAtLeast(0)..(c + peakWin).coerceAtMost(n - 1)) if (bassEnv[k] > peak) { peak = bassEnv[k]; peakIdx = k }
+            if (peakIdx < 0 || peak <= 1e-6f) return false
+            val after = bassEnv[(peakIdx + decayFrames).coerceAtMost(n - 1)]
+            return after <= peak * 0.75f
+        }
+        fun kickOnBeat(sMs: Long, eMs: Long): Double {
+            if (!hasPulse || hitRef <= 1e-6f) return 0.0
+            // Beats del compás sobre la rejilla: desde el ancla anterior y con el periodo local entre las dos anclas que
+            // rodean el compás (con deriva o anclas escasas, el periodo global se saldría de la ventana de ±35 ms).
+            var period = nominalPeriod
+            val anchor = if (tempo.grid.isNotEmpty()) {
+                var gIdx = tempo.grid.binarySearch(sMs)
+                if (gIdx < 0) gIdx = -gIdx - 1
+                val prev = tempo.grid.getOrNull(gIdx - 1)
+                val next = tempo.grid.getOrNull(gIdx)
+                if (prev != null && next != null && next > prev) {
+                    val beatsBetween = kotlin.math.round((next - prev) / nominalPeriod)
+                    if (beatsBetween >= 1.0) {
+                        val local = (next - prev) / beatsBetween
+                        if (abs(local / nominalPeriod - 1.0) <= 0.03) period = local
+                    }
+                }
+                (prev ?: next)!!.toDouble()
+            } else tempo.beatPhaseMs.toDouble()
+            var t = anchor + kotlin.math.ceil((sMs - anchor - period * 0.25) / period) * period
+            var beats = 0
+            var kicks = 0
+            var drums = 0
+            var onSum = 0.0
+            var offSum = 0.0
+            while (t < eMs - period * 0.25) {
+                val on = hitNear(t)
+                val off = hitNear(t + period * 0.5)
+                onSum += on
+                offSum += off
+                val kick = on >= hitRef * 0.30f && on >= off * 0.8f && decaysFast(t)
+                if (kick) kicks++
+                val c = (t / frameMs).roundToInt()
+                var hit = 0f
+                for (k in (c - hitWin).coerceAtLeast(0)..(c + hitWin).coerceAtMost(n - 1)) if (highHits[k] > hit) hit = highHits[k]
+                // Batería en el beat: golpe agudo (caja del 2 y el 4, hi-hat o el clic del bombo). Un bajo o un piano
+                // solos no lo dan.
+                if (hasHighs && highRef > 1e-6f && hit >= highRef * 0.35f) drums++
+                beats++
+                t += period
+            }
+            if (beats == 0 || onSum <= 1e-9) return 0.0
+            // Bombo en al menos la mitad de los beats (4 al suelo, o 1 y 3 con caja en 2 y 4), batería en casi todos y
+            // que el bombo destaque sobre el contratiempo (un bajo en corcheas no es bombo). Unos hi-hats solos no
+            // suben la envolvente de graves: dan 0.
+            val kickRate = (kicks.toDouble() / beats / 0.5).coerceAtMost(1.0)
+            val drumRate = drums.toDouble() / beats
+            // Golpes de grave igual de fuertes en el beat que en el contratiempo y sin batería: es un bajo percusivo en
+            // corcheas, no un bombo al pulso. Con batería (rock: bombo + bajo en corcheas) sí vale.
+            val offRatio = offSum / onSum
+            if (offRatio >= 0.85 && drums < beats * 0.6) return 0.0
+            val contrast = (1.0 - 0.35 * offRatio).coerceIn(0.0, 1.0)
+            return (kickRate * (0.4 + 0.6 * drumRate) * contrast).coerceIn(0.0, 1.0)
         }
 
         var specPtr = 0
@@ -1120,6 +1235,7 @@ object AudioAnalyzer {
                 harshness = harshness,
                 vocalRatio = vocalRatio,
                 chroma = barChroma,
+                kickOnBeat = kickOnBeat(sMs, eMs),
             )
         }
         return SpectralBarsResult(keyRes.keyName, keyRes.camelot, keyRes.confidence, globalChroma, bars)
@@ -1700,6 +1816,9 @@ class AudioAnalysisCache(
     private val lock = Any()
     @Volatile private var loaded = false
 
+    /** Tempo y bombo de todo lo analizado, aunque suba [AudioMetrics.VERSION] (ver [DjTempoIndex]). */
+    val tempoIndex = DjTempoIndex(file?.let { File(it.parentFile, "tempo-index.json") })
+
     init {
         loadIfNeeded()
     }
@@ -1709,9 +1828,16 @@ class AudioAnalysisCache(
         return cache[trackId]
     }
 
+    /** Lo que se sabe del tempo de [trackId] para elegir canciones: del índice (que recoge cada análisis). */
+    fun tempoProfile(trackId: String): DjTempoMatch.TempoProfile? {
+        loadIfNeeded()
+        return tempoIndex.get(trackId) ?: cache[trackId]?.let(DjTempoMatch::profileOf)
+    }
+
     fun put(metrics: AudioMetrics, persist: Boolean = false) {
         loadIfNeeded()
         cache[metrics.trackId] = metrics
+        tempoIndex.offer(DjTempoMatch.profileOf(metrics))
         trimIfNeeded()
         if (persist) save()
     }
@@ -1738,6 +1864,7 @@ class AudioAnalysisCache(
     }
 
     fun save() {
+        tempoIndex.save()
         val f = file ?: return
         synchronized(lock) {
             trimIfNeeded()
@@ -1765,7 +1892,15 @@ class AudioAnalysisCache(
                 val f = file?.takeIf { it.exists() } ?: return@runCatching
                 val root = JSONObject(f.readText())
                 for (k in root.keys()) {
-                    root.optJSONObject(k)?.let(AudioMetrics::fromJson)?.let { cache[k] = it }
+                    val o = root.optJSONObject(k) ?: continue
+                    val m = AudioMetrics.fromJson(o)
+                    if (m != null) {
+                        cache[k] = m
+                        tempoIndex.offer(DjTempoMatch.profileOf(m))
+                    } else {
+                        // De una versión anterior: se reanaliza, pero su tempo sigue sirviendo para elegir.
+                        tempoIndex.offer(DjTempoMatch.TempoProfile.fromAnalysisJson(o))
+                    }
                 }
             }
             loaded = true
@@ -1937,7 +2072,7 @@ object DjTransitionPlanner {
         val effectiveDjSession = isDjSession && !incomingFromStart
         val hasV4Bars = outgoingAudio?.bars?.isNotEmpty() == true && incomingAudio?.bars?.isNotEmpty() == true
         val hasSyncedPair = outgoingLyrics != null && incomingLyrics != null
-        if (baseFade > 0L && (hasV4Bars || hasSyncedPair || (!effectiveDjSession && incomingDurationMs > 0L && (outgoingAudio?.analyzedMs ?: 0L) > 0L))) {
+        if (baseFade > 0L && (outgoingVocals.any { it.isChorus } || outgoingLyrics != null || hasV4Bars || hasSyncedPair || (!effectiveDjSession && incomingDurationMs > 0L && (outgoingAudio?.analyzedMs ?: 0L) > 0L))) {
             val spec = DjBridgePlanner.plan(
                 outgoingDurationMs = safeOutDur,
                 incomingDurationMs = incomingDurationMs,
@@ -1981,10 +2116,16 @@ object DjTransitionPlanner {
 
         // Solo se cuadran beats si las dos tienen pulso claro y rejilla: con un BPM dudoso, dos baterías a la vez
         // durante 10 s suenan desfasadas. Un cambio de tanda o de género con el mismo tempo también se cuadra.
+        // Y bombo al pulso en las dos (final de la saliente y principio de la entrante): sin él no se cuadra. Esta ruta
+        // solo se usa si a alguna le faltan compases, así que en la práctica no cuadra nunca (sin prueba de bombo); se
+        // deja la comprobación por si llega un análisis con compases solo en una.
+        val kicksOk = outgoingAudio != null && incomingAudio != null &&
+            DjTempoMatch.kickOnBeat(outgoingAudio.bars, safeOutDur - 40_000L, safeOutDur) >= DjTempoMatch.MIN_KICK_ON_BEAT &&
+            DjTempoMatch.kickOnBeat(incomingAudio.bars, 0L, 30_000L) >= DjTempoMatch.MIN_KICK_ON_BEAT
         val bothReliable = outgoingAudio?.beatReliable == true && incomingAudio?.beatReliable == true
         // Sin cuadrar, pero con el pulso de la que se va claro: bucle de su último compás en vez de un fundido a secas.
         var style = when {
-            bothReliable && bpmDiffPct != null && bpmDiffPct <= BEAT_MATCH_MAX_PCT -> DjTransitionStyle.BeatMatchLongMix
+            bothReliable && kicksOk && bpmDiffPct != null && bpmDiffPct <= BEAT_MATCH_MAX_PCT -> DjTransitionStyle.BeatMatchLongMix
             outgoingAudio?.beatReliable == true && (auto || baseFade >= MIN_LOOP_FADE_MS) -> DjTransitionStyle.LoopRollOut
             else -> DjTransitionStyle.EchoOutFilterSweep
         }
@@ -2271,7 +2412,7 @@ object DjTransitionPlanner {
         )
     }
 
-    private fun fromBridgeSpec(
+    internal fun fromBridgeSpec(
         spec: DjBridgeSpec,
         outgoingAudio: AudioMetrics?,
         incomingAudio: AudioMetrics?,
@@ -2281,16 +2422,19 @@ object DjTransitionPlanner {
             DjBridgeStyle.BeatMatchLongMix -> DjTransitionStyle.BeatMatchLongMix
             DjBridgeStyle.EnergyDropCut -> DjTransitionStyle.EnergyDropCut
             DjBridgeStyle.FilterEcho -> DjTransitionStyle.EchoOutFilterSweep
-            DjBridgeStyle.SmartFade -> DjTransitionStyle.SmoothEqualPower
+            DjBridgeStyle.SmartFade, DjBridgeStyle.OutroTail -> DjTransitionStyle.SmoothEqualPower
         }
         val bpmRel = if (spec.bpmA > 0.0 && spec.bpmB > 0.0) DjHarmonic.bpmRelation(spec.bpmA, spec.bpmB).relDiffPct else null
         return DjTransitionPlan(
             style = mappedStyle,
-            fadeDurationMs = spec.transitionDurationMs.coerceAtLeast(350L),
+            fadeDurationMs = if (spec.transitionDurationMs == 0L) 0L else spec.transitionDurationMs.coerceAtLeast(350L),
             incomingTempoNudge = spec.tempoMatchRatio.coerceIn(0.75, 1.35),
-            outgoingSpeed = if (spec.tempoMatchRatio != 1.0) (1.0 / spec.tempoMatchRatio).coerceIn(0.80, 1.25) else 1.0,
+            outgoingSpeed = if (DjTempoMatch.isStretched(spec.tempoMatchRatio)) (1.0 / spec.tempoMatchRatio).coerceIn(0.80, 1.25) else 1.0,
             bassSwapAt = spec.bassSwapFrac,
-            phaseLock = spec.style == DjBridgeStyle.BeatMatchLongMix,
+            // Cuadre de fase en vivo también en el eco y el fundido suave a tempo. A mitad/doble tempo también: el
+            // error se mide sobre el periodo más corto (`DjTempoMatch.phaseErrorMs`).
+            phaseLock = spec.style == DjBridgeStyle.BeatMatchLongMix ||
+                (spec.beatAligned == true && (spec.style == DjBridgeStyle.FilterEcho || spec.style == DjBridgeStyle.SmartFade)),
             outgoingAudio = outgoingAudio,
             incomingAudio = incomingAudio,
             outgoingFadeStartMs = spec.cueOutStartMs,
@@ -2308,7 +2452,7 @@ object DjTransitionPlanner {
             loopStartMs = spec.lyricLoop?.outLoopStartMs ?: -1L,
             loopBeats = spec.lyricLoop?.repeats ?: 0,
             loopBeatMs = spec.lyricLoop?.beatMs ?: 0.0,
-            bridgeSpec = spec,
+            bridgeSpec = spec.takeIf { it.transitionDurationMs > 0L },
         )
     }
 

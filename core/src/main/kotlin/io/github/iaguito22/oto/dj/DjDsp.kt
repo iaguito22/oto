@@ -31,8 +31,21 @@ object DjDsp {
 
     fun linToDb(v: Double): Double = 20.0 * log10(max(v, 1e-9))
 
-    /** Saturación musical suave para picos transitorios antes del limitador final. */
-    fun softClip(x: Float): Float = (tanh((x / 1.08f).toDouble()) * 1.08).toFloat()
+    /**
+     * Seguro para los picos que se le escapan al limitador: lineal hasta [SOFT_CLIP_KNEE] y, por encima, curva suave que
+     * nunca pasa de [SOFT_CLIP_MAX]. Antes era un `tanh` sobre TODO el audio: saturaba cada muestra del puente (≈2 % de
+     * tercer armónico a media escala, ≈6 % cerca del techo) y la entrante sonaba peor hasta el relevo al archivo.
+     */
+    fun softClip(x: Float): Float {
+        val a = abs(x)
+        if (a <= SOFT_CLIP_KNEE) return x
+        val room = SOFT_CLIP_MAX - SOFT_CLIP_KNEE
+        val y = SOFT_CLIP_KNEE + room * tanh(((a - SOFT_CLIP_KNEE) / room).toDouble()).toFloat()
+        return if (x < 0f) -y else y
+    }
+
+    const val SOFT_CLIP_KNEE = 0.89f
+    const val SOFT_CLIP_MAX = 0.995f
 
     fun hannWindow(n: Int): FloatArray = FloatArray(n) { i ->
         (0.5 * (1.0 - cos(2.0 * PI * i / max(1, n)))).toFloat()
@@ -774,7 +787,7 @@ object DjDsp {
 
         var maxDev = 0f
         for (r in speedCurve) maxDev = max(maxDev, abs(r - 1f))
-        if (maxDev < 0.004f) return stereo.copyOf()
+        if (maxDev <= DjTempoMatch.STRETCH_EPS.toFloat()) return stereo.copyOf()
 
         val mono = FloatArray(srcFrames) { f -> 0.5f * (stereo[f * 2] + stereo[f * 2 + 1]) }
         val win = ((0.042 * sampleRate).roundToInt() and 0x7FFFFFFE).coerceIn(512, 2400)
@@ -823,13 +836,16 @@ object DjDsp {
                         n += 4
                     }
                     val den = sqrt(eA * eB) + 1e-8
-                    val score = num / den
+                    val score = num / den - 0.03 * abs(k).toDouble() / tol
                     if (score > bestCorr) {
                         bestCorr = score
                         coarseBest = k
                     }
                     k += 4
                 }
+                // La búsqueda fina usa otro muestreo: todas sus correlaciones pueden ser ligeramente menores.
+                // Conservar el ganador grueso evita volver al punto esperado y sumar ventanas fuera de fase.
+                bestStart = expected + coarseBest
                 for (f in max(minOff, coarseBest - 3)..min(maxOff, coarseBest + 3)) {
                     val cand = expected + f
                     var num = 0.0
@@ -843,7 +859,7 @@ object DjDsp {
                         eA += a * a
                         eB += b * b
                     }
-                    val score = num / (sqrt(eA * eB) + 1e-8)
+                    val score = num / (sqrt(eA * eB) + 1e-8) - 0.03 * abs(f).toDouble() / tol
                     if (score > bestCorr) {
                         bestCorr = score
                         bestStart = cand

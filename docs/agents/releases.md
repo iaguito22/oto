@@ -20,7 +20,7 @@
 
 - Publicada: **v2.0.0** (Latest), etiqueta → `2c64f3c`. Instalada en el PC (04/11) y en el móvil habitual.
 - Después de la 2.0.0, `main` tiene más commits (ventanas, volumen, iconos 2K, varias pantallas, bandeja), ya subidos. Lo instalado en el PC los incluye.
-- MSI y lanzador sin firma Authenticode: no prometer ausencia de avisos SmartScreen ni tocar protecciones. Defender analizó el MSI de la 1.2.3 sin amenazas.
+- MSI y lanzador sin firma Authenticode: Windows SmartScreen muestra aviso al instalar. Instrucciones de instalación y contexto en [`docs/SMARTSCREEN.md`](../SMARTSCREEN.md); copiar el bloque de ese archivo en la descripción de cada release de GitHub.
 
 ## MSI de la 2.0.0 sustituido — 05/11/2026
 

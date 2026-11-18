@@ -1,0 +1,111 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Instalador de Oto" Width="748" Height="494"
+        WindowStyle="None" AllowsTransparency="True" ResizeMode="NoResize"
+        Background="Transparent" WindowStartupLocation="CenterScreen"
+        FontFamily="Segoe UI" FontSize="14" Foreground="#F5F0F7"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Display">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#E1D9E8"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="14,7"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="11" Background="{TemplateBinding Background}"
+                                BorderThickness="{TemplateBinding BorderThickness}" BorderBrush="{TemplateBinding BorderBrush}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Opacity" Value="0.80"/></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Opacity" Value="0.64"/></Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Surface" Property="BorderBrush" Value="#BF9CCD"/></Trigger>
+                            <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value="0.45"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Border x:Name="Shell" Margin="10" CornerRadius="24" BorderBrush="#625568" BorderThickness="1">
+        <Border.Effect><DropShadowEffect BlurRadius="19" ShadowDepth="2" Opacity="0.65"/></Border.Effect>
+        <Border.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#302437" Offset="0"/>
+                <GradientStop Color="#211D29" Offset="0.55"/>
+                <GradientStop Color="#18171D" Offset="1"/>
+            </LinearGradientBrush>
+        </Border.Background>
+        <Grid Margin="20,12,20,14">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="37"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <Grid x:Name="TitleBar" Background="Transparent">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" IsHitTestVisible="False">
+                    <Grid Width="18" Height="18" Margin="1,0,8,0">
+                        <Ellipse Stroke="#D8B8E1" StrokeThickness="1.4"/>
+                        <Ellipse Fill="#D8B8E1" Width="5" Height="5"/>
+                    </Grid>
+                    <TextBlock Text="Oto" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                </StackPanel>
+                <Button x:Name="CloseButton" Content="&#x00D7;" FontSize="22" FontWeight="Normal"
+                        Width="34" Height="32" Padding="0" HorizontalAlignment="Right" VerticalAlignment="Center"
+                        Background="#312936" AutomationProperties.Name="Cerrar" IsCancel="True"/>
+            </Grid>
+            <StackPanel Grid.Row="1" Margin="0,9,0,15">
+                <TextBlock x:Name="Heading" Text="Instala Oto" FontSize="29" FontWeight="SemiBold"
+                           AutomationProperties.LiveSetting="Polite"/>
+                <TextBlock x:Name="Description" Text="Tu música y el DJ en una ventana."
+                           Foreground="#D1C5D2" Margin="1,4,0,0" TextWrapping="Wrap"/>
+            </StackPanel>
+            <Grid Grid.Row="2">
+                <Border x:Name="Artwork" CornerRadius="16" BorderThickness="1" BorderBrush="#615567" Margin="0,0,0,19">
+                    <Border.Background>
+                        <ImageBrush x:Name="Showcase" Stretch="UniformToFill" AlignmentY="Top"
+                                    Viewbox="0.071,0.069,0.890,0.861" ViewboxUnits="RelativeToBoundingBox"/>
+                    </Border.Background>
+                </Border>
+                <Border x:Name="FolderPanel" Visibility="Collapsed" CornerRadius="16" Margin="0,0,0,74"
+                        Background="#25202C" BorderBrush="#504353" BorderThickness="1" Padding="18">
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Carpeta de instalación" FontWeight="SemiBold" FontSize="18"/>
+                        <DockPanel Margin="0,12,0,0" LastChildFill="True">
+                            <Button x:Name="BrowseButton" DockPanel.Dock="Right" Content="Examinar…" Background="#38303E" Margin="8,0,0,0"/>
+                            <TextBox x:Name="FolderBox" Background="#19161E" Foreground="#F5F0F7" BorderBrush="#655168"
+                                     Padding="8,7" AutomationProperties.Name="Carpeta de instalación"/>
+                        </DockPanel>
+                        <TextBlock x:Name="FolderError" Margin="0,7,0,0" Foreground="#FFB6BA" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="ProgressPanel" Visibility="Collapsed" CornerRadius="16" Margin="0,0,0,74"
+                        Background="#25202C" BorderBrush="#504353" BorderThickness="1" Padding="22">
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock x:Name="ProgressLabel" Foreground="#E1D9E8" FontWeight="SemiBold"/>
+                        <ProgressBar IsIndeterminate="True" Height="5" Margin="0,14,0,0"
+                                     Foreground="#D8B8E1" Background="#3A2D43" BorderThickness="0"/>
+                    </StackPanel>
+                </Border>
+                <Border VerticalAlignment="Bottom" Margin="12,0" CornerRadius="16" Padding="10"
+                        Background="#F22B2533" BorderBrush="#76627E" BorderThickness="1">
+                    <DockPanel LastChildFill="True">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <Button x:Name="SecondaryButton" Content="Elegir carpeta" Margin="0,0,5,0" Background="#3B3043"/>
+                            <Button x:Name="PrimaryButton" Content="Instalar Oto" Background="#D8B8E1"
+                                    Foreground="#211722" MinWidth="128" Height="38" IsDefault="True"/>
+                        </StackPanel>
+                        <TextBlock x:Name="VersionLabel" Foreground="#BFB1C6" VerticalAlignment="Center"
+                                   Margin="7,0,10,0" TextTrimming="CharacterEllipsis"/>
+                    </DockPanel>
+                </Border>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

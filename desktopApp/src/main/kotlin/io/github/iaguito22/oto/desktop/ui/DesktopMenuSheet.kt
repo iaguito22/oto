@@ -30,6 +30,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -131,6 +132,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import com.metrolist.innertube.models.AlbumItem
 import com.metrolist.innertube.models.ArtistItem
@@ -141,11 +143,14 @@ import io.github.iaguito22.oto.Heard
 import io.github.iaguito22.oto.LIKED_ID
 import io.github.iaguito22.oto.LocalPlaylist
 import io.github.iaguito22.oto.Prefs
+import io.github.iaguito22.oto.SmartMixMode
 import io.github.iaguito22.oto.QualityMode
 import io.github.iaguito22.oto.dj.DjMode
 import io.github.iaguito22.oto.dj.DjPickInfo
 import io.github.iaguito22.oto.dj.Kind
 import io.github.iaguito22.oto.account.Account
+import io.github.iaguito22.oto.desktop.LocalHoverEpoch
+import io.github.iaguito22.oto.desktop.trackLink
 import io.github.iaguito22.oto.desktop.BrowserLogin
 import io.github.iaguito22.oto.desktop.LoginState
 import io.github.iaguito22.oto.desktop.playback.DesktopDownloads
@@ -1340,11 +1345,12 @@ internal fun MenuTabPill(
     accent: Color,
     onClick: () -> Unit,
 ) {
-    var hovered by remember { mutableStateOf(false) }
+    var hovered by remember(LocalHoverEpoch.current) { mutableStateOf(false) }
     val growth by animateFloatAsState(if(hovered) 1.06f else 1f, tween(150), label="pillHover")
     val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Box(
         modifier = Modifier
+            .graphicsLayer { scaleX = growth; scaleY = growth }
             .height(36.dp)
             .clip(CircleShape)
             .background(
@@ -1366,13 +1372,13 @@ internal fun MenuTabPill(
             .pointerHoverIcon(PointerIcon.Hand)
             .onPointerEvent(PointerEventType.Enter) { hovered = true }
             .onPointerEvent(PointerEventType.Exit) { hovered = false }
-            .clickable(interactionSource=interaction,indication=null,onClick=onClick)
+            .clickable(interactionSource=interaction,indication=null,onClick={ hovered = false; onClick() })
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
-            style = OtoType.rowTitle.copy(fontSize = 14.sp * growth),
+            style = OtoType.rowTitle.copy(fontSize = 14.sp),
             color = if (selected) Color(0xFF101010) else if (hovered) Color.White else Color.White.copy(alpha = 0.72f),
         )
     }
@@ -2000,7 +2006,7 @@ private fun AllListsSubPane(
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(bottom = 28.dp),
+            contentPadding = PaddingValues(bottom = 28.dp + LocalFloatingDockInset.current),
         ) {
             if (folderOnly) {
                 val pairs = folderEntries.chunked(2)
@@ -2766,7 +2772,7 @@ private fun FolderDetailPane(
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(2.dp),
-        contentPadding = PaddingValues(bottom = 28.dp),
+        contentPadding = PaddingValues(bottom = 28.dp + LocalFloatingDockInset.current),
     ) {
         item(key = "head") {
             Row(
@@ -3424,7 +3430,7 @@ private fun LocalPlaylistDetailPane(
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
-                contentPadding = PaddingValues(bottom = 28.dp),
+                contentPadding = PaddingValues(bottom = 28.dp + LocalFloatingDockInset.current),
             ) {
                 if (list.songs.size > 1) {
                     item(key = "sort") {
@@ -3686,7 +3692,7 @@ private fun RemoteDetailPane(
             else -> LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 28.dp),
+                contentPadding = PaddingValues(bottom = 28.dp + LocalFloatingDockInset.current),
             ) {
                 if (!songs.isNullOrEmpty()) {
                     if (isArtist) {
@@ -4213,63 +4219,95 @@ internal fun QueuePane(
     onVetoDjNextUp: ((String) -> Unit)? = null,
     nextMix: io.github.iaguito22.oto.desktop.playback.DesktopPlayerConnection.NextMix? = null,
     onToggleAdhd: (() -> Unit)? = null,
+    refined: Boolean = false,
+    bottomInset: Dp = 0.dp,
+    onSkipDjTanda: (() -> Unit)? = null,
+    onArtist: ((String, String?) -> Unit)? = null,
 ) {
     val nextUpIds = remember(djActive, djNextUp) {
         if (djActive) djNextUp.mapTo(HashSet()) { it.track.id } else emptySet()
     }
     val curIdx = currentIndex ?: queue.indexOfFirst { it.id == currentMediaId }.takeIf { it >= 0 }
-    val visibleQueue = remember(queue, curIdx, currentMediaId, djActive, nextUpIds) {
-        if (!djActive || nextUpIds.isEmpty()) queue.mapIndexed { idx, entry -> idx to entry }
+    val visibleQueue = remember(queue, curIdx, currentMediaId, djActive, nextUpIds, refined) {
+        if (!djActive || nextUpIds.isEmpty()) queue.mapIndexedNotNull { idx, entry -> if (refined && curIdx != null && idx <= curIdx) null else idx to entry }
         else queue.mapIndexedNotNull { idx, entry ->
-            if (idx > (curIdx ?: -1) && entry.id in nextUpIds && entry.id != currentMediaId) null else idx to entry
+            if (refined && curIdx != null && idx <= curIdx) null else if (idx > (curIdx ?: -1) && entry.id in nextUpIds && entry.id != currentMediaId) null else idx to entry
         }
     }
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    val compactDj = refined && djActive
+    val canPlayFull = compactDj && djMode == DjMode.Adhd && onPlayDjFullOnce != null
+    @Composable fun QueueOptions() {
+        if (!refined || (queue.size <= 1 && !canPlayFull)) return
+        var options by remember { mutableStateOf(false) }
+        Box(contentAlignment = Alignment.Center) {
+            Box(Modifier.size(30.dp).trackLink({ options = true }, "Opciones de la cola"), contentAlignment = Alignment.Center) {
+                Icon(MobileIcons.moreHoriz, null, Modifier.size(18.dp), tint = Color.White.copy(.75f))
+            }
+            DropdownMenu(options, { options = false }, shape = RoundedCornerShape(16.dp)) {
+                if (canPlayFull) DropdownMenuItem(
+                    text = { Text(if (djFullOnce) "Esta suena entera" else "Oír esta entera") },
+                    enabled = !djFullOnce,
+                    onClick = { options = false; onPlayDjFullOnce?.invoke() },
+                )
+                if (queue.size > 1) DropdownMenuItem(text = { Text("Vaciar cola") },
+                    onClick = { options = false; onClearQueue() })
+            }
+        }
+    }
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(if (compactDj) 8.dp else 14.dp)) {
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(Modifier.widthIn(min = 128.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = if (djActive) "Cola del DJ" else "Cola de reproducción",
-                        style = OtoType.section,
-                        color = Color.White,
-                    )
-                    if (djActive) {
+            Row((if (refined) Modifier.fillMaxWidth() else Modifier).widthIn(min = 128.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(if (refined) Modifier.weight(1f) else Modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            text = "EN VIVO",
-                            style = OtoType.label.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-                            color = palette.primary,
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(palette.primary.copy(alpha = 0.16f))
-                                .border(1.dp, palette.primary.copy(alpha = 0.38f), CircleShape)
-                                .padding(horizontal = 7.dp, vertical = 2.dp),
+                            text = if (djActive) "Cola del DJ" else if (refined) "A continuación" else "Cola de reproducción",
+                            style = if (refined) OtoType.rowTitle else OtoType.section,
+                            color = Color.White,
                         )
+                        if (djActive && !compactDj) {
+                            Text(
+                                text = "EN VIVO",
+                                style = OtoType.label.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                                color = palette.primary,
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(palette.primary.copy(alpha = 0.16f))
+                                    .border(1.dp, palette.primary.copy(alpha = 0.38f), CircleShape)
+                                    .padding(horizontal = 7.dp, vertical = 2.dp),
+                            )
+                        }
                     }
+                    Text(
+                        text = when {
+                            djActive && djNextUp.isNotEmpty() -> {
+                                val tandaPart = djMoodPillLabel(djTanda).takeIf { it != "Otro ambiente" }?.let { "$it · " }.orEmpty()
+                                "$tandaPart${djNextUp.size} siguientes"
+                            }
+                            djActive -> {
+                                djMoodPillLabel(djTanda).takeIf { it != "Otro ambiente" } ?: "Sesión inteligente"
+                            }
+                            refined -> songCount(visibleQueue.size)
+                            queue.isEmpty() -> "Nada en cola"
+                            else -> "${queue.size} canciones en total"
+                        },
+                        style = OtoType.rowSub.copy(fontSize = if (refined) 11.sp else OtoType.rowSub.fontSize),
+                        color = if (djActive) palette.primary.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.62f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
-                Text(
-                    text = when {
-                        djActive && djNextUp.isNotEmpty() -> {
-                            val tandaPart = djMoodPillLabel(djTanda).takeIf { it != "Otro ambiente" }?.let { "$it · " }.orEmpty()
-                            "$tandaPart${djNextUp.size} siguientes"
-                        }
-                        djActive -> {
-                            djMoodPillLabel(djTanda).takeIf { it != "Otro ambiente" } ?: "Sesión inteligente"
-                        }
-                        queue.isEmpty() -> "Nada en cola"
-                        else -> "${queue.size} canciones en total"
-                    },
-                    style = OtoType.rowSub,
-                    color = if (djActive) palette.primary.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.62f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                QueueOptions()
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                // El DJ rápido se cambia aquí (en el reproductor ya no está).
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp),
+                itemVerticalAlignment = Alignment.CenterVertically) {
+                if (djActive && onSkipDjTanda != null) {
+                    MenuTabPill("Otro ambiente", false, palette.primary, onClick = onSkipDjTanda)
+                }
                 if (djActive && onToggleAdhd != null) {
                     MenuTabPill(
                         label = "DJ rápido",
@@ -4278,7 +4316,7 @@ internal fun QueuePane(
                         onClick = onToggleAdhd,
                     )
                 }
-                if (djActive && djMode == DjMode.Adhd && onPlayDjFullOnce != null) {
+                if (djActive && !compactDj && djMode == DjMode.Adhd && onPlayDjFullOnce != null) {
                     MenuTabPill(
                         label = if (djFullOnce) "Esta suena entera" else "Oír esta entera",
                         selected = djFullOnce,
@@ -4286,7 +4324,7 @@ internal fun QueuePane(
                         onClick = { if (!djFullOnce) onPlayDjFullOnce() },
                     )
                 }
-                if (queue.size > 1) {
+                if (queue.size > 1 && !refined) {
                     MenuTabPill(
                         label = "Vaciar",
                         selected = false,
@@ -4294,14 +4332,14 @@ internal fun QueuePane(
                         onClick = onClearQueue,
                     )
                 }
-                SheetCircleIconButton(
+                if (!refined) SheetCircleIconButton(
                     icon = MobileIcons.shuffle,
                     tooltip = if (shuffle) "Aleatorio activo" else "Activar aleatorio",
                     active = shuffle,
                     accent = palette.primary,
                     onClick = onToggleShuffle,
                 )
-                SheetCircleIconButton(
+                if (!refined) SheetCircleIconButton(
                     icon = if (loopMode == io.github.iaguito22.oto.LoopMode.One) MobileIcons.repeatOne else MobileIcons.repeat,
                     tooltip = when (loopMode) {
                         io.github.iaguito22.oto.LoopMode.Off -> "Repetir lista"
@@ -4336,12 +4374,12 @@ internal fun QueuePane(
                         modifier = Modifier.size(38.dp),
                     )
                     Text(
-                        text = "La cola está vacía",
+                        text = if (refined) "Sin siguientes" else "La cola está vacía",
                         style = OtoType.rowTitle,
                         color = Color.White.copy(alpha = 0.82f),
                     )
                     Text(
-                        text = "Pon algo a sonar y aquí verás lo que viene después.",
+                        text = if (refined) "Añade canciones para seguir escuchando." else "Pon algo a sonar y aquí verás lo que viene después.",
                         style = OtoType.rowSub,
                         color = Color.White.copy(alpha = 0.62f),
                     )
@@ -4360,15 +4398,17 @@ internal fun QueuePane(
                 occurrences[entry.id] = n + 1
                 Triple("${entry.id}#$n", origIdx, entry)
             }
-            LazyColumn(Modifier.weight(1f), state=listState, contentPadding=PaddingValues(top=16.dp,bottom=12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            LazyColumn(Modifier.weight(1f), state=listState, contentPadding=PaddingValues(top=if(refined)0.dp else 16.dp,bottom=12.dp+bottomInset), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 itemsIndexed(keyedQueue, key = { _, item -> item.first }) { _, item ->
                     val (key, origIdx, entry) = item
                     ReorderableItem(reorderState, key) { dragging ->
                         Column {
                             QueueRowDesktop(
+                                refined = refined,
                                 index = origIdx + 1,
                                 title = entry.title,
                                 subtitle = entry.artist,
+                                onArtist = onArtist?.let { open -> { open(entry.artist, entry.artistId) } },
                                 artwork = entry.artwork,
                                 isCurrent = if (currentIndex != null) origIdx == currentIndex else entry.id == currentMediaId,
                                 accent = palette.primary,
@@ -4384,7 +4424,7 @@ internal fun QueuePane(
                     }
                 }
                 if (djActive && djNextUp.isNotEmpty()) {
-                    item(key = "dj_nextup_header") {
+                    if (!compactDj) item(key = "dj_nextup_header") {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp, start = 4.dp, end = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -4426,8 +4466,10 @@ internal fun QueuePane(
                         DjNextUpRowDesktop(
                             offset = i + 1,
                             info = info,
+                            compact = compactDj,
                             accent = palette.primary,
                             onClick = skipIdx?.let { { onSkipTo(it) } },
+                            onArtist = onArtist?.let { open -> { open(info.track.artist, info.track.artistId) } },
                             onVeto = onVetoDjNextUp?.let { veto -> { veto(info.track.id) } },
                             mix = nextMix?.takeIf { i == 0 && it.nextId == info.track.id },
                         )
@@ -4471,7 +4513,7 @@ private fun MixBadgeDesktop(
     }
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun DjNextUpRowDesktop(
     offset: Int,
@@ -4480,165 +4522,104 @@ private fun DjNextUpRowDesktop(
     onClick: (() -> Unit)?,
     onVeto: (() -> Unit)?,
     mix: io.github.iaguito22.oto.desktop.playback.DesktopPlayerConnection.NextMix? = null,
+    onArtist: (() -> Unit)? = null,
+    compact: Boolean = false,
 ) {
     val track = info.track
-    var thumbBmp by remember(track.artwork) { mutableStateOf<ImageBitmap?>(null) }
-    var isHovered by remember { mutableStateOf(false) }
-    val hoverAmount by animateFloatAsState(if (isHovered) 1f else 0f, tween(160), label = "nextUpHover")
-
-    LaunchedEffect(track.artwork) {
-        if (!track.artwork.isNullOrBlank()) {
-            thumbBmp = ArtworkLoader.load(track.artwork).first
-        }
-    }
-
+    val bridge = info.isBridge || info.kind == Kind.BRIDGE
+    val highlight = bridge || info.kind == Kind.NEW
     val kindLabel = when {
-        info.isBridge || info.kind == Kind.BRIDGE -> if (info.bridgeFrom != null && info.bridgeTo != null) "Puente ${info.bridgeFrom} → ${info.bridgeTo}" else "Puente"
+        bridge -> "Puente"
         info.kind == Kind.NEW -> "Descubrimiento"
         info.kind == Kind.DEEP -> "De tus artistas"
-        else -> "Clásico"
+        else -> "Clásico tuyo"
     }
-    val reasonText = info.reason.trim().let { r ->
-        if (r.isBlank() || r.equals(kindLabel, ignoreCase = true)) "" else r
+    val reason = info.reason.trim()
+    val label = when {
+        bridge && reason.startsWith("Puente ", ignoreCase = true) -> reason
+        bridge && info.bridgeFrom != null && info.bridgeTo != null ->
+            "Puente · ${info.bridgeFrom} → ${info.bridgeTo}"
+        else -> kindLabel
     }
-    val highlight = info.isBridge || info.kind == Kind.NEW
-    val shape = RoundedCornerShape(14.dp)
-    val bgBrush = if (highlight) {
-        Brush.horizontalGradient(
-            listOf(
-                accent.copy(alpha = 0.10f + 0.06f * hoverAmount),
-                Color.White.copy(alpha = 0.03f + 0.03f * hoverAmount),
-            ),
-        )
-    } else {
-        Brush.horizontalGradient(
-            listOf(
-                Color.White.copy(alpha = 0.035f + 0.065f * hoverAmount),
-                Color.White.copy(alpha = 0.02f + 0.025f * hoverAmount),
-            ),
-        )
-    }
-    val borderColor = if (highlight) {
-        accent.copy(alpha = 0.28f + 0.24f * hoverAmount)
-    } else {
-        Color.White.copy(alpha = 0.08f + 0.14f * hoverAmount)
-    }
+    val detail = reason.takeUnless { it.isBlank() || it.equals(label, ignoreCase = true) }
 
-    Row(
+    var hovered by remember { mutableStateOf(false) }
+    val hover by animateFloatAsState(if (hovered) 1f else 0f, tween(160), label = "nextUpHover")
+    val shape = RoundedCornerShape(14.dp)
+    val tint = if (highlight) accent else Color.White
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(bgBrush)
-            .border(1.dp, borderColor, shape)
-            .then(if (onClick != null) Modifier.pointerHoverIcon(PointerIcon.Hand).clickable(onClick = onClick) else Modifier)
-            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
-            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+            .background(tint.copy(alpha = (if (highlight) 0.065f else 0.035f) + 0.035f * hover))
+            .border(1.dp, tint.copy(alpha = (if (highlight) 0.17f else 0.08f) + 0.06f * hover), shape)
+            .trackLink(onClick)
+            .onPointerEvent(PointerEventType.Enter) { hovered = true }
+            .onPointerEvent(PointerEventType.Exit) { hovered = false }
+            .padding(if (compact) 10.dp else 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(
-            text = "+$offset",
-            fontSize = 11.5.sp,
-            fontWeight = FontWeight.SemiBold,
-            fontFamily = FontFamily.Monospace,
-            color = if (highlight) accent else Color.White.copy(alpha = 0.55f),
-            modifier = Modifier.width(24.dp),
-        )
-        Box(
-            modifier = Modifier
-                .size(42.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(Color.White.copy(alpha = 0.07f))
-                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(9.dp)),
-            contentAlignment = Alignment.Center,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (thumbBmp != null) {
-                Image(
-                    bitmap = thumbBmp!!,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Icon(
-                    imageVector = MobileIcons.libraryMusic,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.40f),
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                text = track.title,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (track.artist.isNotBlank()) {
+            Box {
+                LibraryArt(track.artwork, Modifier.size(if (compact) 58.dp else 64.dp))
                 Text(
-                    text = track.artist,
-                    fontSize = 12.sp,
-                    color = Color.White.copy(alpha = 0.65f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Row(
-                Modifier.padding(top = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(
-                    text = kindLabel,
+                    text = "+$offset",
                     style = OtoType.label.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-                    color = if (highlight) accent else Color.White.copy(alpha = 0.78f),
-                    maxLines = 1,
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(if (highlight) accent.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.09f))
-                        .padding(horizontal = 7.dp, vertical = 2.dp),
+                    color = Color.White,
+                    modifier = Modifier.align(Alignment.BottomStart).padding(3.dp)
+                        .clip(CircleShape).background(Color(0xD9101010))
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
                 )
-                if (reasonText.isNotEmpty()) {
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(track.title, style = OtoType.rowTitle, color = Color.White)
+                if (track.artist.isNotBlank()) {
                     Text(
-                        text = reasonText,
-                        fontSize = 11.sp,
-                        color = Color.White.copy(alpha = 0.56f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
+                        text = track.artist,
+                        modifier = Modifier.trackLink(onArtist),
+                        style = OtoType.rowSub,
+                        color = Color.White.copy(alpha = 0.65f),
                     )
                 }
             }
-            if (mix != null) MixBadgeDesktop(mix, accent, Modifier.padding(top = 4.dp))
         }
-        if (onVeto != null) {
-            Row(
-                Modifier
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.06f + 0.06f * hoverAmount))
-                    .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
-                    .pointerHoverIcon(PointerIcon.Hand)
-                    .clickable(onClick = onVeto)
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FlowRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                itemVerticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = MobileIcons.refresh,
-                    contentDescription = "Cambiar ${track.title} por otra",
-                    tint = Color.White.copy(alpha = 0.75f),
-                    modifier = Modifier.size(13.dp),
-                )
                 Text(
-                    text = "Otra",
-                    style = OtoType.label.copy(fontSize = 11.sp),
-                    color = Color.White.copy(alpha = 0.78f),
+                    text = label,
+                    style = OtoType.label.copy(fontSize = 10.sp),
+                    color = tint.copy(alpha = if (highlight) 1f else 0.72f),
                 )
+                if (mix != null) MixBadgeDesktop(mix, accent)
             }
+            if (onVeto != null) {
+                Row(
+                    Modifier.clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.07f))
+                        .trackLink(onVeto, "Cambiar ${track.title} por otra")
+                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Icon(MobileIcons.refresh, null, tint = Color.White.copy(alpha = 0.76f), modifier = Modifier.size(13.dp))
+                    Text("Otra", style = OtoType.label.copy(fontSize = 11.sp), color = Color.White.copy(alpha = 0.82f))
+                }
+            }
+        }
+        if (detail != null) {
+            Text(detail, style = OtoType.rowSub, color = Color.White.copy(alpha = 0.56f))
         }
     }
 }
@@ -4646,6 +4627,7 @@ private fun DjNextUpRowDesktop(
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun QueueRowDesktop(
+    refined: Boolean = false,
     index: Int,
     title: String,
     subtitle: String,
@@ -4656,10 +4638,13 @@ private fun QueueRowDesktop(
     isDragging: Boolean,
     onClick: () -> Unit,
     onRemove: () -> Unit,
+    onArtist: (() -> Unit)? = null,
 ) {
     var thumbBmp by remember(artwork) { mutableStateOf<ImageBitmap?>(null) }
-    var isHovered by remember { mutableStateOf(false) }
-    val hoverAmount by animateFloatAsState(if(isHovered)1f else 0f,tween(160),label="queueHover")
+    val interaction = remember { MutableInteractionSource() }
+    val isHovered by interaction.collectIsHoveredAsState()
+    var focused by remember { mutableStateOf(false) }
+    val hoverAmount by animateFloatAsState(if(isHovered || focused)1f else 0f,tween(160),label="queueHover")
     val dragAmount by animateFloatAsState(if(isDragging)1f else 0f,tween(140),label="queueLift")
 
     LaunchedEffect(artwork) {
@@ -4679,37 +4664,36 @@ private fun QueueRowDesktop(
                 scaleX = 1f + .015f * dragAmount
                 scaleY = 1f + .015f * dragAmount
             }
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(if(refined)16.dp else 12.dp))
             .background(
                 if (isCurrent) Brush.horizontalGradient(
-                    listOf(accent.copy(alpha = 0.32f), accent.copy(alpha = 0.14f)),
+                    listOf(accent.copy(alpha = if(refined).15f else .32f), accent.copy(alpha = if(refined).05f else .14f)),
                 )
                 else Brush.horizontalGradient(
-                    listOf(Color.White.copy(alpha = .03f + .09f*hoverAmount), Color.White.copy(alpha = .03f + .02f*hoverAmount)),
+                    listOf(Color.White.copy(alpha = (if(refined)0f else .03f) + .07f*hoverAmount), Color.White.copy(alpha = (if(refined)0f else .03f) + .03f*hoverAmount)),
                 ),
             )
             .border(
                 1.dp,
-                if (isCurrent) accent.copy(alpha = 0.50f)
+                if (isCurrent) accent.copy(alpha = if(refined).20f else .50f)
                 else Color.White.copy(alpha = .20f*hoverAmount),
-                RoundedCornerShape(12.dp),
+                RoundedCornerShape(if(refined)16.dp else 12.dp),
             )
             .pointerHoverIcon(PointerIcon.Hand)
-            .clickable(onClick = onClick)
-            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
-            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
-            .padding(horizontal = 14.dp, vertical = 7.dp),
+            .onFocusChanged { focused = it.hasFocus }
+            .pointerHoverIcon(PointerIcon.Hand).clickable(interaction, null, onClick = onClick)
+            .padding(horizontal = if(refined)8.dp else 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        if (!compactRow && isCurrent) {
+        if (!refined && !compactRow && isCurrent) {
             Icon(
                 imageVector = MobileIcons.graphicEq,
                 contentDescription = "Sonando",
                 tint = accent,
                 modifier = Modifier.size(18.dp),
             )
-        } else if (!compactRow) {
+        } else if (!refined && !compactRow) {
             Text(
                 text = "$index",
                 fontSize = 12.sp,
@@ -4720,7 +4704,7 @@ private fun QueueRowDesktop(
         }
         Box(
             modifier = Modifier
-                .size(36.dp)
+                .size(if(refined)44.dp else 36.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color.White.copy(alpha = 0.07f)),
             contentAlignment = Alignment.Center,
@@ -4753,6 +4737,7 @@ private fun QueueRowDesktop(
             if (subtitle.isNotBlank()) {
                 Text(
                     text = subtitle,
+                    modifier = Modifier.trackLink(onArtist),
                     fontSize = 12.sp,
                     color = Color.White.copy(alpha = 0.62f),
                     maxLines = 1,
@@ -4760,7 +4745,8 @@ private fun QueueRowDesktop(
                 )
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.graphicsLayer { alpha = if(refined)hoverAmount else 1f },
+            horizontalArrangement = Arrangement.spacedBy(0.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
                     .size(28.dp)
@@ -4780,7 +4766,7 @@ private fun QueueRowDesktop(
                 modifier = Modifier
                     .size(28.dp)
                     .clip(CircleShape)
-                    .clickable(onClick = onRemove),
+                    .trackLink(onRemove, "Quitar"),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(MobileIcons.close, "Quitar", tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
@@ -4814,6 +4800,7 @@ internal fun SettingsAndAccountPane(
 ) {
     val scope = rememberCoroutineScope()
     val crossfade by prefs.crossfade.collectAsState(initial = 3)
+    val smartMixMode by prefs.smartMixMode.collectAsState(initial = SmartMixMode.Always)
     val showRemaining by prefs.showRemaining.collectAsState(initial = false)
     val romanize by prefs.romanize.collectAsState(initial = true)
     val coverBeat by prefs.coverBeat.collectAsState(initial = true)
@@ -4836,7 +4823,7 @@ internal fun SettingsAndAccountPane(
         if (mb >= 1024L) "%.1f GB".format(mb / 1024f) else "$mb MB"
     }
 
-    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = LocalFloatingDockInset.current), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         // 1. CUENTA DE YOUTUBE MUSIC
         item {
             Column(
@@ -5092,6 +5079,14 @@ internal fun SettingsAndAccountPane(
                     color = Color.White.copy(alpha = 0.62f),
                 )
                 Spacer(Modifier.height(4.dp))
+                Text("Mezcla inteligente", style = OtoType.rowSub, color = Color.White.copy(alpha = 0.62f))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SmartMixMode.entries.forEach { mode ->
+                        MenuTabPill(mode.label, smartMixMode == mode, palette.secondary) {
+                            scope.launch { prefs.setSmartMixMode(mode) }
+                        }
+                    }
+                }
                 Text("Fundido entre canciones (crossfade)", style = OtoType.rowSub, color = Color.White.copy(alpha = 0.62f))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(0 to "Sin fundido", 3 to "3s", 6 to "6s", 10 to "10s").forEach { (secs, label) ->
@@ -5279,7 +5274,7 @@ internal fun SettingsAndAccountPane(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    "Oto 1.2.2 · GPL-3.0",
+                    "Oto${System.getProperty("jpackage.app-version")?.let { " $it" }.orEmpty()} · GPL-3.0",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White.copy(alpha = 0.62f),
@@ -5384,7 +5379,7 @@ internal fun ImportPane(
         when (step) {
             0 -> {
                 // PASO 0: FUENTE (ENLACE O ARCHIVO)
-                LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = LocalFloatingDockInset.current), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     item {
                         Column(
                             modifier = Modifier
@@ -5695,7 +5690,7 @@ internal fun ImportPane(
                 // PASO 3: RESUMEN FINAL (DONE)
                 val s = importState as? ImportState.Done
                 if (s != null) {
-                    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = LocalFloatingDockInset.current), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         item {
                             Column(
                                 modifier = Modifier

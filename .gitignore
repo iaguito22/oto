@@ -7,3 +7,7 @@ local.properties
 *.iml
 captures/
 *.jks
+# Mezclas de prueba del banco DJ (audio con derechos, solo en local)
+app/src/debug/assets/
+# Informes, registros y capturas de pruebas locales
+scratchpad/

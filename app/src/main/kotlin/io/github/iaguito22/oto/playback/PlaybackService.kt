@@ -49,13 +49,16 @@ import com.google.common.util.concurrent.SettableFuture
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.Artist
 import com.metrolist.innertube.models.SongItem
-import io.github.iaguito22.oto.DEFAULT_SMART_MIX
+import io.github.iaguito22.oto.DEFAULT_SMART_MIX_SECONDS
+import io.github.iaguito22.oto.SmartMixMode
 import io.github.iaguito22.oto.MainActivity
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.QualityMode
 import io.github.iaguito22.oto.dj.AdhdPlanner
 import io.github.iaguito22.oto.dj.AdhdSegment
 import io.github.iaguito22.oto.dj.AudioAnalysisCache
+import io.github.iaguito22.oto.dj.AudioMetrics
+import io.github.iaguito22.oto.dj.SongSection
 import io.github.iaguito22.oto.dj.Dj
 import io.github.iaguito22.oto.dj.DjBridgeStyle
 import io.github.iaguito22.oto.dj.DjGenre
@@ -71,6 +74,7 @@ import io.github.iaguito22.oto.dj.Play
 import io.github.iaguito22.oto.dj.Profile
 import io.github.iaguito22.oto.dj.SongSections
 import io.github.iaguito22.oto.dj.Track
+import io.github.iaguito22.oto.dj.adhdSegment
 import io.github.iaguito22.oto.importer.songKey
 import io.github.iaguito22.oto.lyrics.Lyrics
 import io.github.iaguito22.oto.lyrics.LyricsQuery
@@ -119,6 +123,9 @@ class PlaybackService : MediaLibraryService() {
     @Volatile private var playingIndex = 0
     private var stallJob: Job? = null
     private var prefetchJob: Job? = null
+    private var wholeNextJob: Job? = null
+    private var wholeNextId: String? = null
+    @Volatile private var wholeNextWriter: CacheWriter? = null
     @Volatile private var writer: CacheWriter? = null
     private var prefetched = emptyList<String>()
     private val loudness = ConcurrentHashMap<String, Double>()
@@ -154,11 +161,13 @@ class PlaybackService : MediaLibraryService() {
 
     private var dj: Dj? = null
     private var djJob: Job? = null
+    private var djTempoRetry: Job? = null
+    private var djTempoPending = false
     private val djTracks = HashMap<String, Track>()
     private val adhdSegments = HashMap<String, AdhdSegment>()
-    private val adhdUsedAudio = HashSet<String>()
-    // Las que ya se trocearon con su letra delante (aunque no sirviera): no se rehace en cada vistazo.
-    private val adhdUsedLyrics = HashSet<String>()
+    private val adhdCheckedSections = HashMap<String, List<SongSection>>()
+    /** Últimas secciones y análisis que se probaron para recolocar una salida, aunque no se aceptara. */
+    private val adhdExitTried = HashMap<String, Pair<List<SongSection>, AudioMetrics?>>()
     // Lo que ya ha sonado en esta sesión del DJ.
     private val djSessionPlayed = HashSet<String>()
     private var adhdIntroAppliedFor: Pair<String, Int>? = null
@@ -185,7 +194,8 @@ class PlaybackService : MediaLibraryService() {
     /** Tus gustos tal como los vio el DJ al empezar: para saber tus géneros sin rehacerlos. */
     private var djProfile: Profile? = null
     @Volatile private var djMode = DjMode.Normal
-    @Volatile private var smartMix = DEFAULT_SMART_MIX
+    @Volatile private var smartMixMode = SmartMixMode.Always
+    private val smartMix: Boolean get() = smartMixMode.enabled(dj != null && djMode == DjMode.Adhd && player.currentMediaItem?.isDjItem == true)
     // Tiempo real reproducido en la pista actual (descuenta pausas e intros saltadas en modo ADHD).
     private var playAccumMs = 0L
     private var playStartedAtMs = 0L
@@ -199,10 +209,11 @@ class PlaybackService : MediaLibraryService() {
     private val outgoingBass = BassSwapAudioProcessor()
     private val outgoingEcho = EchoOutFilterSweepAudioProcessor()
     private lateinit var crossfade: Crossfade
-    @Volatile private var fadeMs = 0L
+    @Volatile private var classicFadeMs = 0L
+    private val fadeMs: Long get() = if (smartMix) DEFAULT_SMART_MIX_SECONDS * 1000L else classicFadeMs
     @Volatile private var isMixing = false
     // La próxima mezcla tal como la ve [Crossfade] (inicio, cambio, estilo, si está lista) y para qué pareja.
-    @Volatile private var mixUi: MixUi? = null
+    private val mixPublication = MixUiPublication()
     private val recentBridgeStyles = ArrayDeque<DjBridgeStyle>(4)
     private var committedMixPair: Pair<String, String>? = null
     // El volumen es el de la normalización de cada canción ([gain]) por lo que lleva subido en un fundido ([fadeIn]).
@@ -242,6 +253,7 @@ class PlaybackService : MediaLibraryService() {
             outgoingProcessor = outgoingBass,
             outgoingEchoProcessor = outgoingEcho,
             djMixPlan = ::djMixPlanFor,
+            sectionsFor = { sectionsOf(it).orEmpty() },
             sessionGate = captureGate,
             onMixingChanged = { active ->
                 isMixing = active
@@ -251,7 +263,7 @@ class PlaybackService : MediaLibraryService() {
                     val pair = if (cur != null && next != null) cur.mediaId to next.mediaId else null
                     if (pair != null && pair != committedMixPair) {
                         val dur = player.duration.takeIf { it > 0L } ?: cur?.mediaMetadata?.durationMs ?: 0L
-                        val style = mixUi?.takeIf { it.pair == null || it.pair == pair }?.style ?: if (cur != null && next != null && dur > 0L) {
+                        val style = mixPublication.latest?.takeIf { it.pair == pair }?.style ?: if (cur != null && next != null && dur > 0L) {
                             val reqFade = if (fadeMs > 0L) fadeMs else effectiveAdhdFadeMs()
                             djMixPlanFor(cur, next, dur, reqFade)?.bridgeSpec?.style
                         } else null
@@ -265,7 +277,7 @@ class PlaybackService : MediaLibraryService() {
                 publishDjSessionExtras()
             },
             onMixUiChanged = { ui ->
-                mixUi = ui
+                mixPublication.latest = ui
                 publishDjSessionExtras()
             },
             sliceDecoder = sliceDecoder,
@@ -322,15 +334,14 @@ class PlaybackService : MediaLibraryService() {
         scope.launch { prefs.dataSaver.collect { saver = it } }
         // La mezcla inteligente, si está activada, con su duración; si no, el fundido normal.
         scope.launch {
-            prefs.mixSeconds.collect {
-                fadeMs = it * 1000L
+            prefs.crossfade.collect {
+                classicFadeMs = it * 1000L
                 publishDjSessionExtras()
             }
         }
         scope.launch {
-            prefs.smartMix.collect {
-                smartMix = it
-                if (!it) mixUi = null
+            prefs.smartMixMode.collect {
+                smartMixMode = it
                 publishDjSessionExtras()
             }
         }
@@ -368,6 +379,7 @@ class PlaybackService : MediaLibraryService() {
         duckJob?.cancel()
         scope.cancel()
         writer?.cancel()
+        wholeNextWriter?.cancel()
         crossfade.release()
         session.release()
         player.release()
@@ -527,6 +539,14 @@ class PlaybackService : MediaLibraryService() {
         val at = player.currentMediaItemIndex
         val ahead = if (saver && connectivity.isActiveNetworkMetered) 1 else AHEAD
         val ids = (at + 1..min(at + ahead, player.mediaItemCount - 1)).map { player.getMediaItemAt(it).mediaId }
+        val nextId = ids.firstOrNull()
+        val wholeNext = nextId != null && (dj != null || smartMix) && !(saver && connectivity.isActiveNetworkMetered)
+        // La siguiente entera va aparte: que el DJ cambie la 2.ª o la 3.ª de la cola no corta su descarga (la necesita
+        // el puente). Solo se rehace si cambia la siguiente.
+        if (wholeNext) prefetchWholeNext(nextId!!) else cancelWholeNext()
+        // Las cabeceras de la 2.ª y la 3.ª esperan a la siguiente entera (la que necesita el puente: con mala conexión
+        // no deben quitarle ancho de banda).
+        val wholeFirst = if (wholeNext) wholeNextJob else null
         if (ids == prefetched && prefetchJob?.isActive == true) return
         prefetched = ids
         prefetchJob?.cancel()
@@ -535,41 +555,86 @@ class PlaybackService : MediaLibraryService() {
         prefetchJob = scope.launch(Dispatchers.IO) {
             // Primero, que arranque la que suena.
             delay(PREFETCH_DELAY_MS)
+            wholeFirst?.join()
             for (id in ids) {
                 if (!isActive) return@launch
+                // La siguiente entera la baja y analiza [prefetchWholeNext].
+                if (wholeNext && id == nextId) continue
                 if (!app.downloads.has(id)) {
-                    runCatching {
-                        val spec = resolve(DataSpec.Builder().setUri(id).setKey(id).setLength(HEAD_BYTES).build())
-                        // Sin URL nueva: ya estaba entera en la caché.
-                        if (spec.uri.toString() == id) return@runCatching
-                        CacheWriter(headSource.createDataSource(), spec, null, null).also { writer = it }.cache()
-                    }.onFailure { Timber.w(it, "precarga %s", id) }
+                    val spec = runCatching {
+                        resolve(DataSpec.Builder().setUri(id).setKey(id).setLength(HEAD_BYTES).build())
+                    }.onFailure { Timber.w(it, "precarga %s", id) }.getOrNull()
+                    // `resolve` bloquea: si nos cancelaron mientras, no se empieza a bajar.
+                    if (!isActive) return@launch
+                    // Sin URL nueva: ya estaba entera en la caché.
+                    if (spec != null && spec.uri.toString() != id) {
+                        val w = CacheWriter(headSource.createDataSource(), spec, null, null)
+                        writer = w
+                        if (!isActive) {
+                            w.cancel()
+                            return@launch
+                        }
+                        runCatching { w.cache() }.onFailure { Timber.w(it, "precarga %s", id) }
+                        if (writer === w) writer = null
+                    }
                 }
                 if (isActive && analysisCache.get(id)?.coversWholeSong != true) {
                     runCatching { audioAnalyzer.analyzeIfCached(id, keyOf(id)) }
                 }
+                // Con el tempo de esta ya medido, el DJ puede cambiarla si no se podrá cuadrar con la de antes.
+                if (isActive && dj != null) withContext(Dispatchers.Main) { retuneDjTempo() }
             }
-            // Con DJ / mezcla inteligente, bajamos entera la inmediatamente siguiente (`at + 1`) antes del puente para
-            // que llegue ya analizada entera (BPM fiable, rejilla completa y barras reales antes de renderizar el WAV).
-            val nextId = ids.firstOrNull()
-            if (isActive && nextId != null && (dj != null || smartMix) && !(saver && connectivity.isActiveNetworkMetered)) {
-                if (!app.downloads.has(nextId) && analysisCache.get(nextId)?.coversWholeSong != true) {
-                    runCatching {
-                        val fullSpec = resolve(DataSpec.Builder().setUri(nextId).setKey(nextId).setLength(C.LENGTH_UNSET.toLong()).build())
-                        if (fullSpec.uri.toString() != nextId) {
-                            CacheWriter(headSource.createDataSource(), fullSpec, null, null).also { writer = it }.cache()
-                        }
-                    }.onFailure { Timber.w(it, "precarga completa %s", nextId) }
-                }
-                if (isActive && analysisCache.get(nextId)?.coversWholeSong != true) {
-                    val updated = runCatching { audioAnalyzer.analyzeIfCached(nextId, keyOf(nextId)) }.getOrNull()
-                    if (updated?.coversWholeSong == true) {
-                        withContext(Dispatchers.Main) { publishDjSessionExtras() }
-                    }
-                }
-            }
-            writer = null
+            // Sin `writer = null` aquí: cada escritor se borra solo si sigue siendo el suyo (un trabajo cancelado que
+            // sale tarde no puede quitar la referencia del nuevo).
         }
+    }
+
+    /**
+     * Con DJ / mezcla inteligente, la inmediatamente siguiente entera antes del puente, para que llegue ya analizada
+     * entera (BPM fiable, rejilla completa y barras reales antes de renderizar el WAV). Sigue aunque cambie el resto de
+     * la cola.
+     */
+    private fun prefetchWholeNext(nextId: String) {
+        if (nextId == wholeNextId && wholeNextJob?.isActive == true) return
+        cancelWholeNext()
+        wholeNextId = nextId
+        wholeNextJob = scope.launch(Dispatchers.IO) {
+            delay(PREFETCH_DELAY_MS)
+            if (!app.downloads.has(nextId) && analysisCache.get(nextId)?.coversWholeSong != true) {
+                val fullSpec = runCatching {
+                    resolve(DataSpec.Builder().setUri(nextId).setKey(nextId).setLength(C.LENGTH_UNSET.toLong()).build())
+                }.onFailure { Timber.w(it, "precarga completa %s", nextId) }.getOrNull()
+                // `resolve` bloquea: si nos cancelaron mientras, no se empieza a bajar.
+                if (!isActive) return@launch
+                if (fullSpec != null && fullSpec.uri.toString() != nextId) {
+                    val w = CacheWriter(headSource.createDataSource(), fullSpec, null, null)
+                    wholeNextWriter = w
+                    // Cancelados entre la comprobación y aquí: `cancelWholeNext` ya pasó por el escritor anterior.
+                    if (!isActive) {
+                        w.cancel()
+                        return@launch
+                    }
+                    runCatching { w.cache() }.onFailure { Timber.w(it, "precarga completa %s", nextId) }
+                    // Solo el suyo: no borra el escritor de un trabajo nuevo.
+                    if (wholeNextWriter === w) wholeNextWriter = null
+                }
+            }
+            if (isActive && analysisCache.get(nextId)?.coversWholeSong != true) {
+                val updated = runCatching { audioAnalyzer.analyzeIfCached(nextId, keyOf(nextId)) }.getOrNull()
+                if (updated?.coversWholeSong == true) {
+                    withContext(Dispatchers.Main) { publishDjSessionExtras() }
+                }
+            }
+            // Su tempo (entero) cuenta para juzgar la de después.
+            if (isActive && dj != null) withContext(Dispatchers.Main) { retuneDjTempo() }
+        }
+    }
+
+    private fun cancelWholeNext() {
+        wholeNextJob?.cancel()
+        wholeNextWriter?.cancel()
+        wholeNextJob = null
+        wholeNextId = null
     }
 
     // Lo mismo que suena, sin resolver (eso ya lo hace [prefetch]) ni lo descargado: solo para escribir en la caché.
@@ -895,45 +960,68 @@ class PlaybackService : MediaLibraryService() {
 
     private fun clearAdhdSegments() {
         adhdSegments.clear()
-        adhdUsedAudio.clear()
-        adhdUsedLyrics.clear()
+        adhdCheckedSections.clear()
+        adhdExitTried.clear()
         adhdIntroAppliedFor = null
     }
 
     private fun effectiveAdhdFadeMs(): Long = if (fadeMs > 0L) fadeMs else AdhdPlanner.DEFAULT_MIX_MS
 
-    private fun ensureAdhdSegment(item: MediaItem, durMs: Long): AdhdSegment? {
+    private fun ensureAdhdSegment(item: MediaItem, durMs: Long, beforeIntro: Boolean = false): AdhdSegment? {
         val d = dj ?: return null
         if (djMode != DjMode.Adhd || !item.isDjItem || durMs <= 0L) return null
         if (d.isFullOnce(item.mediaId)) return null
         val cached = adhdSegments[item.mediaId]
-        val sections = (app.lyrics.peek(item.mediaId) as? Lyrics.Synced)?.let { SongSections.of(it.lines) }.orEmpty()
+        val sections = sectionsOf(item.mediaId).orEmpty()
         val audio = analysisCache.get(item.mediaId)
-        // La duración exacta llega al preparar la canción y suele diferir en menos de un segundo de la de YouTube:
-        // rehacer el trozo entonces lo movería de sitio con la canción ya sonando. Solo se rehace si llegó la letra
-        // o un análisis de audio todavía no aplicado antes de que empiece a sonar.
-        // La que ya suena no se rehace nunca (aunque llegue otra duración): se recolocó desde donde entró por el puente
-        // y rehacerla le devolvía un final de antes; así salían trozos de menos de 40 s.
-        if (cached != null && item.mediaId == player.currentMediaItem?.mediaId) return cached
-        if (cached != null && kotlin.math.abs(cached.fullDurationMs - durMs) <= SAME_DURATION_MS) {
-            val needLyrics = !cached.fromLyrics && sections.isNotEmpty() && item.mediaId !in adhdUsedLyrics
-            val needAudio = !cached.fromLyrics && audio != null && item.mediaId !in adhdUsedAudio
-            val canImprove = (needLyrics || needAudio) &&
-                item.mediaId != player.currentMediaItem?.mediaId
-            if (!canImprove) return cached
+        if (cached != null) {
+            // Una vez aplicada la entrada, ni un análisis mejor ni la duración exacta pueden moverla.
+            if (item.mediaId == player.currentMediaItem?.mediaId && !beforeIntro) {
+                return refreshPlayingExit(item, cached, sections, audio)
+            }
+            val newSections = sections.isNotEmpty() && adhdCheckedSections[item.mediaId] != sections
+            if (!newSections && !cached.hasBetterAudio(audio) &&
+                kotlin.math.abs(cached.fullDurationMs - durMs) <= SAME_DURATION_MS) return cached
         }
         val track = djTracks[item.mediaId] ?: item.toHeard().toDjFallbackTrack(durMs)
         val seg = d.adhdSegment(track, durationMs = durMs, crossfadeMs = effectiveAdhdFadeMs(), sections = sections, audio = audio) ?: return null
         adhdSegments[item.mediaId] = seg
-        if (audio != null) adhdUsedAudio += item.mediaId else adhdUsedAudio -= item.mediaId
-        if (sections.isNotEmpty()) adhdUsedLyrics += item.mediaId
+        adhdCheckedSections[item.mediaId] = sections
         val kindLabel = when {
             seg.fromLyrics -> "por la letra"
-            audio != null && (audio.dropMs > 0L || audio.outroStartMs > 0L) -> "por análisis de audio"
+            seg.fromAudio -> if (audio?.coversWholeSong == true) "por análisis entero" else "por análisis de audio"
             else -> "a ojo"
         }
         MixLog.i("DJ rápido: trozo de ${track.title} ${seg.startMs / 1000}–${seg.endMs / 1000} s de ${durMs / 1000} s ($kindLabel)")
         return seg
+    }
+
+    /**
+     * La que ya suena no cambia su inicio, pero si llega su letra o su análisis, su SALIDA se recoloca en un límite de
+     * frase (tras un bloque cantado), solo hacia delante y con margen para preparar la mezcla. Antes se quedaba con la
+     * salida adivinada hasta el final.
+     */
+    private fun refreshPlayingExit(item: MediaItem, cached: AdhdSegment, sections: List<SongSection>, audio: AudioMetrics?): AdhdSegment {
+        if (crossfade.handingOver || duckJob?.isActive == true) return cached
+        val needLyrics = sections.isNotEmpty() && adhdCheckedSections[item.mediaId] != sections
+        if (!needLyrics && !cached.hasBetterAudio(audio)) return cached
+        val d = dj ?: return cached
+        val tried = adhdExitTried[item.mediaId]
+        if (tried != null && tried.first == sections && tried.second === audio) return cached
+        adhdExitTried[item.mediaId] = sections to audio
+        val pos = player.currentPosition
+        val minFade = AdhdPlanner.liveMinFadeStartMs(cached, pos)
+        val track = djTracks[item.mediaId] ?: item.toHeard().toDjFallbackTrack(cached.fullDurationMs)
+        val candidate = track.adhdSegment(
+            durationMs = cached.fullDurationMs, crossfadeMs = effectiveAdhdFadeMs(), mood = d.mood, sections = sections, audio = audio,
+            fixedStartMs = cached.startMs, minFadeStartMs = minFade,
+        ) ?: return cached
+        val fresh = AdhdPlanner.liveExitUpdate(cached, candidate, pos) ?: return cached
+        adhdSegments[item.mediaId] = fresh
+        adhdCheckedSections[item.mediaId] = sections
+        d.picks.lastOrNull { it.track.id == item.mediaId }?.adhdSegment = fresh
+        MixLog.i("DJ rápido: salida de ${track.title} recolocada ${cached.fadeOutStartMs / 1000} → ${fresh.fadeOutStartMs / 1000} s (llegó ${if (needLyrics) "la letra" else "el análisis"}; en frase: ${fresh.exitOnPhrase})")
+        return fresh
     }
 
     /**
@@ -1022,14 +1110,14 @@ class PlaybackService : MediaLibraryService() {
     }
 
     // Bloques de la letra por canción (el plan se rehace en cada vistazo del fundido: no volver a trocear la letra).
-    private val sectionsMemo = HashMap<String, List<io.github.iaguito22.oto.dj.SongSection>>()
+    private val sectionsMemo = HashMap<String, Pair<Lyrics.Synced, List<io.github.iaguito22.oto.dj.SongSection>>>()
 
     private fun sectionsOf(id: String): List<io.github.iaguito22.oto.dj.SongSection>? {
-        sectionsMemo[id]?.let { return it }
-        val lines = (app.lyrics.peek(id) as? Lyrics.Synced)?.lines ?: return null
-        return SongSections.of(lines).also {
+        val lyrics = app.lyrics.peek(id) as? Lyrics.Synced ?: return null
+        sectionsMemo[id]?.takeIf { it.first === lyrics }?.let { return it.second }
+        return SongSections.of(lyrics.lines).also {
             if (sectionsMemo.size > 64) sectionsMemo.clear()
-            sectionsMemo[id] = it
+            sectionsMemo[id] = lyrics to it
         }
     }
 
@@ -1061,18 +1149,33 @@ class PlaybackService : MediaLibraryService() {
             adhdMonitorJob?.cancel()
             return
         }
-        var seg = ensureAdhdSegment(item, durMs) ?: return
         val key = item.mediaId to player.currentMediaItemIndex
+        val beforeIntro = adhdIntroAppliedFor != key && !crossfade.handingOver && player.currentPosition <= SKIP_TOLERANCE_MS
+        var seg = ensureAdhdSegment(item, durMs, beforeIntro) ?: return
         if (adhdIntroAppliedFor != key) {
             adhdIntroAppliedFor = key
             val pos = player.currentPosition
-            if (crossfade.handingOver) {
-                // Ya está entrando en un fundido: saltar ahora se oiría como un corte. El trozo sigue desde aquí.
-                // Entró antes o después de donde empezaba su trozo: el trozo cuenta desde aquí (con su duración mínima).
-                if (kotlin.math.abs(pos - seg.startMs) > SKIP_TOLERANCE_MS) {
-                    seg = seg.startingAt(pos)
+            // Entrando por un fundido (saltar se oiría como un corte) o ya por delante de su trozo (se activó el DJ rápido
+            // a mitad de canción, o se reanudó): el trozo cuenta desde aquí y su final se vuelve a elegir en frase.
+            val fromHere = if (crossfade.handingOver) kotlin.math.abs(pos - seg.startMs) > SKIP_TOLERANCE_MS else pos > seg.startMs + SKIP_TOLERANCE_MS
+            if (crossfade.handingOver || fromHere) {
+                if (fromHere) {
+                    val track = djTracks[item.mediaId] ?: item.toHeard().toDjFallbackTrack(durMs)
+                    val sections = sectionsOf(item.mediaId).orEmpty()
+                    val audio = analysisCache.get(item.mediaId)
+                    // Mismo trozo desde donde entró: el final se vuelve a elegir en frase (o se alarga al primer
+                    // límite de frase que dé el mínimo).
+                    val candidate = track.adhdSegment(
+                        durationMs = durMs, crossfadeMs = effectiveAdhdFadeMs(), mood = d.mood, sections = sections,
+                        audio = audio, fixedStartMs = pos,
+                        minFadeStartMs = pos + AdhdPlanner.LIVE_EXIT_LEAD_MS,
+                    )?.takeIf { it.endMs >= pos + it.minimumClipMs - 5_000L }
+                    seg = candidate ?: seg.startingAt(pos)
                     adhdSegments[item.mediaId] = seg
-                    MixLog.i("DJ rápido: entró por el fundido en $pos ms, trozo recolocado hasta ${seg.endMs} ms")
+                    if (candidate != null) adhdCheckedSections[item.mediaId] = sections
+                    adhdExitTried.remove(item.mediaId)
+                    d.picks.lastOrNull { it.track.id == item.mediaId }?.adhdSegment = seg
+                    MixLog.i("DJ rápido: ${if (crossfade.handingOver) "entró por el fundido" else "ya iba"} en $pos ms, trozo recolocado hasta ${seg.endMs} ms")
                 }
             } else if (AdhdPlayback.shouldSkipIntro(seg, pos)) {
                 MixLog.i("DJ rápido: salta la intro de $pos a ${seg.startMs} ms")
@@ -1083,53 +1186,152 @@ class PlaybackService : MediaLibraryService() {
     }
 
     /** Baja el volumen en [ms] antes de un salto que no puede ir con fundido, para que no suene a corte. */
-    private suspend fun duck(ms: Long, down: Boolean) {
+    private suspend fun duck(ms: Long, down: Boolean, abortIf: () -> Boolean = { false }): Boolean {
         val steps = (ms / 20L).toInt().coerceAtLeast(1)
         for (i in 1..steps) {
+            if (abortIf()) return false
             val q = i.toFloat() / steps
             fadeIn = if (down) 1f - q else q
             applyVolume()
             delay(20L)
         }
+        return !abortIf()
     }
 
     private fun startAdhdMonitor(key: Pair<String, Int>, seg: AdhdSegment) {
         adhdMonitorJob?.cancel()
         adhdMonitorJob = scope.launch {
+            // Crossfade decide la mezcla. La salida forzada se ARMA un poco antes de su objetivo y solo se autoriza si,
+            // durante un rato seguido y sin búsquedas, Crossfade no ha empezado relevo (ver [AdhdForcedExitGate]); así
+            // la confirmación no retrasa el salto fuera de su frase.
+            val gate = AdhdForcedExitGate()
             while (isActive) {
                 delay(250L)
                 val current = player.currentMediaItem ?: break
-                val d = dj
-                if (d == null || djMode != DjMode.Adhd || d.isFullOnce(current.mediaId) || (current.mediaId to player.currentMediaItemIndex) != key) break
-                if (!player.isPlaying || crossfade.handingOver) continue
-                if (player.currentPosition >= seg.endMs - DUCK_MS) {
-                    if (player.hasNextMediaItem()) {
-                        // No hubo fundido (la siguiente no estaba lista o está desactivado): bajada corta, salto y subida.
-                        // Se lanza fuera de [adhdMonitorJob] porque seekTo dispara onMediaItemTransition y cancelaría este Job.
-                        MixLog.i("DJ rápido: fin del trozo sin fundido en ${player.currentPosition} ms")
-                        val nextIdx = player.currentMediaItemIndex + 1
-                        val nextStart = nextStartPositionFor(player.getMediaItemAt(nextIdx))
-                        duckAndAdvanceAdhd(nextIdx, nextStart)
-                    }
-                    break
+                if (!adhdStillOwns(key) || current.mediaId != key.first) break
+                if (!player.isPlaying || crossfade.handingOver) {
+                    gate.reset()
+                    continue
                 }
+                val pos = player.currentPosition
+                ensureAdhdSegment(current, player.duration)
+                val target = adhdForcedExitTarget(key, seg)
+                val armed = pos >= AdhdForcedExitGate.armAtMs(target, DUCK_MS)
+                if (!gate.observe(android.os.SystemClock.elapsedRealtime(), pos, crossfade.plannedExitFor(key), armed, crossfade.handingOver)) continue
+                if (player.hasNextMediaItem()) {
+                    // No hubo fundido (la siguiente no estaba lista, se abandonó o está desactivado): bajada corta,
+                    // salto y subida, terminando en la frase. Se lanza fuera de [adhdMonitorJob] porque seekTo
+                    // dispara onMediaItemTransition y cancelaría este Job.
+                    val live = liveAdhdSegment(key, seg)
+                    val sections = sectionsOf(key.first).orEmpty()
+                    val jumpAt = AdhdForcedExitGate.jumpAtMs(target, pos, DUCK_MS) { live.forcedExitTargetMs(it, sections, guardMs = DUCK_MS, duckBefore = true) }
+                    MixLog.i("DJ rápido: fin del trozo sin fundido, salto en ${jumpAt} ms (objetivo $target, ahora $pos)")
+                    val nextIdx = player.currentMediaItemIndex + 1
+                    duckAndAdvanceAdhd(key, seg, jumpAt, nextIdx)
+                }
+                break
             }
         }
     }
 
-    private fun duckAndAdvanceAdhd(nextIdx: Int, nextStart: Long) {
+    /** Sigue en DJ rápido con esta misma canción en esta posición de la cola (y no suena entera). */
+    private fun adhdStillOwns(key: Pair<String, Int>): Boolean {
+        val d = dj ?: return false
+        return djMode == DjMode.Adhd && !d.isFullOnce(key.first) &&
+            (player.currentMediaItem?.mediaId to player.currentMediaItemIndex) == key
+    }
+
+    /** El trozo puede haber recolocado su salida (letra o análisis tardíos): se lee el último. */
+    private fun liveAdhdSegment(key: Pair<String, Int>, seg: AdhdSegment): AdhdSegment =
+        adhdSegments[key.first]?.takeIf { it.startMs == seg.startMs } ?: seg
+
+    /**
+     * Objetivo de la salida forzada del trozo [seg] de [key]. Sale del final PREVISTO (el del trozo, o el de la mezcla
+     * que publicó Crossfade), no de la posición (si no, se iría alejando); cae en frase, como mucho unos compases
+     * tarde, y nunca dentro de un estribillo.
+     */
+    private fun adhdForcedExitTarget(key: Pair<String, Int>, seg: AdhdSegment): Long {
+        val live = liveAdhdSegment(key, seg)
+        // Read the plan actually selected by Crossfade (including rendered WAV timing), not a second plan.
+        val plannedEnd = maxOf(live.endMs - DUCK_MS, crossfade.plannedExitFor(key) ?: 0L)
+        // Aquí la bajada va antes del salto (ver [duckAndAdvanceAdhd]): en una unión acaba con el verso.
+        return live.forcedExitTargetMs(plannedEnd, sectionsOf(key.first).orEmpty(), guardMs = DUCK_MS, duckBefore = true)
+    }
+
+    /**
+     * Bajada corta que acaba en [jumpAtMs] y salto a la siguiente. Se retira si empieza un relevo de Crossfade, si se
+     * deja el DJ rápido o cambia la canción, o si con los datos de ese momento ya no toca salir.
+     */
+    private fun duckAndAdvanceAdhd(key: Pair<String, Int>, seg: AdhdSegment, jumpAtMs: Long, nextIdx: Int) {
         duckJob?.cancel()
         duckJob = scope.launch {
+            // La salida forzada se retira: la canción sigue y, si sigue siendo DJ rápido, se vuelve a vigilar.
+            fun retire(why: String) {
+                MixLog.i("DJ rápido: salida forzada retirada ($why)")
+                if (adhdStillOwns(key)) startAdhdMonitor(key, seg)
+            }
+            // El punto de salto se calculó con la posición de antes: una pausa, atasco o búsqueda lo invalida (se
+            // retira y el monitor vuelve a confirmar y a calcular desde la posición real).
+            val continuity = PlaybackContinuity()
+            fun continuous() = continuity.ok(android.os.SystemClock.elapsedRealtime(), player.currentPosition, player.isPlaying)
             try {
-                duck(DUCK_MS, down = true)
+                // Hasta que la bajada termine justo en el salto (y fuera de un estribillo).
+                while (true) {
+                    if (!adhdStillOwns(key)) return@launch
+                    if (crossfade.handingOver) return@launch retire("empezó el relevo")
+                    if (!continuous()) return@launch retire("pausa o búsqueda")
+                    val now = player.currentPosition
+                    val duration = player.duration.takeIf { it > 0L } ?: return@launch
+                    // La bajada entera [now, now + DUCK_MS] (acaba en el salto) fuera de lo protegido.
+                    if (now >= jumpAtMs - DUCK_MS &&
+                        liveAdhdSegment(key, seg).allowsForcedExitAt(
+                            now + DUCK_MS, sectionsOf(key.first).orEmpty(), duration, DUCK_MS, duckBefore = true,
+                        )
+                    ) break
+                    delay(20L)
+                }
+                var interrupted = false
+                if (!duck(DUCK_MS, down = true, abortIf = {
+                        if (!continuous()) interrupted = true
+                        interrupted || crossfade.handingOver || !adhdStillOwns(key)
+                    })) {
+                    return@launch when {
+                        crossfade.handingOver -> retire("empezó el relevo")
+                        interrupted -> retire("pausa o búsqueda")
+                        else -> Unit
+                    }
+                }
+                // Justo antes de saltar (sin suspender hasta el seek): mismo modo, misma canción, sin relevo, sonando,
+                // con la posición REAL en el punto de salto, y con los datos de ahora todavía toca salir.
+                if (!adhdStillOwns(key)) return@launch
+                if (crossfade.handingOver) return@launch retire("empezó el relevo")
+                val pos = player.currentPosition
+                if (!continuous() || !AdhdForcedExitGate.arrived(pos, jumpAtMs, player.isPlaying)) return@launch retire("pausa o búsqueda")
+                val target = adhdForcedExitTarget(key, seg)
+                val sections = sectionsOf(key.first).orEmpty()
+                val dur = player.duration.takeIf { it > 0L } ?: liveAdhdSegment(key, seg).fullDurationMs
+                val at = maxOf(pos, jumpAtMs)
+                // La bajada ya está hecha: aquí solo cuenta que el salto no caiga dentro de un estribillo (volver a reservar
+                // otra bajada retiraba la salida en las uniones de un bloque repetido, que acaban justo con el verso).
+                if (target > at || !liveAdhdSegment(key, seg).allowsForcedExitAt(at, sections, dur, 0L)) {
+                    return@launch retire("salida nueva")
+                }
                 if (nextIdx < player.mediaItemCount) {
-                    if (nextStart > 0L) player.seekTo(nextIdx, nextStart) else player.seekToNextMediaItem()
+                    val next = player.getMediaItemAt(nextIdx)
+                    val nextStart = nextStartPositionFor(next)
+                    if (nextStart > 0L) {
+                        adhdIntroAppliedFor = next.mediaId to nextIdx
+                        player.seekTo(nextIdx, nextStart)
+                    } else player.seekToNextMediaItem()
                 }
                 withTimeoutOrNull(3_000L) { while (!player.isPlaying) delay(20L) }
                 duck(DUCK_MS, down = false)
             } finally {
-                fadeIn = 1f
-                applyVolume()
+                // Con un relevo en marcha el volumen de la sesión lo lleva Crossfade ([onFadeIn]): no se pisa.
+                if (!crossfade.handingOver) {
+                    fadeIn = 1f
+                    applyVolume()
+                }
             }
         }
     }
@@ -1138,7 +1340,11 @@ class PlaybackService : MediaLibraryService() {
         if (djMode == newMode) return
         djMode = newMode
         dj?.setMode(newMode)
+        // Una salida forzada del DJ rápido a medias (bajada + salto) no sigue en otro modo.
+        duckJob?.cancel()
         clearAdhdSegments()
+        // Publish even while paused, and before the no-current-item early return below.
+        publishDjSessionExtras()
         if (newMode == DjMode.Adhd) {
             val item = player.currentMediaItem ?: return
             val dur = player.duration.takeIf { it > 0 } ?: item.mediaMetadata.durationMs ?: 0L
@@ -1302,7 +1508,8 @@ class PlaybackService : MediaLibraryService() {
         if (!current.isDjItem) return
         d.playFullOnce(current.mediaId)
         adhdSegments.remove(current.mediaId)
-        adhdUsedAudio.remove(current.mediaId)
+        adhdCheckedSections.remove(current.mediaId)
+        adhdExitTried.remove(current.mediaId)
         adhdMonitorJob?.cancel()
         MixLog.i("DJ rápido: oír esta entera → ${current.mediaMetadata.title}")
         publishDjSessionExtras()
@@ -1317,6 +1524,8 @@ class PlaybackService : MediaLibraryService() {
             if (dj !== d) return@launch
             applyUpcomingQueueDiff(d, picks)
             publishDjSessionExtras()
+            // Esta cancelación pudo cortar una revisión por tempo: si quedó pendiente, se atiende al acabar.
+            if (djTempoPending) retuneDjTempo()
         }
     }
 
@@ -1329,6 +1538,7 @@ class PlaybackService : MediaLibraryService() {
 
     private fun clearDjRuntime() {
         djJob?.cancel()
+        djTempoRetry?.cancel()
         duckJob?.cancel()
         adhdMonitorJob?.cancel()
         clearAdhdSegments()
@@ -1372,7 +1582,10 @@ class PlaybackService : MediaLibraryService() {
             if (skipNow) {
                 val idx = player.mediaItemCount - 1
                 val start = nextStartPositionFor(item)
-                if (start > 0L) player.seekTo(idx, start) else player.seekToDefaultPosition(idx)
+                if (start > 0L) {
+                    adhdIntroAppliedFor = item.mediaId to idx
+                    player.seekTo(idx, start)
+                } else player.seekToDefaultPosition(idx)
             }
             MixLog.i("DJ: ${if (skipNow) "ambiente saltado" else "género cambiado"} → ${d.tandaOf(t.id) ?: d.tanda} (${t.artist} — ${t.title})")
             syncUpcomingDjQueue(d)
@@ -1393,6 +1606,25 @@ class PlaybackService : MediaLibraryService() {
 
     private suspend fun syncUpcomingDjQueue(d: Dj) {
         var picks = d.prepareNextUp(NEXT_UP_COUNT)
+        // Una de la cola (nunca la siguiente) que no se podrá cuadrar con la de antes se cambia por otra de la tanda.
+        // Varias seguidas solo si la nueva ya se sabe que tampoco encaja (lo sin medir espera a su precarga).
+        djTempoPending = false
+        if (!(saver && connectivity.isActiveNetworkMetered)) {
+            try {
+                var swapped = false
+                for (round in 0..Dj.MAX_TEMPO_SWAPS) {
+                    val swap = d.retuneUpcomingTempo(NEXT_UP_COUNT, protect = protectedDjIds(d)) { MixLog.i(it) } ?: break
+                    MixLog.i(swap.describe())
+                    swapped = true
+                }
+                // Siempre la cola que tiene el DJ ahora (no la de antes de los cambios).
+                if (swapped) picks = d.nextUp()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cortada a medias (otro cambio de la cola): la revisión sigue pendiente.
+                djTempoPending = true
+                throw e
+            }
+        }
         // Seguro: nada que ya haya sonado en esta sesión del DJ vuelve a la cola.
         repeat(3) {
             val again = picks.firstOrNull { it.track.id in djSessionPlayed } ?: return@repeat
@@ -1403,6 +1635,37 @@ class PlaybackService : MediaLibraryService() {
         if (dj !== d) return
         applyUpcomingQueueDiff(d, picks)
         publishDjSessionExtras()
+    }
+
+    /** Conserva el prefijo preparado: solo se revisa la última, además de proteger el puente del reproductor. */
+    private fun protectedDjIds(d: Dj): Set<String> {
+        val at = player.currentMediaItemIndex
+        return androidDjTempoProtected(
+            (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId },
+            at, d.nextUp().map { it.track.id },
+        )
+    }
+
+    /** Revisa por tempo tras analizar una precargada; en red medida con ahorro de datos no precarga sustitutas. */
+    private fun retuneDjTempo() {
+        val d = dj ?: return
+        if (saver && connectivity.isActiveNetworkMetered) return
+        // La petición queda pendiente hasta que la atienda una revisión (cualquier [syncUpcomingDjQueue] la atiende).
+        djTempoPending = true
+        if (djJob?.isActive != true) {
+            djJob = scope.launch { if (dj === d) syncUpcomingDjQueue(d) }
+            return
+        }
+        // Otro cambio de la cola en marcha: se espera a que acabe (y a los que se encadenen) sin perder la petición.
+        if (djTempoRetry?.isActive == true) return
+        djTempoRetry = scope.launch {
+            while (true) {
+                val busy = djJob?.takeIf { it.isActive } ?: break
+                busy.join()
+            }
+            // Mismo hilo (principal): entre el bucle y esto no puede empezar otro trabajo.
+            if (djTempoPending && dj === d) djJob = scope.launch { if (dj === d) syncUpcomingDjQueue(d) }
+        }
     }
 
     private fun applyUpcomingQueueDiff(d: Dj, picks: List<DjPickInfo>) {
@@ -1429,8 +1692,13 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    private var lastShownMix: String? = null
+
     private fun publishDjSessionExtras() {
         if (!::session.isInitialized) return
+        if (mixPublication.configure(MixUiConfiguration(smartMix, fadeMs, djMode.name))) {
+            crossfade.invalidateMixUi()
+        }
         val d = dj
         val current = player.currentMediaItem
         val nextItem = if (current != null && player.hasNextMediaItem()) {
@@ -1439,13 +1707,19 @@ class PlaybackService : MediaLibraryService() {
         val pairIds = if (current != null && nextItem != null) current.mediaId to nextItem.mediaId else null
         // Solo la mezcla de ESTA pareja. No se borra al cambiar de canción o de cola: el relevo no la vuelve a mandar
         // si no cambia (y el aviso «Preparando la mezcla» desaparecía hasta el siguiente cambio de estado).
-        val mixAllowed = current != null && nextItem != null && player.repeatMode != Player.REPEAT_MODE_ONE && smartMix
-        val pairMix = if (mixAllowed) mixUi?.takeIf { it.pair == null || it.pair == pairIds } else null
-        val mix = pairMix?.takeIf { it.startMs >= 0L && it.state != MixUiState.None }
+        // This badge describes smart mixing. Classic fades have no preparation notice. Wrap/shuffle jumps are
+        // excluded until the audio handoff supports non-sequential items too.
+        val mixAllowed = current != null && nextItem != null && player.repeatMode != Player.REPEAT_MODE_ONE && smartMix &&
+            sequentialMixNext(player.currentMediaItemIndex, player.nextMediaItemIndex)
+        val mix = publishedMixUi(pairIds, mixAllowed, mixPublication.latest)
+        val shown = "${pairIds?.first}→${pairIds?.second} ${mix?.state?.id ?: "nada"} allowed=$mixAllowed mixing=$isMixing latest=${mixPublication.latest?.let { "${it.pair?.first}→${it.pair?.second} ${it.state.id}" }}"
+        if (shown != lastShownMix) {
+            lastShownMix = shown
+            MixLog.i("cola muestra: $shown")
+        }
         // Antes, sin mezcla publicada para esta pareja (p. ej. mientras suena el puente anterior) se calculaba aquí un
         // plan con el análisis a medias y se enseñaba su estilo como si estuviera decidido. Ahora: «Preparando» hasta
         // que el fundido la mira; solo el estilo de su plan.
-        val waiting = mixAllowed && pairMix == null && !isMixing && player.playWhenReady
         val resolvedStyle = mix?.style
         val extras = Bundle().apply {
             val tanda = if (d != null && current != null && current.isDjItem) {
@@ -1459,8 +1733,9 @@ class PlaybackService : MediaLibraryService() {
             putBoolean(SESSION_DJ_MIXING, isMixing)
             putLong(SESSION_DJ_MIX_START_MS, mix?.startMs ?: -1L)
             putLong(SESSION_DJ_MIX_SWITCH_MS, mix?.switchMs ?: -1L)
-            (mix?.state ?: MixUiState.Preparing.takeIf { waiting })?.let { putString(SESSION_DJ_MIX_STATE, it.id) }
+            mix?.state?.let { putString(SESSION_DJ_MIX_STATE, it.id) }
             if (resolvedStyle != null) putString(SESSION_DJ_NEXT_STYLE, resolvedStyle.id)
+            mix?.styleLabel?.let { putString(SESSION_DJ_MIX_LABEL, it) }
         }
         session.setSessionExtras(extras)
     }
@@ -1575,8 +1850,8 @@ class PlaybackService : MediaLibraryService() {
             tiers.keys.retainAll(activeIds)
             djTracks.keys.retainAll(activeIds)
             adhdSegments.keys.retainAll(activeIds)
-            adhdUsedAudio.retainAll(activeIds)
-            adhdUsedLyrics.retainAll(activeIds)
+            adhdCheckedSections.keys.retainAll(activeIds)
+            adhdExitTried.keys.retainAll(setOf(id))
             stallJob?.cancel()
             if (player.playbackState == Player.STATE_BUFFERING) watchStart()
             durations.keys.retainAll(setOf(id) + activeIds)
@@ -1633,6 +1908,7 @@ class PlaybackService : MediaLibraryService() {
                 historyJob?.cancel()
                 prefetchJob?.cancel()
                 writer?.cancel()
+                cancelWholeNext()
             }
         }
 
@@ -1640,6 +1916,10 @@ class PlaybackService : MediaLibraryService() {
 
         override fun onRepeatModeChanged(repeatMode: Int) {
             if (repeatMode == Player.REPEAT_MODE_OFF) autoplay() else dropAutoplay()
+            publishDjSessionExtras()
+        }
+
+        override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
             publishDjSessionExtras()
         }
 
@@ -1974,6 +2254,7 @@ const val SESSION_DJ_MIX_START_MS = "oto_session_dj_mix_start_ms"
 const val SESSION_DJ_MIX_SWITCH_MS = "oto_session_dj_mix_switch_ms"
 const val SESSION_DJ_MIX_STATE = "oto_session_dj_mix_state"
 const val SESSION_DJ_NEXT_STYLE = "oto_session_dj_next_style"
+const val SESSION_DJ_MIX_LABEL = "oto_session_dj_mix_label"
 const val DJ_MODE_COMMAND = "io.github.iaguito22.oto.DJ_MODE"
 const val DJ_REACT_COMMAND = "io.github.iaguito22.oto.DJ_REACT"
 const val EXTRA_DJ_MODE = "mode"

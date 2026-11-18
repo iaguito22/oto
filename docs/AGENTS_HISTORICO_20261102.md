@@ -563,7 +563,7 @@ El usuario habla español: textos de la app, commits y respuestas en español.
 ### Móvil real
 
 - Nothing Phone (2), A065, Android 16 / API 36, 1080x2412, 420 dpi, 120 Hz.
-- adb inalámbrico a `192.168.1.147`. **El mDNS de adb no funciona en su red**: escanear puertos 30000-50000 (`bash /dev/tcp` en paralelo) y `adb connect`. El puerto cambia al reactivar la depuración.
+- adb inalámbrico a `<IP local>`. **El mDNS de adb no funciona en su red**: escanear puertos 30000-50000 (`bash /dev/tcp` en paralelo) y `adb connect`. El puerto cambia al reactivar la depuración.
 - Su volumen multimedia suele estar a 0 y a veces está en una llamada de Discord: probar en silencio. Con cascos se puede poner música.
 - No se puede bajar el volumen de BT por adb.
 - `pgrep/pkill -f` con el patrón en la línea de comandos mata la propia shell: buscar pids con `ps -eo pid,comm | awk`.

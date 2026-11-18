@@ -43,7 +43,7 @@ internal fun DownloadsSpace(player:DesktopPlayerConnection,prefs:Prefs,downloads
     fun removeList(list:LocalPlaylist) {val key="list:${list.id}";if(key in hidden)return;hidden.add(key);workScope.launch{val result=withTimeoutOrNull(6000){snackbar.showSnackbar("Descarga de «${list.name}» quitada","Deshacer")};if(result!=SnackbarResult.ActionPerformed)prefs.setDownloadList(list.id,false);hidden.remove(key)}}
     fun removeSong(song:Heard) {val key="song:${song.id}";if(key in hidden)return;hidden.add(key);workScope.launch{val result=withTimeoutOrNull(6000){snackbar.showSnackbar("Descarga de «${song.title}» quitada","Deshacer")};if(result!=SnackbarResult.ActionPerformed)prefs.setDownloadSong(song,false);hidden.remove(key)}}
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=28.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+        LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=28.dp+LocalFloatingDockInset.current),verticalArrangement=Arrangement.spacedBy(6.dp)) {
             item(key="head") {
                 Column(verticalArrangement=Arrangement.spacedBy(12.dp),modifier=Modifier.fillMaxWidth().padding(bottom=12.dp)) {
                     Mp3ExportControls(downloads)

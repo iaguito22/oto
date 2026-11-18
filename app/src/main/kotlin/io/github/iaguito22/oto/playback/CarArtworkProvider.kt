@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import coil3.imageLoader
@@ -15,6 +16,7 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import io.github.iaguito22.oto.R
 import kotlinx.coroutines.runBlocking
 
 /** Android Auto necesita una URI local que pueda abrir desde su propio proceso. */
@@ -24,12 +26,22 @@ class CarArtworkProvider : ContentProvider() {
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         if (mode != "r") throw FileNotFoundException("Solo lectura")
-        val url = images[uri.lastPathSegment] ?: throw FileNotFoundException("Carátula desconocida")
         val ctx = context ?: throw FileNotFoundException("Sin contexto")
-        val image = runBlocking {
-            val request = ImageRequest.Builder(ctx).data(url.resize(320)).size(320).allowHardware(false).build()
-            ctx.imageLoader.execute(request).image?.toBitmap()
-        } ?: throw FileNotFoundException("Carátula no disponible")
+        val image = if (uri.lastPathSegment == "dj") {
+            val bitmap = Bitmap.createBitmap(320, 320, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            canvas.drawColor(android.graphics.Color.rgb(75, 54, 111))
+            val icon = ctx.getDrawable(R.drawable.ic_graphic_eq) ?: throw FileNotFoundException("Icono no disponible")
+            icon.setBounds(64, 64, 256, 256)
+            icon.draw(canvas)
+            bitmap
+        } else {
+            val url = images[uri.lastPathSegment] ?: throw FileNotFoundException("Carátula desconocida")
+            runBlocking {
+                val request = ImageRequest.Builder(ctx).data(url.resize(320)).size(320).allowHardware(false).build()
+                ctx.imageLoader.execute(request).image?.toBitmap()
+            } ?: throw FileNotFoundException("Carátula no disponible")
+        }
         // Un archivo temporal independiente evita que dos peticiones simultáneas se sobrescriban.
         val file = File.createTempFile("oto-car-art-", ".png", ctx.cacheDir)
         try {
@@ -47,6 +59,8 @@ class CarArtworkProvider : ContentProvider() {
 
     companion object {
         private val images = ConcurrentHashMap<String, String>()
+
+        fun djUri(context: Context): Uri = Uri.Builder().scheme("content").authority("${context.packageName}.car-artwork").appendPath("dj").build()
 
         fun uri(context: Context, url: String): Uri {
             val id = MessageDigest.getInstance("SHA-256").digest(url.toByteArray()).joinToString("") { "%02x".format(it) }

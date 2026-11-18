@@ -1,5 +1,6 @@
 package io.github.iaguito22.oto.desktop.ui
 
+import io.github.iaguito22.oto.desktop.ShellMode
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -51,7 +52,7 @@ import java.io.File
 
 /** Ajustes con el aspecto y los textos del móvil; lo exclusivo del ordenador (atajo, fondo, RAM) en su sitio. */
 @Composable
-internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:ArtworkPalette,session:Session?,importState:ImportState,artworkBackground:Boolean,onArtworkBackground:(Boolean)->Unit,backdropOpacity:Float,onBackdropOpacity:(Float)->Unit,shortcut:String,shortcutIssue:String?,onShortcut:(String)->Unit,onAccount:()->Unit,onImport:()->Unit,onDevices:()->Unit) {
+internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:ArtworkPalette,session:Session?,importState:ImportState,artworkBackground:Boolean,onArtworkBackground:(Boolean)->Unit,backdropOpacity:Float,onBackdropOpacity:(Float)->Unit,shortcut:String,shortcutIssue:String?,onShortcut:(String)->Unit,onAccount:()->Unit,onImport:()->Unit,onDevices:()->Unit,onQuit:(()->Unit)?=null) {
     val scope=rememberCoroutineScope()
     val accent=palette.primary
     val quality by prefs.quality.collectAsState(initial=QualityMode.Auto)
@@ -64,9 +65,12 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
     val remaining by prefs.showRemaining.collectAsState(initial=false)
     val romanize by prefs.romanize.collectAsState(initial=true)
     val crossfadeSupported = remember(player) { player.supportsCrossfade }
+    val mixMode by prefs.smartMixMode.collectAsState(initial = SmartMixMode.Always)
+    val crossfade by prefs.crossfade.collectAsState(initial = DEFAULT_CROSSFADE)
     val np by player.state.collectAsState()
     val nowId=np.id
-    LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=32.dp),verticalArrangement=Arrangement.spacedBy(2.dp)) {
+    LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=32.dp+LocalFloatingDockInset.current),verticalArrangement=Arrangement.spacedBy(2.dp)) {
+        item { InterfaceSetting(accent, onQuit) }
         item {SettingsLink(MobileIcons.accountCircle,"Cuenta de YouTube Music",session?.let { listOfNotNull(it.name.ifEmpty { null },it.email?.ifEmpty { null }).joinToString(" · ").ifEmpty { "Has entrado" } } ?: "Sin cuenta: recomendaciones de visitante",accent,onAccount)}
         item {SettingsLink(MobileIcons.playlistAdd,"Importar de Spotify",when(importState){is ImportState.Running->"Importando ${importState.done} de ${importState.total}";is ImportState.Done->"Importación terminada";else->"Tus listas y tus Me gusta"},accent,onImport)}
         item {SettingsLink(Icons.Rounded.Devices,"Dispositivos","Conectar con Oto móvil en la red local",accent,onDevices)}
@@ -81,15 +85,29 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
             }
         }
         item {SettingsToggle(MobileIcons.dataSaver,"Ahorro de datos","Las canciones suenan en calidad baja (unos 48 kbps), salvo con la calidad en Máxima.",saver,accent){scope.launch{prefs.setDataSaver(!saver)}}}
-        // La mezcla inteligente va siempre (en el DJ y fuera): solo se explica, sin interruptor ni fundido aparte.
         item {
             SettingFrame(MobileIcons.graphicEq, accent) {
-                Text("Mezcla entre canciones", style = OtoType.rowTitle)
+                Text("Mezcla inteligente", style = OtoType.rowTitle)
                 FadingText(when {
                     !crossfadeSupported -> "Disponible cuando FFmpeg y la salida de audio PCM están disponibles."
-                    ramSaver -> "Sin mezcla mientras esté activo el ahorro de RAM: cada canción acaba antes de la siguiente."
-                    else -> "Como un DJ, siempre: cada mezcla dura lo que pide la música, cuadra los beats y evita juntar dos voces. Solo cuando una acaba sola, no al pasarla tú."
+                    ramSaver -> "Se aplicará al desactivar el ahorro de RAM."
+                    else -> "Transiciones al ritmo con filtros y cruce de graves."
                 })
+                BoxWithConstraints {
+                    ChoiceSelector(SmartMixMode.entries.map { it.label }, mixMode.ordinal, minOf(108.dp, maxWidth / SmartMixMode.entries.size), accent) { index ->
+                        scope.launch { prefs.setSmartMixMode(SmartMixMode.entries[index]) }
+                    }
+                }
+            }
+        }
+        item {
+            SettingFrame(MobileIcons.timer, accent) {
+                Text("Fundido entre canciones", style = OtoType.rowTitle)
+                FadingText("Se usa al final de una canción cuando no se aplica la mezcla inteligente.")
+                val durations = remember(crossfade) { (CROSSFADE_CHOICES + crossfade).distinct().sorted() }
+                ChoiceSelector(durations.map { if (it == 0) "No" else "$it s" }, durations.indexOf(crossfade), 52.dp, accent) { index ->
+                    scope.launch { prefs.setCrossfade(durations[index]) }
+                }
             }
         }
         item {SettingsToggle(MobileIcons.shuffle,"Aleatorio","Las listas nuevas empiezan mezcladas. Cada una recuerda cómo la dejaste.",shuffle,accent){scope.launch{prefs.setShuffle(!shuffle)}}}
@@ -103,7 +121,8 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
         if(isWindowsDesktop) item { DedicatedGpuSetting(accent) }
         if(supportsDesktopShortcut) item { ShortcutSetting(shortcut,shortcutIssue,accent,onShortcut) }
         item { SpaceRow(nowId,accent) }
-        item {SettingFrame(MobileIcons.settings,accent){Text("Atajos de teclado",style=OtoType.rowTitle);Text("Espacio: reproducir o pausar · Ctrl + ← / →: canción anterior o siguiente · Ctrl + ↑ / ↓: volumen · Ctrl + Mayús + M: cambiar reproductor · Ctrl + B: guardar",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))}}
+        item {SettingFrame(MobileIcons.settings,accent){Text("Atajos de teclado",style=OtoType.rowTitle);Text(if(ShellMode.startedSingle) "Ctrl + K: buscar · Ctrl + L: letra · Ctrl + ← / →: canción anterior o siguiente · Ctrl + ↑ / ↓: volumen · Ctrl + Mayús + M: mini reproductor · Ctrl + B: guardar"
+            else "Espacio: reproducir o pausar · Ctrl + ← / →: canción anterior o siguiente · Ctrl + ↑ / ↓: volumen · Ctrl + Mayús + M: cambiar reproductor · Ctrl + B: guardar",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))}}
         item {
             // jpackage pone la versión del instalador; al ejecutar desde Gradle no la hay.
             Text("Oto${System.getProperty("jpackage.app-version")?.let { " $it" }.orEmpty()} · GPL-3.0\nCon InnerTubeX y partes de Metrolist.\nLetras de lyricsplus, NetEase, LRCLIB y YouTube Music.\ngithub.com/iaguito22/oto",
@@ -150,6 +169,39 @@ private fun clearCache(playingId:String?) {
 }
 
 private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).toDouble()) else "${(n+(1L shl 19)) shr 20} MB"
+
+
+/** Una ventana (islas y dock) o varias ventanas acopladas. Se aplica al reiniciar Oto. */
+@Composable private fun InterfaceSetting(accent:Color, onQuit:(()->Unit)?) {
+    var single by remember { mutableStateOf(ShellMode.single) }
+    val startedSingle = ShellMode.startedSingle
+    SettingFrame(Icons.Rounded.Devices,accent) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val options = listOf("Varias ventanas", "Una ventana")
+            val selected = if (single) 1 else 0
+            val choose: (Int) -> Unit = { single = it == 1; ShellMode.single = single }
+            if (maxWidth < 490.dp) {
+                val optionWidth = maxWidth / 2
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Interfaz", style = OtoType.rowTitle)
+                    ChoiceSelector(options, selected, optionWidth, accent, choose)
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Interfaz", style = OtoType.rowTitle, modifier = Modifier.weight(1f))
+                    ChoiceSelector(options, selected, 200.dp, accent, choose)
+                }
+            }
+        }
+        FadingText(if(single!=startedSingle) {
+            if (onQuit != null) "Sal de Oto y vuelve a abrirlo para aplicar el cambio. La reproducción se detendrá."
+            else "Cierra Oto desde la bandeja y vuelve a abrirlo para aplicar el cambio. Lo que suene se parará al reiniciar."
+        }
+            else if(single) "Todo en una ventana: biblioteca y búsqueda al centro, cola a la derecha y el reproductor en un dock flotante. La letra se abre con Ctrl+L."
+            else "Ventanas separadas que se acoplan entre sí (reproductor, biblioteca, letra y cola).")
+        if (onQuit != null) TextButton(onClick = onQuit, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("Salir de Oto") }
+    }
+}
 
 /** Un texto que cambia con un fundido, como las explicaciones del móvil. */
 @Composable private fun FadingText(text:String) {

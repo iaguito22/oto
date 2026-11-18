@@ -234,7 +234,7 @@ internal class StereoBandFilter(
         echoR?.fill(0f)
     }
 
-    fun processPcm16(buffer: ByteArray, byteCount: Int, bands: MixBands, masterGain: Float) {
+    fun processPcm16(buffer: ByteArray, byteCount: Int, bands: MixBands, masterGain: Float, inputScale: Float = 1f) {
         val targetMaster = if (masterGain.isFinite()) masterGain.coerceIn(0f, 2f) else 1f
         val targetOverall = if (bands.overall.isFinite()) bands.overall.coerceIn(0f, 1.5f) else 1f
         val targetLow = if (bands.low.isFinite()) bands.low.coerceIn(0f, 2f) else 1f
@@ -293,8 +293,8 @@ internal class StereoBandFilter(
                 }
             }
 
-            val left = (((buffer[i + 1].toInt() and 255) shl 8) or (buffer[i].toInt() and 255)).toShort().toFloat()
-            val right = (((buffer[i + 3].toInt() and 255) shl 8) or (buffer[i + 2].toInt() and 255)).toShort().toFloat()
+            val left = (((buffer[i + 1].toInt() and 255) shl 8) or (buffer[i].toInt() and 255)).toShort() * inputScale
+            val right = (((buffer[i + 3].toInt() and 255) shl 8) or (buffer[i + 2].toInt() and 255)).toShort() * inputScale
 
             lowL.step(left)
             val lLow = lowL.low
@@ -598,8 +598,8 @@ internal class WsolaTimeStretch(
         const val HOP_S = 960 // 20 ms a 48 kHz
         const val WINDOW = HOP_S * 2 // 40 ms
         const val SEARCH = 672 // ±14 ms (cubre al menos un ciclo completo de graves ~70 Hz)
-        const val MIN_TEMPO = 0.90f
-        const val MAX_TEMPO = 1.10f
-        const val ENGAGE_EPS = 0.004f
+        const val MIN_TEMPO = 0.85f
+        const val MAX_TEMPO = 1.15f
+        const val ENGAGE_EPS = 0.001f // = DjTempoMatch.STRETCH_EPS
     }
 }
