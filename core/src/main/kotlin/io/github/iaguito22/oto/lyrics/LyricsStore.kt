@@ -85,7 +85,10 @@ class LyricsStore(private val dir: File) {
         if (!file.exists()) return@withContext null
         runCatching {
             val o = JSONObject(file.readText())
-            if (o.optInt("matchVersion") != 2) return@runCatching null
+            val version = o.optInt("matchVersion")
+            if (version != 2 && version != MATCH_VERSION) return@runCatching null
+            // Las sincronizadas de LRCLIB elegidas antes del consenso (19/11) pueden ir desplazadas: se vuelven a pedir.
+            if (version == 2 && o.optString("t") == "synced" && o.optString("src") == "LRCLIB") return@runCatching null
             when (o.getString("t")) {
                 "missing" -> Cached(Lyrics.Missing).takeIf { System.currentTimeMillis() - file.lastModified() < MISSING_MS }
                 "plain" -> Cached(Lyrics.Plain(o.getJSONArray("l").strings(), o.getString("src")))
@@ -105,7 +108,7 @@ class LyricsStore(private val dir: File) {
         }
         runCatching {
             dir.mkdirs()
-            o.put("matchVersion", 2)
+            o.put("matchVersion", MATCH_VERSION)
             val file = File(dir, "$id.json")
             if (l is Lyrics.Synced && missingLatinWordSpaces(l)) {
                 val retry = retrySpacingAt ?: runCatching { JSONObject(file.readText()).optLong("retrySpacingAt") }.getOrDefault(0L)
@@ -155,6 +158,7 @@ class LyricsStore(private val dir: File) {
     private companion object {
         const val MISSING_MS = 3 * 24 * 3600_000L
         const val SPACING_RETRY_MS = 24 * 3600_000L
+        const val MATCH_VERSION = 3
         const val MAX_FILES = 1500
     }
 }

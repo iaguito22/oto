@@ -248,15 +248,17 @@ object LyricsSource {
             val foundArtist=item.optString("artistName")
             return foundTitle.isNotBlank() && sameTrackTitle(title,foundTitle) && sameTrackArtist(artist,foundArtist) && (secs <= 0 || abs(item.optDouble("duration") - secs) <= 3)
         }
-        val hit = direct?.takeIf(::matches) ?: sequenceOf(
+        val exact = direct?.takeIf(::matches)
+        // También con la exacta se buscan las demás: cada letra de LRCLIB la sube alguien y la exacta puede ir
+        // desplazada (medido 19/11: «Faint», la exacta a 30,58 s y otras 14 versiones a 29,0 ± 0,4 s).
+        val found = sequenceOf(
             "https://lrclib.net/api/search?track_name=${enc(title)}&artist_name=${enc(artist)}",
             "https://lrclib.net/api/search?q=${enc("$title $artist")}",
-        ).firstNotNullOfOrNull { url ->
-            val arr = JSONArray(retry { get(url) } ?: return@firstNotNullOfOrNull null)
-            (0 until arr.length()).map(arr::getJSONObject)
-                .filter(::matches)
-                .maxByOrNull { if (it.optString("syncedLyrics").isNotBlank() && it.optString("syncedLyrics") != "null") 1 else 0 }
-        } ?: return null
+        ).map { url ->
+            val arr = retry { get(url) }?.let { runCatching { JSONArray(it) }.getOrNull() } ?: return@map emptyList()
+            (0 until arr.length()).map(arr::getJSONObject).filter(::matches)
+        }.firstOrNull { it.isNotEmpty() }.orEmpty()
+        val hit = pickLrclib(exact, found, secs) ?: return null
         val synced = hit.optString("syncedLyrics").takeIf { it.isNotBlank() && it != "null" }
         if (synced != null) {
             val lines = parseLrc(synced)
@@ -265,6 +267,41 @@ object LyricsSource {
         val plain = hit.optString("plainLyrics").takeIf { it.isNotBlank() && it != "null" } ?: return null
         return Lyrics.Plain(plain.trim().lines(), "LRCLIB")
     }
+
+    private fun JSONObject.syncedOrNull(): String? = optString("syncedLyrics").takeIf { it.isNotBlank() && it != "null" }
+
+    /**
+     * Elige entre la exacta y las encontradas. Con tres o más versiones sincronizadas que empiezan por la misma frase, se
+     * mira cuándo la cantan: si la exacta se aparta más de [LRC_AGREE_MS] de la mediana, se usa la que más se le acerca
+     * (con la duración más parecida si empatan). Sin consenso, la exacta; si no, la primera sincronizada.
+     */
+    internal fun pickLrclib(exact: JSONObject?, found: List<JSONObject>, secs: Int): JSONObject? {
+        val all = (listOfNotNull(exact) + found).distinctBy { it.optLong("id", it.hashCode().toLong()) }
+        val synced = all.filter { it.syncedOrNull() != null }
+        if (synced.isEmpty()) return exact ?: all.firstOrNull()
+        fun norm(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
+        val firstText = (exact?.takeIf { it.syncedOrNull() != null } ?: synced.first()).syncedOrNull()!!
+            .let { parseStamps(it).firstOrNull { (_, text) -> norm(text).isNotEmpty() }?.second }?.let(::norm)
+        val timed = if (firstText == null) emptyList() else synced.mapNotNull { item ->
+            parseStamps(item.syncedOrNull()!!).firstOrNull { (_, text) -> norm(text) == firstText }?.let { item to it.first }
+        }
+        val preferred = exact?.takeIf { it.syncedOrNull() != null } ?: synced.first()
+        if (timed.size < 3) return preferred
+        val median = timed.map { it.second }.sorted()[timed.size / 2]
+        val preferredAt = timed.firstOrNull { it.first === preferred }?.second
+        if (preferredAt != null && abs(preferredAt - median) <= LRC_AGREE_MS) return preferred
+        return timed.minWith(compareBy<Pair<JSONObject, Long>> { abs(it.second - median) }
+            .thenBy { if (secs > 0) abs(it.first.optDouble("duration") - secs) else 0.0 }).first
+    }
+
+    private const val LRC_AGREE_MS = 500L
+
+    private fun parseStamps(src: String): List<Pair<Long, String>> = src.lines().flatMap { raw ->
+        val times = LRC_TIME.findAll(raw).toList()
+        if (times.isEmpty()) return@flatMap emptyList()
+        val text = raw.substring(times.last().range.last + 1).trim()
+        times.map { (it.groupValues[1].toLong() * 60_000 + (it.groupValues[2].replace(':', '.').toDouble() * 1000).toLong()) to text }
+    }.sortedBy { it.first }
 
     private val LRC_TIME = Regex("""\[(\d+):(\d+(?:[.:]\d+)?)]""")
 

@@ -592,17 +592,8 @@ class DesktopPlayerConnection(
                     DesktopTransitionPlanner.mixWindow(state.durationMs, fadeSeconds, ramSaverEnabled, pcmSupported, activeAdhd, it.plan,
                         current?.let { song -> sectionsOf(song.id) }.orEmpty())
                 }
-                when {
-                    ready != null && window != null -> NextMix(
-                        nextId = next.id,
-                        startMs = window.first,
-                        switchMs = window.first + window.second / 2,
-                        style = ready.plan?.style?.label ?: "Fundido suave",
-                        ready = true,
-                    )
-                    preparingKey == key || ready != null -> NextMix(next.id, null, null, null, ready = false)
-                    else -> null
-                }
+                nextMixState(next.id, prepared = ready != null, window = window, style = ready?.plan?.style?.label,
+                    preparing = preparingKey == key)
             }
             if (_nextMix.value != mix) _nextMix.value = mix
             delay(100)
@@ -2308,4 +2299,23 @@ internal fun incomingMixGain(base: Float, match: Float, progress: Float): Float 
     val m = match.takeIf { it.isFinite() }?.coerceIn(0.65f, 1.45f) ?: 1f
     val g = base * (m + (1f - m) * settle)
     return g.coerceIn(0.25f, maxOf(base, 1f))
+}
+
+/**
+ * Lo que la cola dice de la próxima mezcla. Con la siguiente ya preparada y un plan que decide NO mezclar (fundido 0
+ * para no pisar un estribillo, o enlace al final), no hay nada que anunciar: antes se quedaba en «Preparando» para
+ * siempre, sobre todo en listas normales.
+ */
+internal fun nextMixState(nextId: String, prepared: Boolean, window: Pair<Long, Long>?, style: String?, preparing: Boolean):
+    DesktopPlayerConnection.NextMix? = when {
+    prepared && window != null -> DesktopPlayerConnection.NextMix(
+        nextId = nextId,
+        startMs = window.first,
+        switchMs = window.first + window.second / 2,
+        style = style ?: "Fundido suave",
+        ready = true,
+    )
+    prepared -> null
+    preparing -> DesktopPlayerConnection.NextMix(nextId, null, null, null, ready = false)
+    else -> null
 }
