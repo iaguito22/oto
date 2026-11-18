@@ -21,6 +21,7 @@ public class OtoCdsWindows {
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr w, IntPtr l, uint f, uint t, out IntPtr r);
+  public static IntPtr FindExact(uint pid, string title) { IntPtr found = IntPtr.Zero; EnumWindows((h,l)=>{ uint p; GetWindowThreadProcessId(h,out p); if(p==pid && IsWindowVisible(h)){ var s=new StringBuilder(256); GetWindowText(h,s,256); if(s.ToString()==title){ found=h; return false; } } return true; }, IntPtr.Zero); return found; }
   public static IntPtr Find(uint pid, string prefix, bool visible) { IntPtr found = IntPtr.Zero; EnumWindows((h,l)=>{ uint p; GetWindowThreadProcessId(h,out p); if(p==pid && (!visible || IsWindowVisible(h))){ var s=new StringBuilder(256); GetWindowText(h,s,256); if(s.ToString().StartsWith(prefix)){ found=h; return false; } } return true; }, IntPtr.Zero); return found; }
 }
 '@
@@ -45,10 +46,12 @@ try {
     while (!$jvm -and $clock.Elapsed.TotalSeconds -lt 90) {
         Start-Sleep -Milliseconds 200
         foreach ($p in @($launcher.Id) + @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($launcher.Id)" | ForEach-Object ProcessId)) {
-            if ([OtoCdsWindows]::Find([uint32]$p, "Oto $dot Reproductor", $true) -ne [IntPtr]::Zero) { $jvm = $p; break }
+            # «Una ventana» (predeterminada desde la 2.2.0) se titula «Oto»; el modo de varias ventanas, «Oto · Reproductor».
+            if ([OtoCdsWindows]::Find([uint32]$p, "Oto $dot Reproductor", $true) -ne [IntPtr]::Zero -or
+                [OtoCdsWindows]::FindExact([uint32]$p, "Oto") -ne [IntPtr]::Zero) { $jvm = $p; break }
         }
     }
-    if (!$jvm) { Stop-Process -Id $launcher.Id -Force -ErrorAction SilentlyContinue; throw 'El entrenamiento de CDS no llegó a abrir el reproductor.' }
+    if (!$jvm) { Stop-Process -Id $launcher.Id -Force -ErrorAction SilentlyContinue; throw 'El entrenamiento de CDS no llegó a abrir Oto.' }
     Start-Sleep -Seconds 4
     $session = [OtoCdsWindows]::Find([uint32]$jvm, "Oto $dot Sesi", $false); $r = [IntPtr]::Zero
     if ($session -ne [IntPtr]::Zero) { [OtoCdsWindows]::SendMessageTimeout($session, 0x10, [IntPtr]::Zero, [IntPtr]::Zero, 2, 3000, [ref]$r) | Out-Null }
