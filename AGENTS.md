@@ -4,7 +4,7 @@ Actualizado: 18/11/2026. Actualizar tras cambios importantes. Distinguir impleme
 
 ## Estado actual
 
-- **18/11 ~23:45, release v2.2.0 PUBLICADA** (detalle en `docs/agents/releases.md`). Commits `f3dba74` y `9c79677` en `main`. No instalada en el PC ni en el móvil. `scratchpad/` y `app/src/debug/assets/` quedan fuera del repo (`.gitignore`).
+- **18/11 ~23:45, release v2.2.0 PUBLICADA** (detalle en `docs/agents/releases.md`). Etiqueta en `9c79677`; después solo CI y notas. INSTALADA en el PC (MSI, `%LOCALAPPDATA%\Oto Desktop`) y en el Nothing (phone 2.2.0/16). `scratchpad/` y `app/src/debug/assets/` quedan fuera del repo (`.gitignore`).
 - **18/11 ~23:30, revisión previa a la release y calidad tras un cuadre de beats. IMPLEMENTADO y PROBADO en tests, incluido en la 2.2.0. Sin oír.**
   - Iago notó pérdida de calidad/distorsión en la canción que entra tras un cuadre (PC, dos temas de Katsuo Ohno a las 22:49 en `plays.jsonl`).
   - PC, causa confirmada en código: al acabar la mezcla, `watchCrossfade` llama a `cancelCrossfade()` para preparar la siguiente y eso cancelaba `tempoReturnJob`. La entrante se quedaba estirada (tempo ≠ 1, WSOLA activo) TODA la canción. Ahora `cancelCrossfade` no toca la vuelta; se cancela en `startCurrentTrack` y el `finally` del trabajo siempre deja 1×.

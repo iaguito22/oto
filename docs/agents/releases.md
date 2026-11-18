@@ -7,7 +7,8 @@
 - https://github.com/iaguito22/oto/releases/tag/v2.2.0, etiqueta → `9c79677` en `main`. Instalador `Oto-2.2.0-Setup.exe`, `Oto-2.2.0-windows-x64.msi` (con CDS), DEB, Arch, APK pública (`io.github.iaguito22.oto`, firma 4043c8…, versionCode 16), Android 12 (`.android12`, misma firma) y SHA256SUMS. Sin APK phone.
 - Copias y notas: `C:\Users\iago\Documents\Codex\2026-11-18\release-2.2.0`. Android 12: rama local `android12` rebasada sobre `main` (`25478ce`), sin subir.
 - `prepare-cds.ps1` espera ahora «Oto» (Una ventana) o «Oto · Reproductor». Pruebas antes de publicar: core 264 (7 omitidas), escritorio 137 (9), Android 114 (1), 0 fallos.
-- No instalada todavía en el PC ni en el móvil de Iago.
+- Actions sobre el borrador: «Comprobar paquete Arch» 44413915364 (con `pacman -Syu`) y «Comprobar paquetes Linux» 44414147375 (Una ventana y Varias ventanas), correctas.
+- INSTALADA el 18/11 ~23:45. PC: MSI encima de la 2.1.1, código 0, una sola entrada «Oto 2.2.0», JAR igual al compilado (`CB14A99E…1B02`), abierta con el perfil real sin errores nuevos. Móvil: APK phone 2.2.0/16 (`install -r`, firma 717d8f…, SHA-256 `2f83222d…b586` local e instalada); la cola en memoria se pierde al reinstalar.
 
 ## Release 2.1.1 — 07/11/2026 (solo Windows)
 
