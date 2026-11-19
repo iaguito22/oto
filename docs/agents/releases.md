@@ -60,7 +60,7 @@
 - Iago autorizó subir todo, arreglar ramas y crear releases la última vez; no es un permiso permanente: push y release, solo si los pide.
 - Rama canónica `main`; no forzar ramas. Si hay un borrador de release, actualizar su etiqueta al commit probado antes de publicar; no reescribir etiquetas ya publicadas.
 - El clon sigue todas las ramas de origen (`remote.origin.fetch` ampliado).
-- Capturas, perfiles, herramientas descargadas, keystores y logs permanecen FUERA del repo. `prompt.md` es una guía pública de continuidad; la petición privada antigua está en `...\quier\work\prompt-key-transfer-private.md`. No poner IPs locales en notas públicas.
+- Capturas, perfiles, herramientas descargadas, keystores y logs permanecen FUERA del repo. La petición privada antigua está en `...\quier\work\prompt-key-transfer-private.md`. No poner IPs locales en notas públicas.
 
 ## Notas de la 1.2.3 (histórico)
 
