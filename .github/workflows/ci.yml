@@ -22,7 +22,15 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
       - name: Instalar FFmpeg
-        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+        # Los espejos de Ubuntu a veces dan 503: se reintenta y, si no, FFmpeg estático.
+        run: |
+          for attempt in 1 2 3; do
+            if sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg; then exit 0; fi
+            sleep 20
+          done
+          curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz
+          mkdir -p "$RUNNER_TEMP/ffmpeg" && tar -xJf /tmp/ffmpeg.tar.xz -C "$RUNNER_TEMP/ffmpeg" --strip-components=1
+          echo "$RUNNER_TEMP/ffmpeg" >> "$GITHUB_PATH"
       - name: Tests de core, escritorio y Android
         run: ./gradlew :core:test :desktopApp:test :app:testDebugUnitTest --continue
       - name: Informes de tests
