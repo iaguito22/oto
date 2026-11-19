@@ -7,14 +7,13 @@
 - ADB local: `../tools/android-sdk/platform-tools/adb.exe`. Teléfono: Nothing Phone (2) A065; IP y puerto cambian. No escanear ni reinstalar otros dispositivos por suposición.
 - App habitual: `io.github.iaguito22.oto.debug`, variante `phone` con R8, NO depurable, 2.0.0 (código 14) instalada con `adb install -r`. Nunca desinstalarla ni sustituir sus DataStore/cookies.
 - El botón `ic_link_devices` está junto a Descargas en el menú DEL MÓVIL (no en la barra lateral de Windows). DevicesActivity y DevicesPane explican la sincronización de Oto y su separación de YouTube.
-- El escáner/R8 se corrigió en Linux (`docs/UNIFICACION.md`). Aquí se verificó el enlace físico por ADB reverse; no afirmar un nuevo escaneo óptico desde Windows.
+- El escáner/R8 se corrigió en Linux (`docs/historico/UNIFICACION.md`). Aquí se verificó el enlace físico por ADB reverse; no afirmar un nuevo escaneo óptico desde Windows.
 - Pruebas Android: `:app:assemblePhone`, `:app:testDebugUnitTest` (LibraryActions/Loop/Blur/SearchHarness).
 
 ## Firma y compilación de `phone`
 
 - Keystore en `../tools/signing/oto-mobile-linux.keystore`, FUERA del repo, alias `androiddebugkey`. Huella SHA-256 del certificado: `717d8f898485e2643bc0ebce7b2ac878f0fecc928f217f21a3804c0faf5fcbbc`. No se cambió la clave debug de Windows (firma distinta).
 - Nunca subir ni copiar el keystore, contraseñas, perfiles, QR ni datos de sesión. `OTO_PHONE_KEYSTORE` activa la firma; si no son las convenciones de debug, también `OTO_PHONE_STORE_PASSWORD`, `OTO_PHONE_KEY_ALIAS`, `OTO_PHONE_KEY_PASSWORD` (no ponerlas en comandos compartidos). `debug` y `bench` conservan su firma de Windows.
-- `prompt.md` (transferencia de la clave) es un encargo CUMPLIDO: no volver a pedirla.
 
 ```powershell
 . ..\env.ps1

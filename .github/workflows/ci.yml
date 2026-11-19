@@ -1,0 +1,42 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Para lanzarla a mano en una rama sin PR.
+  workflow_dispatch:
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Instalar FFmpeg
+        # Los espejos de Ubuntu a veces dan 503: se reintenta y, si no, FFmpeg estático.
+        run: |
+          for attempt in 1 2 3; do
+            if sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg; then exit 0; fi
+            sleep 20
+          done
+          curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz
+          mkdir -p "$RUNNER_TEMP/ffmpeg" && tar -xJf /tmp/ffmpeg.tar.xz -C "$RUNNER_TEMP/ffmpeg" --strip-components=1
+          echo "$RUNNER_TEMP/ffmpeg" >> "$GITHUB_PATH"
+      - name: Tests de core, escritorio y Android
+        run: ./gradlew :core:test :desktopApp:test :app:testDebugUnitTest --continue
+      - name: Informes de tests
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: informes-tests
+          path: "**/build/reports/tests/"
+          retention-days: 7

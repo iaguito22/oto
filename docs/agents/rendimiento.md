@@ -1,6 +1,6 @@
 # Rendimiento, consumo y animaciones
 
-Índice en `AGENTS.md`. Mediciones del 03–04/11/2026; contrastar con el código. Registro detallado de la revisión de consumo: `docs/RENDIMIENTO_20261103.md`.
+Índice en `AGENTS.md`. Mediciones del 03–04/11/2026; contrastar con el código. Registro detallado de la revisión de consumo: `docs/historico/RENDIMIENTO_20261103.md`.
 
 ## Reglas
 
