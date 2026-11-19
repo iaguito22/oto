@@ -44,8 +44,8 @@ tools\check.ps1           # ídem; plantilla de env en tools/env.example.ps1 (bu
 
 - Español en respuestas, interfaz y commits; frases claras y breves.
 - Ejecutar lo autorizado sin pedir permisos rutinarios. Commit solo si lo pide; push, release e instalación solo si los pide (una autorización no es permanente).
-- Una rama por tarea (`feat/…`, `fix/…`) y PR a `main` con la plantilla. Conventional commits: `fix(desktop): …`, `feat(dj): …`.
-- Pendientes y bugs en issues de GitHub, no en este archivo. El commit los cierra con `fixes #N`.
+- Trabajar directamente en `main`, sin ramas ni PR (salvo que Iago pida otra cosa). Conventional commits en español: `fix(desktop): …`, `feat(dj): …`. La plantilla de PR solo sirve si algún día se usa un PR.
+- Pendientes y bugs en `docs/agents/pendientes.md` (Iago no usa issues). Al arreglar uno, quitarlo de ahí en el mismo commit.
 - Respetar su feedback visual. Navegador: Zen. Nunca pedir cookies en el chat.
 - Capturas permitidas; cerrar la sesión de captura al acabar.
 
@@ -72,13 +72,14 @@ Antes de dar por terminado, repasar y decir cuáles aplicaban:
 
 ## Dónde mirar según la tarea (leer solo lo necesario)
 
+- `docs/agents/pendientes.md`: lo que queda por hacer.
 - `docs/agents/dj-audio.md`: DJ, mezclas, puentes, ganancia, logs de audio.
 - `docs/agents/escritorio-ui.md`: decisiones visuales, «Una ventana», bienvenida, valores por defecto.
 - `docs/agents/rendimiento.md`: RAM, fluidez, trazas y mediciones.
 - `docs/agents/datos-sync.md`: perfiles, datos privados, Me gusta.
 - `docs/agents/android-movil.md`: teléfono, firmas, `.linktest`, modo Connect.
 - `docs/agents/releases.md` y `docs/PUBLICACION.md`: empaquetado, instalación y releases.
-- Skills en `.agents/skills/`: `release-oto`, `instalar-pc`, `probar-movil`, `medir-rendimiento`. `.claude/skills` es un enlace simbólico a esa carpeta: en Windows Git lo deja como archivo de texto salvo con `core.symlinks=true` y el modo desarrollador; si no aparecen como skills, leerlas directamente.
+- Skills en `.agents/skills/` (Codex) y copia idéntica en `.claude/skills/` (Claude Code; un enlace simbólico no funciona en Windows): `release-oto`, `instalar-pc`, `probar-movil`, `medir-rendimiento`. Al cambiar una, cambiar las dos.
 - `docs/historico/`: planes, bitácora y validaciones antiguas. Solo si hace falta contexto; contrastar fechas con el código.
 
 Si una regla de aquí choca con la tarea, decirlo claramente y pedir confirmación a Iago antes de saltársela.

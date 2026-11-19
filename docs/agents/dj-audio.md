@@ -10,7 +10,7 @@
 
 ## Reglas
 
-- **El agente no oye.** Medir por señal y logs, y dejar los cambios como «sin oír» hasta que Iago lo confirme con auriculares.
+- **El agente no oye.** Medir por señal y logs, y dejar los cambios como «sin oír» hasta que Iago lo confirme con auriculares. Confirmado por Iago (19/11): tras un cuadre de beats la entrante ya no pierde calidad en el PC.
 - **Ganancia nunca por encima de 1** al acabar una mezcla (`incomingMixGain`, `mixInGain`). Dejar margen antes de PCM16; sin recorte en niveles normales (`softClip` lineal hasta 0,89).
 - **El tempo vuelve a 1×.** En el PC, `cancelCrossfade()` también se usa para preparar la siguiente mezcla: no debe cancelar `tempoReturnJob` (solo `startCurrentTrack`), y el `finally` de la vuelta deja siempre 1×. Sin test de integración todavía; `DjTailAfterTest` es de la cola del DJ, no de esto.
 - **Proteger estribillos y letra:** no salir ni entrar en mitad de una frase cantada. Si no hay hueco, mejor sin mezcla que un corte malo.
