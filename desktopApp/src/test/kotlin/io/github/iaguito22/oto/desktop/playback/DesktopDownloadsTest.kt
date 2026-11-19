@@ -30,9 +30,11 @@ class DesktopDownloadsTest {
             downloads.start()
             val song = Heard("test", "Prueba", "Codex", null)
             prefs.setDownloadSong(song, true)
-            withTimeout(5000) { started.await() }
+            // Márgenes amplios: en la CI o con otra compilación a la vez, 5 s no llegaban (no es una prueba de velocidad).
+            assertNotNull("la descarga no empezó", withTimeoutOrNull(30_000) { started.await() })
             prefs.setDownloadSong(song, false)
-            withTimeout(5000) { cancelled.await(); downloads.entries.first { "test" !in it } }
+            assertNotNull("no se canceló la descarga en curso", withTimeoutOrNull(30_000) { cancelled.await() })
+            assertNotNull("la entrada siguió en la lista", withTimeoutOrNull(30_000) { downloads.entries.first { "test" !in it } })
             assertFalse(part.exists())
             assertFalse(downloads.has("test"))
         } finally { downloads.stop(); scope.cancel(); root.deleteRecursively() }
