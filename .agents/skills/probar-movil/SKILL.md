@@ -24,7 +24,7 @@ Con `apksigner` y `aapt2`: paquete `io.github.iaguito22.oto.debug`, certificado 
 
 ## Instalar
 
-- `adb -s <dispositivo> install -r`. Nunca desinstalar la app habitual para arreglar una firma.
+- Buscar el dispositivo con `adb devices` o `adb mdns services` (IP y puerto cambian). `adb -s <dispositivo> install -r` y comparar el SHA-256 local con `sha256sum $(pm path io.github.iaguito22.oto.debug)` en el móvil. Nunca desinstalar la app habitual para arreglar una firma.
 - La cola en memoria se pierde al reinstalar. Si importa, guardarla antes con la APK `.linktest` (`capture-habitual` / `restore-habitual`).
 - Tras instalar, abrir primero la `MainActivity` habitual.
 

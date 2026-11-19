@@ -25,7 +25,7 @@ description: Instalar, abrir y cerrar Oto en el PC de Iago (Windows o Linux) y c
 ## Linux
 
 - Paquete: `sudo pacman -U` / `sudo dpkg -i`. Portable: ejecutar desde `build/`.
-- Perfil: `~/.config/oto` y `~/.local/share/oto`.
+- Perfil: `$XDG_DATA_HOME/oto` (por defecto `~/.local/share/oto`).
 
 ## Informar
 

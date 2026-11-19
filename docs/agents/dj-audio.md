@@ -12,11 +12,18 @@
 
 - **El agente no oye.** Medir por señal y logs, y dejar los cambios como «sin oír» hasta que Iago lo confirme con auriculares.
 - **Ganancia nunca por encima de 1** al acabar una mezcla (`incomingMixGain`, `mixInGain`). Dejar margen antes de PCM16; sin recorte en niveles normales (`softClip` lineal hasta 0,89).
-- **El tempo vuelve a 1×.** Cancelar un fundido no cancela la vuelta del tempo de la entrante (`DjTailAfterTest`).
+- **El tempo vuelve a 1×.** En el PC, `cancelCrossfade()` también se usa para preparar la siguiente mezcla: no debe cancelar `tempoReturnJob` (solo `startCurrentTrack`), y el `finally` de la vuelta deja siempre 1×. Sin test de integración todavía; `DjTailAfterTest` es de la cola del DJ, no de esto.
 - **Proteger estribillos y letra:** no salir ni entrar en mitad de una frase cantada. Si no hay hueco, mejor sin mezcla que un corte malo.
 - **Género con continuidad:** la elección mira el género del destino, y una racha larga lo relaja poco a poco.
 - **No ajustar pesos de estilos** sin antes medir una tanda y comparar con la anterior.
-- PC y Android deben dar el mismo plan para la misma pareja. Un arreglo en `core` se comprueba en las dos plataformas.
+- PC y Android planifican distinto: Android usa puentes WAV pre-renderizados (`DjBridgePlanner` + `DjBridgeRenderer`); el PC mezcla en vivo con `DjTransitionPlanner` y WSOLA. Comparten análisis, secciones y protección de estribillos. Un arreglo en `core` se comprueba en las dos.
+- **La cola no se queda en «Preparando».** Si la siguiente está preparada y su plan no mezcla (fundido 0 o enlace al final), no se anuncia nada (`nextMixState` en el PC; `MixUiState.None` en Android).
+
+## Letras
+
+- Fuentes en `core/.../lyrics/LyricsSource.kt`; cada aparato tiene su caché (PC: `%LOCALAPPDATA%\oto\Cache\lyrics`). Subir `LyricsStore.MATCH_VERSION` invalida lo guardado.
+- LRCLIB: las letras las sube cualquiera y la exacta puede ir desplazada. `pickLrclib` usa el consenso de las versiones (medido: «Faint», exacta 1,5 s tarde). Si Iago dice que una letra va atrasada o adelantada, mirar primero la caché y comparar versiones en `lrclib.net/api/search` antes de tocar el reloj.
+- El reloj del PC (`MobileLyrics.kt`) sigue la posición del motor, que ya descuenta el búfer de Java Sound; no incluye la latencia del dispositivo de salida.
 
 ## Diagnóstico
 

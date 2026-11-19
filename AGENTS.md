@@ -1,6 +1,6 @@
 # Oto
 
-Reproductor de música (YouTube Music) para Android, Windows y Linux. Un solo repositorio y una sola rama canónica: `main`. No mantener versiones distintas por sistema operativo.
+Reproductor de música (YouTube Music) para Android, Windows y Linux. Un solo repositorio y una sola rama canónica: `main`. No mantener versiones distintas por sistema operativo. Única excepción: la variante Android 12 (rama local `android12`, worktree `../oto-android12`), un commit encima de `main` que se rebasa en cada release.
 
 - `:core` (JVM puro): preferencias, cuenta, listas, letras, DJ y enlace entre dispositivos. **Cambiarlo afecta a Android y al escritorio.**
 - `:desktopApp`: Compose Desktop y motor de audio (FFmpeg → PCM).
@@ -17,8 +17,9 @@ Reproductor de música (YouTube Music) para Android, Windows y Linux. Un solo re
 ## Formas de hacerse daño
 
 - **Matar procesos a ciegas.** No matar todos los `java.exe` (daemons de Gradle) ni Oto a la fuerza. Cerrar Oto con «Salir de Oto» o WM_CLOSE a la ventana «Oto · Sesión» (hwnd por proceso; `FindWindow` con «·» falla en PowerShell 5.1). Las X lo dejan en bandeja.
-- **Tocar el perfil real.** `%APPDATA%\oto` (Linux: `~/.config/oto`, `~/.local/share/oto`) es el de Iago y puede estar abierto. Probar con perfiles aislados; no escribir en un DataStore abierto.
+- **Tocar el perfil real.** `%APPDATA%\oto` (Linux: `$XDG_DATA_HOME/oto`, por defecto `~/.local/share/oto`) es el de Iago y puede estar abierto. Probar con perfiles aislados; no escribir en un DataStore abierto.
 - **Probar contra el móvil real.** Nada de `connectedAndroidTest` ni builds `debug` contra él: usar la APK `.linktest` (`docs/agents/android-movil.md`).
+- **Compilar a la vez que otro agente.** Comparten `*/build` en el mismo checkout y se pisan (pruebas que fallan al azar, `core/build` borrado). Usar `tools\check.ps1 -BuildDir ..\build-<tarea>` o un worktree propio.
 - **Confundir firmas.** `phone` (`.debug`, firma 717d8f…) y pública (`io.github.iaguito22.oto`, firma 4043c8…) son apps distintas. Verificar con apksigner antes de instalar.
 
 ## Verificar
@@ -30,7 +31,7 @@ tools/check.sh --all      # todos los módulos
 
 ```powershell
 . ..\env.ps1              # obligatorio en Windows: JDK 21, FFmpeg y GRADLE_USER_HOME
-tools\check.ps1           # ídem; plantilla de env en tools/env.example.ps1
+tools\check.ps1           # ídem; plantilla de env en tools/env.example.ps1 (busca solo el SDK de Android)
 ```
 
 - Tocar `:core` ejecuta también los tests de Android y escritorio.
@@ -77,7 +78,7 @@ Antes de dar por terminado, repasar y decir cuáles aplicaban:
 - `docs/agents/datos-sync.md`: perfiles, datos privados, Me gusta.
 - `docs/agents/android-movil.md`: teléfono, firmas, `.linktest`, modo Connect.
 - `docs/agents/releases.md` y `docs/PUBLICACION.md`: empaquetado, instalación y releases.
-- Skills en `.agents/skills/`: `release-oto`, `instalar-pc`, `probar-movil`, `medir-rendimiento`.
+- Skills en `.agents/skills/`: `release-oto`, `instalar-pc`, `probar-movil`, `medir-rendimiento`. `.claude/skills` es un enlace simbólico a esa carpeta: en Windows Git lo deja como archivo de texto salvo con `core.symlinks=true` y el modo desarrollador; si no aparecen como skills, leerlas directamente.
 - `docs/historico/`: planes, bitácora y validaciones antiguas. Solo si hace falta contexto; contrastar fechas con el código.
 
 Si una regla de aquí choca con la tarea, decirlo claramente y pedir confirmación a Iago antes de saltársela.

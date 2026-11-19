@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Para lanzarla a mano en una rama sin PR.
+  workflow_dispatch:
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
