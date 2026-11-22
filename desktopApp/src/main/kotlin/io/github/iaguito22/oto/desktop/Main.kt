@@ -86,7 +86,8 @@ fun main() {
 
     prepareDesktopWindows()
     application {
-        CompositionLocalProvider(LocalWindowExceptionHandlerFactory provides ErrorLog.windows) {
+        val updates = rememberDesktopUpdates(prefs, ::exitApplication)
+        CompositionLocalProvider(LocalWindowExceptionHandlerFactory provides ErrorLog.windows, LocalDesktopUpdate provides updates) {
             if (ShellMode.startedSingle) SingleDesktop(player, prefs, menu, importer, account, cloud, login, downloads, lyricsStore, ::exitApplication)
             else ModularDesktop(player, prefs, menu, importer, account, cloud, login, downloads, lyricsStore, ::exitApplication)
         }

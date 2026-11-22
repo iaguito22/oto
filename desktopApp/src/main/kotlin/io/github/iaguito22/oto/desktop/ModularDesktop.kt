@@ -317,6 +317,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         backgroundArtwork = if(artworkBackground) backdrop else null, backgroundOpacity=backdropOpacity, actionsOnRight = form == PlayerForm.Horizontal, hover = {pointerInside = it}, extra = {
             WindowOptions(options,{options=it})
             if(playerSolo && form != PlayerForm.Vertical) PinAction(pinned) { pinned = !pinned;kv.putString("pinned",pinned.toString()) }
+            DesktopUpdateButton(palette.primary, LocalWindowActionSize.current)
         }) {
         @Composable fun PlayerContents() {
         val quality by player.currentQuality.collectAsState()

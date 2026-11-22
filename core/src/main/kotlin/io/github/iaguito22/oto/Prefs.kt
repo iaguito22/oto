@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.metrolist.innertube.models.Artist
@@ -44,6 +45,9 @@ private val CLOUD_SELECTION = stringPreferencesKey("cloud_selection")
 private val QUALITY = stringPreferencesKey("audio_quality")
 private val DATA_SAVER = booleanPreferencesKey("data_saver")
 private val RAM_SAVER = booleanPreferencesKey("ram_saver")
+private val CHECK_UPDATES = booleanPreferencesKey("check_updates")
+private val UPDATE_CHECK_TIME = longPreferencesKey("update_check_time")
+private val UPDATE_RELEASE = stringPreferencesKey("update_release")
 private val LOOP = booleanPreferencesKey("loop")
 private val PLAYLIST_MODES = stringPreferencesKey("playlist_modes")
 private val CROSSFADE = intPreferencesKey("crossfade")
@@ -156,6 +160,21 @@ class Prefs(
     val dataSaver: Flow<Boolean> = store.data.map { it[DATA_SAVER] ?: false }.distinctUntilChanged()
     val ramSaver: Flow<Boolean> = store.data.map { it[RAM_SAVER] ?: false }.distinctUntilChanged()
     suspend fun setRamSaver(on: Boolean) { store.edit { it[RAM_SAVER] = on } }
+
+    val checkUpdates: Flow<Boolean> = store.data.map { it[CHECK_UPDATES] ?: true }.distinctUntilChanged()
+    suspend fun setCheckUpdates(on: Boolean) { store.edit { it[CHECK_UPDATES] = on } }
+
+    internal suspend fun updateCheckTime(): Long? = store.data.first()[UPDATE_CHECK_TIME]
+    internal suspend fun cachedUpdateRelease(): String? = store.data.first()[UPDATE_RELEASE]
+    internal suspend fun beginUpdateCheck(time: Long) {
+        store.edit {
+            it[UPDATE_CHECK_TIME] = time
+            it.remove(UPDATE_RELEASE)
+        }
+    }
+    internal suspend fun saveUpdateRelease(json: String?) {
+        store.edit { if (json == null) it.remove(UPDATE_RELEASE) else it[UPDATE_RELEASE] = json }
+    }
 
     suspend fun setDataSaver(on: Boolean) {
         store.edit { it[DATA_SAVER] = on }
