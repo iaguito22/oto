@@ -12,22 +12,25 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.jetbrains.skia.ColorAlphaType
+import org.jetbrains.skia.ColorSpace
+import org.jetbrains.skia.ColorType
 import org.jetbrains.skia.Image as SkiaImage
+import org.jetbrains.skia.ImageInfo
 import java.awt.image.BufferedImage
-import java.io.ByteArrayOutputStream
-import javax.imageio.ImageIO
+import java.awt.image.DataBufferInt
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.ceil
 import kotlin.math.abs
 
 /** Las mismas tres pasadas y velo que el fondo de la pantalla del móvil. */
 internal suspend fun blurredBackdrop(image: ImageBitmap): ImageBitmap = withContext(Dispatchers.Default) {
-    val source = IntArray(image.width * image.height)
-    image.readPixels(source)
     val input = BufferedImage(image.width, image.height, BufferedImage.TYPE_INT_ARGB)
-    input.setRGB(0, 0, image.width, image.height, source, 0, image.width)
+    image.readPixels((input.raster.dataBuffer as DataBufferInt).data)
     val scaled = BufferedImage(240, 240, BufferedImage.TYPE_INT_ARGB)
     scaled.createGraphics().let { g -> g.drawImage(input, 0, 0, 240, 240, null); g.dispose() }
-    val pixels = scaled.getRGB(0, 0, 240, 240, null, 0, 240)
+    val pixels = (scaled.raster.dataBuffer as DataBufferInt).data
     val tmp = IntArray(pixels.size)
     fun box(src:IntArray,dst:IntArray,r:Int,horizontal:Boolean) {
         val span=2*r+1
@@ -46,9 +49,10 @@ internal suspend fun blurredBackdrop(image: ImageBitmap): ImageBitmap = withCont
         }
     }
     for(r in intArrayOf(9,9,10)){box(pixels,tmp,r,true);box(tmp,pixels,r,false)}
-    scaled.setRGB(0,0,240,240,pixels,0,240)
-    val bytes=ByteArrayOutputStream().also { ImageIO.write(scaled,"png",it) }.toByteArray()
-    SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap()
+    val info = ImageInfo(240, 240, ColorType.BGRA_8888, ColorAlphaType.UNPREMUL, ColorSpace.sRGB)
+    val bytes = ByteBuffer.allocate(pixels.size * Int.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN)
+    bytes.asIntBuffer().put(pixels)
+    SkiaImage.makeRaster(info, bytes.array(), 240 * Int.SIZE_BYTES).toComposeImageBitmap()
 }
 
 @Composable
