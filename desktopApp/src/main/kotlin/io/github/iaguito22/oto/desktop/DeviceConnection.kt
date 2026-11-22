@@ -36,7 +36,7 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
         override fun snapshot(): JSONObject {
             val s = player.state.value
             return JSONObject().put("name", "Oto Desktop").put("id", s.id).put("title", s.title).put("artist", s.artist).put("artwork", s.artwork).put("artistId", s.artists.firstOrNull()?.second)
-                .put("playing", s.playing).put("buffering", s.buffering).put("duration", s.durationMs).put("position", player.position())
+                .put("playing", player.wantsPlayback()).put("buffering", s.buffering).put("duration", s.durationMs).put("position", player.position())
                 .put("volume",player.volume.value).put("index", s.index).put("shuffle", player.shuffle.value).put("loop", player.loop.value)
                 .put("queue", queueJson(player.queue.value))
                 .put("sourceKind", player.source.value?.kind).put("sourceTitle", player.source.value?.title)
@@ -57,7 +57,7 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
             if (next) player.playNext(track) else player.enqueue(track)
         }
         override fun volume(value: Float) { player.adjustVolume(value - player.volume.value) }
-        override fun setPlaying(on: Boolean) { if (player.state.value.playing != on) player.toggle() }
+        override fun setPlaying(on: Boolean) = player.setPlaying(on)
         override fun replace(state: JSONObject) {
             val a = state.getJSONArray("queue")
             val songs = (0 until a.length()).map { i -> a.getJSONObject(i).let { Heard(it.getString("id"), it.getString("title"), it.getString("artist"), it.optString("artwork").takeUnless { s -> s.isBlank() || s == "null" }, it.optString("artistId").takeUnless { s -> s.isBlank() || s == "null" }).toSong() } }

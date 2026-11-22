@@ -50,7 +50,7 @@ class MobileConnection(private val app: OtoApp) {
             val track=Heard(song.getString("id"),song.getString("title"),song.optString("artist"),song.optString("artwork").takeUnless { it.isBlank() || it=="null" },song.optString("artistId").takeUnless { it.isBlank() || it=="null" }).toSong()
             player.here { if(next) player.playNext(track) else player.enqueue(track) }
         }
-        override fun setPlaying(on: Boolean) { if(player.localState.value.playing != on) player.here { player.toggle() } }
+        override fun setPlaying(on: Boolean) = player.setLocalPlaying(on)
         override fun volume(value: Float) {
             val audio = app.getSystemService(AudioManager::class.java)
             audio.setStreamVolume(AudioManager.STREAM_MUSIC, (audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)*value).toInt(), 0)

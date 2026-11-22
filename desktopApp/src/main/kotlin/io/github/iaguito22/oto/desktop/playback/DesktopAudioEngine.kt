@@ -186,6 +186,10 @@ class DesktopAudioEngine(
     private val useFfmpegPcm: Boolean get() = hasFfmpegPcm && !pcmLineUnavailable
     val supportsCrossfade: Boolean get() = useFfmpegPcm
 
+    internal fun pendingOutputMs(): Long = currentLine?.let { line ->
+        ((line.bufferSize - line.available()).coerceAtLeast(0) * 1000L / 192_000L)
+    } ?: 0L
+
     init {
         cacheDir.mkdirs()
         Runtime.getRuntime().addShutdownHook(Thread { currentProcess?.destroyForcibly(); runCatching { currentLine?.close() } })
@@ -301,7 +305,7 @@ class DesktopAudioEngine(
                     startPlaybackAt(targetFile, resolvedStart)
                 } else {
                     analyzeBeat(targetFile, activeTrackId)
-                    if (!playWhenReady) _state.value = _state.value.copy(buffering = false, positionMs = resolvedStart)
+                    _state.value = _state.value.copy(buffering = false, positionMs = resolvedStart)
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
@@ -667,6 +671,8 @@ class DesktopAudioEngine(
         val f = activeFile ?: return
         if (f.exists() && f.length() > 0L) {
             startPlaybackAt(f, pausedPositionMs)
+        } else if (downloadJob?.isActive == true) {
+            _state.value = _state.value.copy(playing = true)
         }
     }
 

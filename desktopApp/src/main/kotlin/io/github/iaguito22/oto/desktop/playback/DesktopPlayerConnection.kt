@@ -26,6 +26,9 @@ import io.github.iaguito22.oto.dj.DjPickInfo
 import io.github.iaguito22.oto.dj.DjReaction
 import io.github.iaguito22.oto.dj.DjTempoMatch
 import io.github.iaguito22.oto.dj.ChorusSafety
+import io.github.iaguito22.oto.dj.DjBridgeStyle
+import io.github.iaguito22.oto.dj.DjCrossfadeFallback
+import io.github.iaguito22.oto.playback.TransportFade
 import io.github.iaguito22.oto.dj.DjTransitionPlan
 import io.github.iaguito22.oto.dj.DjTransitionPlanner
 import io.github.iaguito22.oto.dj.DjTransitionStyle
@@ -314,6 +317,11 @@ class DesktopPlayerConnection(
     @Volatile private var fadeIn = 1f
     @Volatile private var fadeOut = 0f
     @Volatile private var outgoingGain = 1f
+    @Volatile private var transportGain = 1f
+    private val transportFade = TransportFade(scope) {
+        transportGain = it
+        applyDeckGains()
+    }
 
     init {
         engine = decks.first()
@@ -425,8 +433,8 @@ class DesktopPlayerConnection(
 
     /** Mantiene el volumen del usuario y la normalización separados de la curva del fundido. */
     private fun applyDeckGains() {
-        engine.setGain((volumeGain() * currentLoudnessGain * fadeIn).coerceIn(0f, 2f))
-        outgoing?.setGain((volumeGain() * outgoingGain * fadeOut).coerceIn(0f, 2f))
+        engine.setGain((volumeGain() * currentLoudnessGain * fadeIn * transportGain).coerceIn(0f, 2f))
+        outgoing?.setGain((volumeGain() * outgoingGain * fadeOut * transportGain).coerceIn(0f, 2f))
     }
 
     private fun cancelCrossfade() {
@@ -488,20 +496,28 @@ class DesktopPlayerConnection(
         return true
     }
 
+    private fun nextMixIndex(): Int = when {
+        _loopMode.value == LoopMode.One -> -1
+        currentIndex + 1 in songQueue.indices -> currentIndex + 1
+        _loopMode.value == LoopMode.All && songQueue.size > 1 -> 0
+        else -> -1
+    }
+
     /** Prepara la siguiente canción con antelación; si no llega, la transición normal sigue intacta. */
     private suspend fun watchCrossfade() {
         while (scope.coroutineContext[Job]?.isActive != false) {
             val current = songQueue.getOrNull(currentIndex)
-            val next = songQueue.getOrNull(currentIndex + 1)
+            val next = songQueue.getOrNull(nextMixIndex())
             val state = engine.state.value
             val activeAdhd = if (dj?.mode == DjMode.Adhd && fullOnceTrackId != current?.id) _adhdSegment.value else null
             val pcmSupported = supportsCrossfade
-            val canPrepareCrossfade = pcmSupported && !ramSaverEnabled && (fadeSeconds > 0 || activeAdhd != null)
+            val fallbackEnabled = dj != null || smartMixEnabled
+            val canPrepareCrossfade = pcmSupported && !ramSaverEnabled && (fadeSeconds > 0 || activeAdhd != null || fallbackEnabled)
             val length = if (activeAdhd != null) {
                 DesktopTransitionPlanner.effectiveAdhdCrossfadeMs(fadeSeconds, ramSaverEnabled)
-            } else fadeSeconds * 1000L
+            } else if (fallbackEnabled && fadeSeconds == 0) 3_000L else fadeSeconds * 1000L
             val key = if (current != null && next != null) current.id to next.id else null
-            val minTrackDurationOk = activeAdhd != null || state.durationMs >= length * 3L
+            val minTrackDurationOk = fallbackEnabled || activeAdhd != null || state.durationMs >= length * 3L
 
             if (!canPrepareCrossfade || length <= 0 || key == null || !state.playing || state.buffering || !minTrackDurationOk) {
                 if (fading?.isActive != true && (preparedNext != null || preparation?.isActive == true)) cancelCrossfade()
@@ -524,7 +540,7 @@ class DesktopPlayerConnection(
                 continue
             }
 
-            if (fading?.isActive != true && finishFadeJob?.isActive != true && current != null) {
+            if (transportFade.requestedPlaying != false && fading?.isActive != true && finishFadeJob?.isActive != true && current != null) {
                 var candidate = preparedNext?.takeIf { it.currentId == current.id && it.next.id == next?.id }
                 val outSections = sectionsOf(current.id)
                 val inSections = next?.let { sectionsOf(it.id) }.orEmpty()
@@ -544,10 +560,9 @@ class DesktopPlayerConnection(
                         isDjSession = dj != null, incomingFromStart = dj == null,
                     )
                     candidate = oldCandidate.copy(plan = updatedPlan)
-                    if (updatedPlan.incomingStartMs != oldCandidate.plan.incomingStartMs) oldCandidate.deck.seekTo(updatedPlan.incomingStartMs)
                     if (preparedNext === oldCandidate) preparedNext = candidate
                 }
-                val action = DesktopTransitionPlanner.evaluate(
+                val plannedAction = DesktopTransitionPlanner.evaluate(
                     positionMs = state.positionMs,
                     durationMs = state.durationMs,
                     playing = state.playing,
@@ -560,9 +575,18 @@ class DesktopPlayerConnection(
                     plan = candidate?.plan,
                     outgoingSections = outSections,
                 )
+                val fallback = if (fallbackEnabled && canPrepareCrossfade) DjCrossfadeFallback.window(
+                    state.durationMs, activeAdhd?.endMs ?: state.durationMs, length, outSections,
+                ) else null
+                val action = DesktopTransitionPlanner.withFallback(
+                    plannedAction, fallback, state.positionMs,
+                    state.playing && !state.buffering && candidate?.deck?.state?.value?.buffering == false,
+                    candidate?.plan,
+                )
                 when (action) {
                     is TransitionAction.StartCrossfade -> if (candidate != null) {
-                        fading = scope.launch { performCrossfade(candidate, action.durationMs) }
+                        val selected = candidate
+                        fading = scope.launch { performCrossfade(selected, action, nextMixIndex()) }
                     }
                     TransitionAction.FinishTrackNow -> {
                         val trackKey = "$currentIndex:${current.id}"
@@ -595,9 +619,11 @@ class DesktopPlayerConnection(
                 val ready = preparedNext?.takeIf { it.currentId == current?.id && it.next.id == next.id }
                 val window = ready?.let {
                     DesktopTransitionPlanner.mixWindow(state.durationMs, fadeSeconds, ramSaverEnabled, pcmSupported, activeAdhd, it.plan,
-                        current?.let { song -> sectionsOf(song.id) }.orEmpty())
+                        current?.let { song -> sectionsOf(song.id) }.orEmpty()).takeIf { ready.plan != null || !fallbackEnabled }
+                        ?: DjCrossfadeFallback.window(state.durationMs, activeAdhd?.endMs ?: state.durationMs, length,
+                            current?.let { song -> sectionsOf(song.id) }.orEmpty())?.let { it.startMs to it.durationMs }
                 }
-                nextMixState(next.id, prepared = ready != null, window = window, style = ready?.plan?.style?.label,
+                nextMixState(next.id, prepared = ready != null, window = window, style = ready?.plan?.takeIf { it.fadeDurationMs > 0L && it.bridgeSpec?.style != DjBridgeStyle.OutroTail }?.style?.label,
                     preparing = preparingKey == key)
             }
             if (_nextMix.value != mix) _nextMix.value = mix
@@ -657,6 +683,15 @@ class DesktopPlayerConnection(
             }
             val ready = withTimeoutOrNull(90_000) { deck.state.first { !it.buffering && it.bufferedFraction >= 1f } } != null
             if (!ready) return
+            val provisional = PreparedNext(current.id, next, deck, quality, gain, nextSeg, null)
+            withContext(scope.coroutineContext.minusKey(Job)) {
+                if (preparationGeneration.get() == generation && preparingKey == (current.id to next.id) && activeDeck.value !== deck) {
+                    preparedNext = provisional
+                    failedPrepareKey = null
+                    succeeded = true
+                }
+            }
+            if (!succeeded) return
 
             // Garantizar análisis real del tema entrante (BPM, fase/downbeat, RMS, drop) antes de planificar la mezcla.
             if (analysisCache.get(next.id) == null) {
@@ -719,15 +754,10 @@ class DesktopPlayerConnection(
                 )
             } else null
 
-            val targetStart = plan?.incomingStartMs ?: nextSeg?.startMs ?: initialPos
-            if (targetStart != initialPos && targetStart >= 0L) {
-                deck.seekTo(targetStart)
-            }
-
-            if (preparationGeneration.get() == generation && preparingKey == (current.id to next.id) && activeDeck.value !== deck) {
-                preparedNext = PreparedNext(current.id, next, deck, quality, gain, nextSeg, plan)
-                failedPrepareKey = null
-                succeeded = true
+            withContext(scope.coroutineContext.minusKey(Job)) {
+                if (preparationGeneration.get() == generation && preparedNext === provisional && fading?.isActive != true) {
+                    preparedNext = provisional.copy(adhdSegment = nextSeg, plan = plan)
+                }
             }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
@@ -749,12 +779,17 @@ class DesktopPlayerConnection(
         }
     }
 
-    private suspend fun performCrossfade(next: PreparedNext, length: Long) {
+    private suspend fun performCrossfade(next: PreparedNext, action: TransitionAction.StartCrossfade, nextIndex: Int) {
+        val length = action.durationMs
+        val simple = action.fallback
         val old = engine
         val originalIndex = currentIndex
         val oldGain = currentLoudnessGain
         val deck = next.deck
-        val plan = next.plan
+        val plan = action.plan
+        val startMs = plan?.incomingStartMs ?: next.adhdSegment?.startMs ?: 0L
+        if (startMs != deck.state.value.positionMs) deck.seekTo(startMs)
+        if (simple) Timber.tag("oto.mix").i("Fundido de respaldo: %s → %s (%d ms)", next.currentId, next.next.id, length)
         val prevAdhd = if (dj?.mode == DjMode.Adhd && fullOnceTrackId != next.currentId) _adhdSegment.value else null
         val useEchoOut = plan?.style == DjTransitionStyle.EchoOutFilterSweep || plan?.style == DjTransitionStyle.LoopRollOut
         // B al tempo de A en el cuadre de beats y en el filtro con eco a tempo (el plan solo pone ratio ≠ 1 si hay bombo
@@ -767,14 +802,14 @@ class DesktopPlayerConnection(
             val frame = MixCurve.echoOut(0f, plan.highPassStartHz, plan.highPassEndHz, plan.echoOutWet, plan.echoDelayMs.toInt(), plan.echoFeedback)
             deck.setMixBands(frame.inBands)
         } else {
-            val (_, startInBands) = MixCurve.bands(0f, smartMixEnabled || (plan?.useBassSwap == true))
+            val (_, startInBands) = MixCurve.bands(0f, !simple && (smartMixEnabled || (plan?.useBassSwap == true)))
             deck.setMixBands(startInBands.copy(overall = 1f))
         }
         deck.setGain(0f)
         deck.resume()
 
         val started = withTimeoutOrNull(1500) { deck.state.first { it.playing && !it.buffering } } != null
-        if (!started || engine !== old || !old.state.value.playing || songQueue.getOrNull(originalIndex + 1)?.id != next.next.id || currentIndex != originalIndex) {
+        if (!started || nextMixIndex() != nextIndex || engine !== old || !old.state.value.playing || songQueue.getOrNull(nextIndex)?.id != next.next.id || currentIndex != originalIndex) {
             deck.stop()
             deck.resetMixBands()
             deck.setTempo(1f)
@@ -801,9 +836,9 @@ class DesktopPlayerConnection(
                 // Lock acquisition and metadata preparation are complete. No suspension follows this check.
                 val latestSections = sectionsOf(next.currentId)
                 engine === old && currentIndex == originalIndex && old.state.value.playing &&
-                    songQueue.getOrNull(originalIndex + 1)?.id == song.id && dj === activeDj &&
-                    (plan == null || ChorusSafety.allows(plan, latestSections, sectionsOf(song.id))) &&
-                    ChorusSafety.allowsLive(old.state.value.positionMs, length, 1.0, latestSections)
+                    nextMixIndex() == nextIndex && songQueue.getOrNull(nextIndex)?.id == song.id && dj === activeDj &&
+                    (simple || ((plan == null || ChorusSafety.allows(plan, latestSections, sectionsOf(song.id))) &&
+                        ChorusSafety.allowsLive(old.state.value.positionMs, length, 1.0, latestSections)))
             },
             commit = { resolvedNextSeg ->
                 if (activeDj != null) {
@@ -814,7 +849,7 @@ class DesktopPlayerConnection(
                 recordPlayProgress(completed = true)
                 setOutgoing(old); outgoingGain = oldGain; fadeOut = 1f; fadeIn = 0f
                 preparedNext = null; preparation = null; preparingKey = null
-                currentIndex = originalIndex + 1
+                currentIndex = nextIndex
                 // La igualación de volumen solo vale durante la mezcla (vuelve a `next.gain` al acabar) y nunca sube por
                 // encima de 1: antes se quedaba toda la canción, hasta ×1,45, y recortaba la salida en 16 bits.
                 currentLoudnessGain = matchedIncomingGain(next.gain, plan?.incomingGainMatch ?: 1f, 0f)
@@ -927,7 +962,7 @@ class DesktopPlayerConnection(
                     old.setMixBands(outBands.copy(overall = 1f))
                     deck.setMixBands(inBands.copy(overall = 1f))
                 } else {
-                    val useSmartBands = smartMixEnabled || (plan?.useBassSwap == true)
+                    val useSmartBands = !simple && (smartMixEnabled || (plan?.useBassSwap == true))
                     val (outBands, inBands) = MixCurve.bands(p, useSmartBands)
                     fadeOut = outBands.overall; fadeIn = inBands.overall
                     old.setMixBands(outBands.copy(overall = 1f))
@@ -1745,26 +1780,42 @@ class DesktopPlayerConnection(
         scope.launch { prefs.setPlaylistMode(id, mode) }
     }
 
-    override fun toggle() = djIndexGate.locked {
+    internal fun wantsPlayback(): Boolean = transportFade.requestedPlaying ?: _state.value.playing
+
+    override fun toggle() = setPlaying(!wantsPlayback())
+
+    internal fun setPlaying(playing: Boolean) = djIndexGate.locked {
         val st = _state.value
-        if (st.id == null) return@locked
+        if (st.id == null || playing == wantsPlayback()) return@locked
         advanceAfterRadioFill = false
-        cancelCrossfade()
         if (st.error != null) {
             startCurrentTrack()
-        } else if (st.buffering && resolvingTrack) {
+        } else if (!playing && st.buffering && resolvingTrack) {
+            transportFade.reset()
             resolveJob?.cancel()
             resolvingTrack = false
             engine.stop()
             _state.value = st.copy(playing = false, buffering = false)
-        } else if (st.playing) {
-            engine.pause()
+        } else if (playing && engine.state.value.durationMs <= 0L) {
+            startCurrentTrack()
+        } else if (!engine.supportsCrossfade) {
+            cancelCrossfade()
+            if (playing) engine.resume() else engine.pause()
         } else {
-            if (engine.state.value.durationMs > 0L) {
-                engine.resume()
-            } else {
-                startCurrentTrack()
-            }
+            transportFade.request(
+                playing = playing,
+                actualPlaying = engine.state.value.playing,
+                play = { engine.resume() },
+                pause = {
+                    cancelCrossfade()
+                    engine.pause()
+                },
+                beforePause = {
+                    // El último bloque atenuado tiene que llegar a la línea antes de que pause la vacíe.
+                    delay(maxOf(engine.pendingOutputMs(), outgoing?.pendingOutputMs() ?: 0L))
+                },
+                awaitAudio = { engine.state.first { !it.playing || !it.buffering } },
+            )
         }
     }
 
@@ -1804,21 +1855,22 @@ class DesktopPlayerConnection(
     }
 
     private fun onTrackFinished(completedNaturally: Boolean) = djIndexGate.locked {
+        val pauseRequested = transportFade.requestedPlaying == false
         recordPlayProgress(completed = completedNaturally)
         if (completedNaturally && _loopMode.value == LoopMode.One && currentIndex in songQueue.indices) {
-            startCurrentTrack()
+            startCurrentTrack(playWhenReady = !pauseRequested)
             return@locked
         }
         if (_loopMode.value != LoopMode.Off && currentIndex == songQueue.lastIndex && songQueue.isNotEmpty()) {
             currentIndex = 0
             syncQueueFlow()
-            startCurrentTrack()
+            startCurrentTrack(playWhenReady = !pauseRequested)
             return@locked
         }
-        advanceToNext()
+        advanceToNext(playWhenReady = !pauseRequested)
     }
 
-    private fun advanceToNext(): Unit = djIndexGate.locked {
+    private fun advanceToNext(playWhenReady: Boolean = true): Unit = djIndexGate.locked {
         if (currentIndex + 1 < songQueue.size) {
             advanceAfterRadioFill = false
             currentIndex++
@@ -1852,7 +1904,7 @@ class DesktopPlayerConnection(
                 }
             }
             syncQueueFlow()
-            startCurrentTrack()
+            startCurrentTrack(playWhenReady = playWhenReady)
             if (activeDj == null) maybeReplenishQueue()
         } else if (radio != null) {
             advanceAfterRadioFill = true
@@ -1883,7 +1935,7 @@ class DesktopPlayerConnection(
                         currentIndex++
                         _djTanda.value = pickedTanda
                         publishDjTail(activeDj, gen)
-                        startCurrentTrack()
+                        startCurrentTrack(playWhenReady = playWhenReady)
                         return@launch
                     }
                 }
@@ -1894,7 +1946,7 @@ class DesktopPlayerConnection(
                     if (currentIndex + 1 < songQueue.size) {
                         currentIndex++
                         syncQueueFlow()
-                        startCurrentTrack()
+                        startCurrentTrack(playWhenReady = playWhenReady)
                         maybeReplenishQueue()
                         return@launch
                     }
@@ -2050,9 +2102,10 @@ class DesktopPlayerConnection(
     private fun startCurrentTrack(playWhenReady: Boolean = true, initialPositionMs: Long = 0L) {
         val song = songQueue.getOrNull(currentIndex) ?: return
         cancelCrossfade()
+        engine.stop()
+        transportFade.reset()
         tempoReturnJob?.cancel(); tempoReturnJob = null
         resolveJob?.cancel()
-        engine.stop()
         engine.setTempo(1f)
         _currentQuality.value = null
         finishedAdhdTrackKey = null

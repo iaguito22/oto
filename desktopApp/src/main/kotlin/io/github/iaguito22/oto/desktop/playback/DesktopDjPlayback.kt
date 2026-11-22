@@ -7,10 +7,11 @@ import io.github.iaguito22.oto.dj.SongSection
 import io.github.iaguito22.oto.dj.SongSections
 import io.github.iaguito22.oto.dj.DjTransitionPlan
 import io.github.iaguito22.oto.dj.DjBridgeStyle
+import io.github.iaguito22.oto.dj.DjCrossfadeFallback
 
 internal sealed interface TransitionAction {
     data object None : TransitionAction
-    data class StartCrossfade(val durationMs: Long, val plan: DjTransitionPlan? = null) : TransitionAction
+    data class StartCrossfade(val durationMs: Long, val plan: DjTransitionPlan? = null, val fallback: Boolean = false) : TransitionAction
     data object FinishTrackNow : TransitionAction
 }
 
@@ -76,6 +77,22 @@ internal object DesktopTransitionPlanner {
         if (durationMs < fadeMs * 3L) return TransitionAction.None
         if (durationMs - positionMs <= fadeMs) return TransitionAction.StartCrossfade(fadeMs)
         return TransitionAction.None
+    }
+
+    fun withFallback(
+        planned: TransitionAction,
+        window: DjCrossfadeFallback.Window?,
+        positionMs: Long,
+        ready: Boolean,
+        plan: DjTransitionPlan?,
+    ): TransitionAction {
+        if (window == null || !ready) return planned
+        if (planned is TransitionAction.StartCrossfade && plan != null) return planned
+        if (positionMs < window.startMs) {
+            return if (planned is TransitionAction.StartCrossfade) TransitionAction.None else planned
+        }
+        val remaining = window.endMs - positionMs
+        return if (remaining >= 100L) TransitionAction.StartCrossfade(remaining, fallback = true) else planned
     }
 
     /**

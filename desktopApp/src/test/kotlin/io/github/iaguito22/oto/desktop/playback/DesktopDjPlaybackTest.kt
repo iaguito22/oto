@@ -3,6 +3,7 @@ package io.github.iaguito22.oto.desktop.playback
 import io.github.iaguito22.oto.dj.SongSection
 import io.github.iaguito22.oto.dj.AdhdPlanner
 import io.github.iaguito22.oto.dj.AdhdSegment
+import io.github.iaguito22.oto.dj.DjCrossfadeFallback
 import io.github.iaguito22.oto.dj.DjTransitionPlan
 import io.github.iaguito22.oto.dj.DjTransitionStyle
 import org.junit.Assert.assertEquals
@@ -17,6 +18,24 @@ class DesktopDjPlaybackTest {
         mixOutDurationMs = 6_000L,
         fullDurationMs = 210_000L,
     )
+
+    @Test
+    fun readyDeckCanMixEvenWhenAnalysisRejectedTheDjPlan() {
+        val rejected = DjTransitionPlan(DjTransitionStyle.SmoothEqualPower, 0L, outgoingFadeStartMs = 210_000L, incomingStartMs = 0L)
+        val previous = DesktopTransitionPlanner.evaluate(
+            positionMs = 208_000L, durationMs = 210_000L, playing = true, buffering = false,
+            configuredFadeSeconds = 6, ramSaver = false, crossfadeSupported = true,
+            nextReady = true, adhdSegment = null, plan = rejected,
+        )
+        val window = DjCrossfadeFallback.window(210_000L, 210_000L, 6_000L, emptyList())
+        assertEquals(TransitionAction.None, previous)
+        assertEquals(TransitionAction.None,
+            DesktopTransitionPlanner.withFallback(TransitionAction.StartCrossfade(6_000L), window, 204_000L, true, null))
+        assertEquals(TransitionAction.StartCrossfade(2_000L, fallback = true),
+            DesktopTransitionPlanner.withFallback(previous, window, 208_000L, true, rejected))
+        assertEquals(TransitionAction.None,
+            DesktopTransitionPlanner.withFallback(previous, window, 208_000L, false, rejected))
+    }
 
     @Test
     fun effectiveAdhdCrossfadeRespectsRamSaverAndFallbackDefault() {

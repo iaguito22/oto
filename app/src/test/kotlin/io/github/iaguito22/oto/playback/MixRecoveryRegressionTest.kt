@@ -17,6 +17,13 @@ class MixRecoveryRegressionTest {
     private val pair = "RITMO" to 12
     private val attempt = MixAttemptRecovery()
 
+    @Test fun lateBridgeCanStillUseAQuickerSimpleFade() {
+        val window = io.github.iaguito22.oto.dj.DjCrossfadeFallback.Window(197_000L, 200_000L)
+        assertNull(Crossfade.liveMixPreparationMs(197_250L, window.startMs, window.endMs, null, 200L, 600L))
+        assertEquals(197_450L, Crossfade.fallbackDeckStartMs(197_250L, window, null, 200L, 600L))
+        assertNull(Crossfade.fallbackDeckStartMs(199_400L, window, null, 200L, 600L))
+    }
+
     @Test fun failedPairRearmsOnlyAfterARewindWithRoomAndNextPairsStartFresh() {
         attempt.watch(Triple(pair.first, pair.second, "No Lie"))
         attempt.skip()

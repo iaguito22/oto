@@ -26,9 +26,8 @@ internal fun DjBridgeSpec.fitsSource(
 ): Boolean = (if (style == DjBridgeStyle.OutroTail) cueOutEndMs == outgoingDurationMs else cueOutEndMs <= outgoingDurationMs) &&
     ChorusSafety.allows(this, outgoing, incoming)
 
-// Crossfade's audio handoffs currently support the next sequential item only.
-internal fun sequentialMixNext(currentIndex: Int, nextIndex: Int): Boolean =
-    currentIndex >= 0 && nextIndex == currentIndex + 1
+internal fun mixNext(currentIndex: Int, nextIndex: Int): Boolean =
+    currentIndex >= 0 && nextIndex >= 0 && nextIndex != currentIndex
 
 /** Same alignment budget for preparing, announcing and loading a bridge. null means it arrived too late. */
 internal fun bridgeStartOffsetMs(

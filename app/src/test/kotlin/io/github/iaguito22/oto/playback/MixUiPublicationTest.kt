@@ -41,13 +41,15 @@ class MixUiPublicationTest {
         assertEquals(MixUiState.Preparing, publishedMixUi(pair, true, null)?.state)
     }
 
-    @Test fun repeatAllWrapAndShuffleDoNotPromiseUnsupportedPreparation() {
-        for ((current, next) in listOf(3 to 0, 1 to 4, 1 to -1, -1 to 0)) {
-            val allowed = sequentialMixNext(current, next)
+    @Test fun repeatAllWrapAndShufflePublishPreparationForActualNext() {
+        for ((current, next) in listOf(1 to -1, -1 to 0)) {
+            val allowed = mixNext(current, next)
             assertFalse(allowed)
             assertNull(publishedMixUi(pair, allowed, null))
         }
-        assertTrue(sequentialMixNext(1, 2))
+        for ((current, next) in listOf(3 to 0, 1 to 4, 1 to 2)) {
+            assertEquals(MixUiState.Preparing, publishedMixUi(pair, mixNext(current, next), null)?.state)
+        }
     }
 
     @Test fun reenableWhilePausedInvalidatesDisabledDecisionAndDedup() {
@@ -112,8 +114,8 @@ class MixUiPublicationTest {
         assertTrue(cache.configure(MixUiConfiguration(true, 10_000, "Adhd")))
         assertEquals(MixUiState.Preparing, publishedMixUi(pair, true, cache.latest)?.state)
         cache.latest = MixUi(1000, 4000, null, MixUiState.Ready, pair)
-        assertNull(publishedMixUi(pair, sequentialMixNext(0, 3), cache.latest))
-        assertEquals(cache.latest, publishedMixUi(pair, sequentialMixNext(0, 1), cache.latest))
+        assertEquals(cache.latest, publishedMixUi(pair, mixNext(0, 3), cache.latest))
+        assertEquals(cache.latest, publishedMixUi(pair, mixNext(0, 1), cache.latest))
     }
 
     @Test fun liveNameTracksThePlanExecutedAfterAnalysisChanges() {

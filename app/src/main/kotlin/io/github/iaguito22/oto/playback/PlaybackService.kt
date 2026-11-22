@@ -13,6 +13,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.ForwardingSimpleBasePlayer
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
@@ -219,6 +220,12 @@ class PlaybackService : MediaLibraryService() {
     // El volumen es el de la normalización de cada canción ([gain]) por lo que lleva subido en un fundido ([fadeIn]).
     private var gain = 1f
     private var fadeIn = 1f
+    private var transportGain = 1f
+    private val transportFade = TransportFade(scope) {
+        transportGain = it
+        applyVolume()
+        crossfade.setTransportGain(it)
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -247,6 +254,7 @@ class PlaybackService : MediaLibraryService() {
             gain = { gain },
             onFadeIn = { fadeIn = it; applyVolume() },
             smartMix = { smartMix },
+            djActive = { dj != null },
             transitionPlan = ::transitionPlanFor,
             nextStartPosition = ::nextStartPositionFor,
             incomingProcessor = incomingBass,
@@ -298,7 +306,7 @@ class PlaybackService : MediaLibraryService() {
                 delay(ANALYSIS_WATCH_MS)
                 if (!player.isPlaying) continue
                 val at = player.currentMediaItemIndex
-                for (i in at..minOf(at + 1, player.mediaItemCount - 1)) {
+                for (i in listOf(at, player.nextMediaItemIndex).distinct().filter { it in 0 until player.mediaItemCount }) {
                     val id = player.getMediaItemAt(i).mediaId
                     if (analysisCache.get(id)?.coversWholeSong == true) continue
                     val key = keyOf(id)
@@ -315,7 +323,27 @@ class PlaybackService : MediaLibraryService() {
         }
         AudioLevels.onChunk = { sr, bass, full -> recordLiveAudioChunk(sr, bass, full) }
 
-        session = MediaLibrarySession.Builder(this, player, callback)
+        val sessionPlayer = object : ForwardingSimpleBasePlayer(player) {
+            override fun getState(): State {
+                val state = super.getState()
+                val requested = transportFade.requestedPlaying ?: return state
+                return state.buildUpon()
+                    .setPlayWhenReady(requested, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+                    .build()
+            }
+
+            override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
+                requestPlayback(playWhenReady)
+                return Futures.immediateVoidFuture()
+            }
+
+            override fun handleStop(): ListenableFuture<*> {
+                val result = super.handleStop()
+                transportFade.reset()
+                return result
+            }
+        }
+        session = MediaLibrarySession.Builder(this, sessionPlayer, callback)
             .setSessionActivity(
                 PendingIntent.getActivity(
                     this, 0,
@@ -538,7 +566,17 @@ class PlaybackService : MediaLibraryService() {
         if (!player.isPlaying) return
         val at = player.currentMediaItemIndex
         val ahead = if (saver && connectivity.isActiveNetworkMetered) 1 else AHEAD
-        val ids = (at + 1..min(at + ahead, player.mediaItemCount - 1)).map { player.getMediaItemAt(it).mediaId }
+        val timeline = player.currentTimeline
+        if (timeline.isEmpty) return
+        val repeatMode = player.repeatMode.takeUnless { it == Player.REPEAT_MODE_ONE } ?: Player.REPEAT_MODE_OFF
+        val ids = buildList {
+            var index = player.nextMediaItemIndex
+            repeat(ahead) {
+                if (index !in 0 until player.mediaItemCount || index == at) return@buildList
+                add(player.getMediaItemAt(index).mediaId)
+                index = timeline.getNextWindowIndex(index, repeatMode, player.shuffleModeEnabled)
+            }
+        }
         val nextId = ids.firstOrNull()
         val wholeNext = nextId != null && (dj != null || smartMix) && !(saver && connectivity.isActiveNetworkMetered)
         // La siguiente entera va aparte: que el DJ cambie la 2.ª o la 3.ª de la cola no corta su descarga (la necesita
@@ -764,7 +802,15 @@ class PlaybackService : MediaLibraryService() {
     private fun applyVolume() {
         // La normalización ([gain]) va en el PCM, por canción (ver [CaptureGate.levels]): así llega también a la
         // grabación de pantalla. El volumen solo lleva el fundido.
-        player.volume = fadeIn
+        player.volume = fadeIn * transportGain
+    }
+
+    private fun requestPlayback(playing: Boolean) {
+        if (playing && player.playbackState == Player.STATE_IDLE) player.prepare()
+        transportFade.request(playing, player.playWhenReady, player::play, player::pause) {
+            while (player.playWhenReady && !player.isPlaying && player.playbackState != Player.STATE_ENDED &&
+                player.playbackState != Player.STATE_IDLE) delay(10L)
+        }
     }
 
     // --- Errores ---
@@ -1417,7 +1463,7 @@ class PlaybackService : MediaLibraryService() {
             if (startPos > 0L) adhdIntroAppliedFor = first.mediaId to 0
             player.setMediaItems(listOf(first), 0, startPos)
             player.prepare()
-            player.play()
+            requestPlayback(true)
             done.set(SessionResult(SessionResult.RESULT_SUCCESS))
         }
         return done
@@ -1542,7 +1588,7 @@ class PlaybackService : MediaLibraryService() {
                 if (startPos > 0L) adhdIntroAppliedFor = first.id to 0
                 player.setMediaItems(listOf(item), 0, startPos)
                 player.prepare()
-                player.play()
+                requestPlayback(true)
             }
             done.set(SessionResult(SessionResult.RESULT_SUCCESS))
             syncUpcomingDjQueue(d)
@@ -1759,10 +1805,9 @@ class PlaybackService : MediaLibraryService() {
         val pairIds = if (current != null && nextItem != null) current.mediaId to nextItem.mediaId else null
         // Solo la mezcla de ESTA pareja. No se borra al cambiar de canción o de cola: el relevo no la vuelve a mandar
         // si no cambia (y el aviso «Preparando la mezcla» desaparecía hasta el siguiente cambio de estado).
-        // This badge describes smart mixing. Classic fades have no preparation notice. Wrap/shuffle jumps are
-        // excluded until the audio handoff supports non-sequential items too.
+        // El aviso de mezcla inteligente sigue el orden real de Media3, tambi?n en aleatorio.
         val mixAllowed = current != null && nextItem != null && player.repeatMode != Player.REPEAT_MODE_ONE && smartMix &&
-            sequentialMixNext(player.currentMediaItemIndex, player.nextMediaItemIndex)
+            mixNext(player.currentMediaItemIndex, player.nextMediaItemIndex)
         val mix = publishedMixUi(pairIds, mixAllowed, mixPublication.latest)
         val shown = "${pairIds?.first}→${pairIds?.second} ${mix?.state?.id ?: "nada"} allowed=$mixAllowed mixing=$isMixing latest=${mixPublication.latest?.let { "${it.pair?.first}→${it.pair?.second} ${it.state.id}" }}"
         if (shown != lastShownMix) {
@@ -1947,6 +1992,7 @@ class PlaybackService : MediaLibraryService() {
         }
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            if (!playWhenReady && transportFade.requestedPlaying == true) transportFade.reset()
             if (playWhenReady && preserveTransferredQueue) {preserveTransferredQueue=false;autoplay()}
         }
 
@@ -1972,6 +2018,7 @@ class PlaybackService : MediaLibraryService() {
         }
 
         override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+            prefetch()
             publishDjSessionExtras()
         }
 

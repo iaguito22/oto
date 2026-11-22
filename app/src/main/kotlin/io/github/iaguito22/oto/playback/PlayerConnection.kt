@@ -668,13 +668,15 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         it.removeMediaItem(index)
     }
 
+    internal fun setLocalPlaying(playing: Boolean) = withController { it.playWhenReady = playing }
+
     override fun toggle() {
         mirror?.let { m ->
             // Se nota al instante; la confirmación llega con su siguiente estado.
             _state.value = _state.value.let { s -> remotePosition = remotePosition(); remoteAt = android.os.SystemClock.elapsedRealtime(); s.copy(playing = !s.playing) }
             return m.send("toggle")
         }
-        withController { if (it.isPlaying) it.pause() else it.play() }
+        withController { if (it.playWhenReady) it.pause() else it.play() }
     }
     override fun next() { mirror?.let { return it.send("next") }; withController { it.seekToNextMediaItem() } }
     /** A la anterior si esta acaba de empezar; si no (o no hay anterior), al principio de esta. Ver [restarts]. */
