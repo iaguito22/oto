@@ -35,6 +35,7 @@ class DevicesActivity : ComponentActivity() {
             val syncIssue by devices.syncIssue.collectAsState()
             val remote by devices.link.remote.collectAsState()
             val local by (application as OtoApp).player.localState.collectAsState()
+            val following by devices.following.collectAsState()
             val scope=rememberCoroutineScope()
             var error by remember { mutableStateOf<String?>(null) }
             var busy by remember { mutableStateOf(false) }
@@ -74,7 +75,24 @@ class DevicesActivity : ComponentActivity() {
                         connected,
                     )
                     when {
-                        connected -> TransferChoices("Este móvil","El ordenador",!busy,remote!!.optString("id").let { it.isNotBlank() && it!="null" },local.id!=null, { action { devices.transferHere();result="La música continúa aquí" } }, { action { devices.transferThere();result="La música continúa en el ordenador" } })
+                        connected -> {
+                            // Un solo paso, según dónde esté la música: aquí se envía; en el ordenador (o siguiéndolo), se trae.
+                            val other = remote!!
+                            val otherSong = other.optString("id").takeIf { it.isNotBlank() && it!="null" }?.let { other.optString("title") }
+                            val here = following == null && local.id != null
+                            ContinueListening(
+                                song = if(here) local.title else otherSong,
+                                where = when {
+                                    here -> if(local.playing) "Sonando en este móvil" else "En pausa en este móvil"
+                                    otherSong != null -> if(other.optBoolean("playing")) "Sonando en el ordenador" else "En pausa en el ordenador"
+                                    else -> "Pon algo en cualquiera de los dos"
+                                },
+                                action = if(here) "Enviar al ordenador" else "Traer a este móvil",
+                                sending = here,
+                                enabled = !busy && (here || otherSong != null),
+                                onClick = { if(here) action { devices.transferThere();result="La música continúa en el ordenador" } else action { devices.transferHere();result="La música continúa aquí" } },
+                            )
+                        }
                         linked -> {
                             Text("Oto reintentará la conexión. Comprueba que los dos equipos estén en la misma red y que Oto esté abierto en el ordenador.",style=MaterialTheme.typography.bodyMedium,color=faint)
                             OutlinedButton(onClick=::scan,shape=RoundedCornerShape(16.dp)) { Text("Volver a escanear el QR") }

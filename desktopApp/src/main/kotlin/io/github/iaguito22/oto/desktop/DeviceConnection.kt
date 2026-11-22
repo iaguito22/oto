@@ -70,7 +70,7 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
     private val replica = LibraryReplica(prefs, java.io.File(OtoDirs.filesDir, "library-replica.json"))
     val syncNotice = replica.notice
     private val bridge = LinkedPlayback(adapter)
-    val mirror by lazy { RemoteMirror(link.remote, player.state, scope) }
+    internal val mirror: RemoteMirror by lazy { RemoteMirror(link.remote, player.state, scope) }
     val link = LocalLink(scope, { adapter.snapshot().put("libraryHash", replica.digest()) }) { command ->
         when (command.optString("action")) {
             "library" -> replica.export()
@@ -90,7 +90,8 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
                 }
                 JSONObject().put("ok", true)
             }
-            else -> bridge.execute(command)
+            // Recibida aquí, aunque llegue en pausa, deja de mostrarse lo del móvil.
+            else -> bridge.execute(command).also { if (command.optString("action") == "transfer") mirror.release() }
         }
     }
     // El último equipo que se conectó: distingue «vinculado sin conexión» de «sin vincular».
@@ -116,11 +117,14 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
         require(!state.optString("id").isNullOrBlank()) { "Elige una canción antes" }
         adapter.setPlaying(false)
         link.command(JSONObject().put("action", "transfer").put("state", state))
+        // Ya está en el móvil, aunque en pausa: el ordenador pasa a mostrarlo y controlarlo.
+        mirror.follow()
     }
     suspend fun transferHere() {
         val state = link.remote.value ?: error("No hay un dispositivo conectado")
         link.command(JSONObject().put("action", "pause"))
         bridge.execute(JSONObject().put("action", "transfer").put("state", state))
+        mirror.release()
     }
     override fun close() { sync.cancel(); discovery.close(); link.close(); scope.cancel() }
 }

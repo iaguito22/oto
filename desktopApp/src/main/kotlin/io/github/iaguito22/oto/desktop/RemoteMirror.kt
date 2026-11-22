@@ -36,6 +36,8 @@ internal class RemoteMirror(remote: StateFlow<JSONObject?>, local: StateFlow<Now
     }
     @Volatile private var clock = Clock(0, 0, false, 0)
     private var following = false
+    private var lastState: JSONObject? = null
+    private var lastLocal: NowPlaying? = null
 
     init {
         scope.launch { combine(remote, local, ::update).collect {} }
@@ -52,7 +54,18 @@ internal class RemoteMirror(remote: StateFlow<JSONObject?>, local: StateFlow<Now
     /** Tras un salto en la barra, sin esperar a la siguiente actualización del móvil. */
     fun jump(ms: Long) { clock = clock.copy(base = ms, at = System.nanoTime() / 1_000_000); positionMutable.value = clock.now() }
 
-    private fun update(state: JSONObject?, local: NowPlaying) {
+    /** La música acaba de llegar aquí (aunque en pausa): deja de mostrar el móvil. */
+    @Synchronized fun release() { following = false; stateMutable.value = null }
+
+    /** La música acaba de irse al móvil (aunque en pausa): pasa a mostrarlo y controlarlo desde aquí. */
+    @Synchronized fun follow() {
+        following = true
+        val state = lastState ?: return
+        lastLocal?.let { update(state, it) }
+    }
+
+    @Synchronized private fun update(state: JSONObject?, local: NowPlaying) {
+        lastState = state; lastLocal = local
         following = RemoteNow.follow(following, local.id != null, local.playing, RemoteNow.of(state))
         if (!following || state == null) { stateMutable.value = null; return }
         stateMutable.value = parse(state)

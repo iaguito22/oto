@@ -29,6 +29,7 @@ internal fun DevicesPane(devices: DeviceConnection, revoke: () -> Unit) {
     val remote by devices.link.remote.collectAsState()
     val peer by devices.peer.collectAsState()
     val local by devices.player.state.collectAsState()
+    val mirrored by devices.mirror.state.collectAsState()
     val scope = rememberCoroutineScope()
     var failure by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -56,7 +57,24 @@ internal fun DevicesPane(devices: DeviceConnection, revoke: () -> Unit) {
             connected,
         )
         when {
-            connected -> TransferChoices("Este ordenador", "El móvil", !busy, remote!!.optString("id").let { it.isNotBlank() && it!="null" }, local.id!=null, { action("La música continúa aquí") { devices.transferHere() } }, { action("La música continúa en el móvil") { devices.transferThere() } })
+            connected -> {
+                // Un solo paso, según dónde esté la música: aquí se envía; en el móvil (o mostrándolo), se trae.
+                val other = remote!!
+                val otherSong = other.optString("id").takeIf { it.isNotBlank() && it != "null" }?.let { other.optString("title") }
+                val here = mirrored == null && local.id != null
+                ContinueListening(
+                    song = if (here) local.title else otherSong,
+                    where = when {
+                        here -> if (local.playing) "Sonando en este ordenador" else "En pausa en este ordenador"
+                        otherSong != null -> if (other.optBoolean("playing")) "Sonando en el móvil" else "En pausa en el móvil"
+                        else -> "Pon algo en cualquiera de los dos"
+                    },
+                    action = if (here) "Enviar al móvil" else "Traer a este ordenador",
+                    sending = here,
+                    enabled = !busy && (here || otherSong != null),
+                    onClick = { if (here) action("La música continúa en el móvil") { devices.transferThere() } else action("La música continúa aquí") { devices.transferHere() } },
+                )
+            }
             linked -> {
                 Text("Oto reintentará la conexión. Comprueba que los dos equipos estén en la misma red y que Oto esté abierto en el móvil.", style=MaterialTheme.typography.bodyMedium, color=faint)
                 TextButton(onClick={ showQr = !showQr }) { Text(if (showQr) "Ocultar el QR" else "Volver a vincular con el QR") }

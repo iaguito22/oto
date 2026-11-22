@@ -184,20 +184,18 @@ internal fun DeviceIdentity(name: String, subtitle: String, connected: Boolean) 
 }
 
 @Composable
-internal fun TransferChoices(localName: String, remoteName: String, enabled: Boolean, canBring: Boolean, canSend: Boolean, here: () -> Unit, there: () -> Unit) {
+internal fun ContinueListening(song: String?, where: String, action: String, sending: Boolean, enabled: Boolean, onClick: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Continuar escuchando", style = MaterialTheme.typography.titleSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            listOf(Triple(localName, "Traer aquí", here), Triple(remoteName, "Enviar allí", there)).forEachIndexed { index, (name, hint, action) ->
-                val available = enabled && (if(index==0) canBring else canSend)
-                val interaction = remember { MutableInteractionSource() }
-                val hovered by interaction.collectIsHoveredAsState()
-                val size by animateFloatAsState(if (hovered && available) 1.06f else 1f, tween(150), label = "transferHover")
-                Column(Modifier.weight(1f).clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = if (index == 0) .12f else .05f)).clickable(interactionSource = interaction, indication = null, enabled = available, onClick = action).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Icon(if (index == 0) Icons.Rounded.SouthWest else Icons.Rounded.NorthEast, null, Modifier.size(22.dp * size), tint = MaterialTheme.colorScheme.primary.copy(alpha = if (available) 1f else .3f))
-                    Text(name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (available) 1f else .35f))
-                    Text(hint, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .45f))
-                }
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = .08f)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(song ?: "No suena nada", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(where, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .5f))
+            }
+            Button(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                Icon(if (sending) Icons.Rounded.NorthEast else Icons.Rounded.SouthWest, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(action)
             }
         }
     }

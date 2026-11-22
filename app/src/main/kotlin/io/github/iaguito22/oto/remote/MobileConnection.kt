@@ -96,7 +96,11 @@ class MobileConnection(private val app: OtoApp) {
     val syncNotice = replica.notice
     private val bridge = LinkedPlayback(adapter)
     val link = LocalLink(app.scope, { adapter.snapshot().put("libraryHash",replica.digest()) }) { command ->
-        if(command.optString("action")=="library") replica.export() else bridge.execute(command)
+        if(command.optString("action")=="library") replica.export()
+        else bridge.execute(command).also {
+            // Recibida aquí, aunque llegue en pausa, la gota vuelve a ser de este teléfono.
+            if(command.optString("action")=="transfer") withContext(Dispatchers.Main) { followingMutable.value = null; player.hideRemote() }
+        }
     }
     init {
         // En el hilo de la interfaz, como todo lo del reproductor. Sonar aquí (auriculares, notificación, «Traer aquí») lo suelta.
@@ -155,6 +159,8 @@ class MobileConnection(private val app: OtoApp) {
         val state=adapter.snapshot(); require(!state.optString("id").isNullOrBlank()) { "Elige una canción" }
         adapter.setPlaying(false)
         link.command(JSONObject().put("action","transfer").put("state",state))
+        // Ya está en el ordenador, aunque en pausa: el teléfono pasa a mostrarlo y controlarlo.
+        link.remote.value?.let { now -> player.showRemote(now, mirror); followingMutable.value = RemoteNow.of(now) }
     }
     suspend fun transferHere() = withContext(Dispatchers.Main) {
         val state=link.remote.value ?: error("No hay un dispositivo conectado")
