@@ -176,6 +176,7 @@ import io.github.iaguito22.oto.ui.menu.Filter
 import io.github.iaguito22.oto.ui.menu.MenuController
 import io.github.iaguito22.oto.ui.menu.Page
 import io.github.iaguito22.oto.desktop.ui.MobileIcons
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.awt.FileDialog
 import java.awt.Frame
@@ -4265,12 +4266,22 @@ internal fun QueuePane(
         scrollThreshold = 52.dp,
         scroller = scroller,
     ) { from, to -> currentReorder.move(from.key, to.key) }
+    val dragging = reorderState.isAnyItemDragging
+    var settlingRows by remember { mutableStateOf(false) }
+    LaunchedEffect(dragging) {
+        if (dragging) {
+            settlingRows = true
+        } else if (settlingRows) {
+            delay(220)
+            settlingRows = false
+        }
+    }
     val userScroll = remember(listState) { QueueUserScroll() }
     val activeKey = if (panelHeader == null) null else visibleQueue.firstOrNull {
         it.entry.index == curIdx && it.entry.id == currentMediaId
     }?.key
     LaunchedEffect(activeKey, listState) {
-        if (activeKey == null || reorderState.isAnyItemDragging || userScroll.isRecent() || listState.isScrollInProgress) {
+        if (activeKey == null || dragging || userScroll.isRecent() || listState.isScrollInProgress) {
             return@LaunchedEffect
         }
         val layout = listState.layoutInfo
@@ -4462,7 +4473,12 @@ internal fun QueuePane(
             }
             items(reorder.rows, key = { it.key }) { (key, entry) ->
                 val origIdx = entry.index
-                ReorderableItem(reorderState, key) { dragging ->
+                // El aviso de mezcla también cambia el alto de una fila. Solo animamos
+                // las posiciones como parte del gesto de reordenar.
+                val placement = if (dragging || settlingRows) {
+                    Modifier.animateItem(fadeInSpec = null, placementSpec = tween(200), fadeOutSpec = null)
+                } else Modifier
+                ReorderableItem(reorderState, key, animateItemModifier = placement) { dragging ->
                     val releaseDetector = remember(key) {
                         DragGestureDetector { start, end, cancel, drag ->
                             detectDragGestures(start, {
