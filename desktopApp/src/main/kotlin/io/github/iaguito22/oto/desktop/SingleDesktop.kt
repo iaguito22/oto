@@ -348,11 +348,9 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
         player.playLocal(shown, null, (list.id == LIKED_ID) != (list.id in flipped))
     }
     val playingSource = if (mirrored != null) mirrored?.source else source
-    // Lo que suena en el móvil se dice siempre: «En el móvil · rock», o solo dónde suena si no se sabe de dónde viene.
-    val sourceLabel = playingSource?.let { if (it.kind == "Radio") "Radio de ${it.title}" else it.title }.let { label ->
-        val phone = mirrored ?: return@let label
-        label?.let { "En el móvil · $it" } ?: if (phone.now.playing) "Sonando en el móvil" else "En pausa en el móvil"
-    }
+    val sourceLabel = playingSource?.let { if (it.kind == "Radio") "Radio de ${it.title}" else it.title }
+    // Lo que suena en el móvil se dice siempre, aparte del origen.
+    val phoneLabel = mirrored?.let { if (it.now.playing) "Sonando en el móvil" else "En pausa en el móvil" }
     val canOpenSource = playingSource?.let { it.local != null || it.item != null || it.kind in listOf("DJ", "Radio") } == true
     fun showLibrary() {
         expandMini()
@@ -927,7 +925,7 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                                     }, end = { draggingPanel = false; saveRight() })
                                 NowPlayingPanel(Modifier.width(animatedRight).fillMaxHeight(), animatedRight > 180.dp, accent,
                                     now, sourceLabel, drawing && !mini && localNow.playing && mirrored == null, coverBeat, player,
-                                    qualityLabel.takeIf { mirrored == null }, mixingNow && mirrored == null, nextMix?.style,
+                                    qualityLabel.takeIf { mirrored == null }, mixingNow && mirrored == null, nextMix?.style, phoneLabel,
                                     onSource = if (canOpenSource) ::openSource else null,
                                     onTrack = ::openTrack, onArtist = ::openArtist,
                                     onToggle = {
@@ -1090,7 +1088,7 @@ private fun SingleLibraryRail(width: Dp, accent: Color, activeSection: Int, acti
 @Composable
 private fun NowPlayingPanel(modifier: Modifier, wide: Boolean, accent: Color, now: io.github.iaguito22.oto.playback.NowPlaying,
     context: String?, pulsing: Boolean, coverBeat: Boolean, player: DesktopPlayerConnection,
-    quality: String?, mixing: Boolean, mixStyle: String?,
+    quality: String?, mixing: Boolean, mixStyle: String?, remoteWhere: String?,
     onSource: (() -> Unit)?, onTrack: () -> Unit, onArtist: (String, String?) -> Unit,
     onToggle: () -> Unit, queue: @Composable (LazyListState, @Composable () -> Unit) -> Unit) {
     BoxWithConstraints(modifier.island()) {
@@ -1128,7 +1126,12 @@ private fun NowPlayingPanel(modifier: Modifier, wide: Boolean, accent: Color, no
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                             TrackArtists(now, Color.White.copy(.62f), onArtist)
                             // Calidad del audio y, si está mezclando, el estilo de la mezcla.
-                            if (showDetails && (quality != null || mixing)) Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (remoteWhere != null || (showDetails && (quality != null || mixing))) Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                if (remoteWhere != null) Row(Modifier.clip(CircleShape).background(accent.copy(.18f)).padding(horizontal = 10.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Icon(Icons.Rounded.Devices, null, Modifier.size(14.dp), tint = accent)
+                                    Text(remoteWhere, style = OtoType.rowSub.copy(fontSize = 12.sp), color = accent, maxLines = 1)
+                                }
                                 if (mixing) {
                                     val beat = rememberInfiniteTransition(label = "mezclando")
                                     val dot by beat.animateFloat(.35f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "puntoMezcla")
