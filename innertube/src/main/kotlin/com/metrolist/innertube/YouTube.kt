@@ -821,16 +821,20 @@ object YouTube {
     suspend fun artistItems(endpoint: BrowseEndpoint): Result<ArtistItemsPage> =
         runCatching {
             val response = innerTube.browse(WEB_REMIX, endpoint.browseId, endpoint.params).body<BrowseResponse>()
-            val sectionContent =
-                response.contents
+            val sectionContent = (
+                response.contents?.twoColumnBrowseResultsRenderer?.secondaryContents?.sectionListRenderer?.contents.orEmpty() +
+                    response.contents
                     ?.singleColumnBrowseResultsRenderer
                     ?.tabs
                     ?.firstOrNull()
                     ?.tabRenderer
                     ?.content
                     ?.sectionListRenderer
-                    ?.contents
-                    ?.firstOrNull()
+                    ?.contents.orEmpty()
+                ).firstOrNull {
+                    it.gridRenderer != null || it.musicCarouselShelfRenderer != null ||
+                        it.musicPlaylistShelfRenderer != null || it.musicShelfRenderer != null
+                }
 
             val gridRenderer = sectionContent?.gridRenderer
             val musicCarouselShelfRenderer = sectionContent?.musicCarouselShelfRenderer
@@ -898,7 +902,8 @@ object YouTube {
                             musicShelfRenderer.contents?.getItems()?.mapNotNull {
                                 ArtistItemsPage.fromMusicResponsiveListItemRenderer(it)
                             } ?: emptyList(),
-                        continuation = musicShelfRenderer.continuations?.getContinuation(),
+                        continuation = musicShelfRenderer.contents?.getContinuation()
+                            ?: musicShelfRenderer.continuations?.getContinuation(),
                     )
                 }
 
@@ -915,7 +920,8 @@ object YouTube {
                             musicPlaylistShelfRenderer?.contents?.getItems()?.mapNotNull {
                                 ArtistItemsPage.fromMusicResponsiveListItemRenderer(it)
                             } ?: emptyList(),
-                        continuation = musicPlaylistShelfRenderer?.contents?.getContinuation(),
+                        continuation = musicPlaylistShelfRenderer?.contents?.getContinuation()
+                            ?: musicPlaylistShelfRenderer?.continuations?.getContinuation(),
                     )
                 }
             }
@@ -948,23 +954,23 @@ object YouTube {
                         }
                     ArtistItemsContinuationPage(
                         items = items,
-                        continuation = if (items.isEmpty()) null else musicPlaylistShelfContinuation.continuations?.getContinuation(),
+                        continuation = musicPlaylistShelfContinuation.contents.getContinuation()
+                            ?: musicPlaylistShelfContinuation.continuations?.getContinuation(),
                     )
                 }
 
                 else -> {
-                    val continuationItems =
+                    val shelf = response.continuationContents?.musicShelfContinuation
+                    val continuationItems = shelf?.contents ?:
                         response.onResponseReceivedActions
-                            ?.firstOrNull()
-                            ?.appendContinuationItemsAction
-                            ?.continuationItems
+                            ?.flatMap { it.appendContinuationItemsAction?.continuationItems.orEmpty() }
                     val items =
                         continuationItems?.getItems()?.mapNotNull {
                             ArtistItemsPage.fromMusicResponsiveListItemRenderer(it)
                         } ?: emptyList()
                     ArtistItemsContinuationPage(
                         items = items,
-                        continuation = if (items.isEmpty()) null else continuationItems?.getContinuation(),
+                        continuation = continuationItems?.getContinuation() ?: shelf?.continuations?.getContinuation(),
                     )
                 }
             }

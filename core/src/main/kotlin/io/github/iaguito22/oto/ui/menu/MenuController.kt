@@ -2,6 +2,7 @@ package io.github.iaguito22.oto.ui.menu
 
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.AlbumItem
+import com.metrolist.innertube.models.Artist
 import com.metrolist.innertube.models.ArtistItem
 import com.metrolist.innertube.models.PlaylistItem
 import com.metrolist.innertube.models.SongItem
@@ -35,6 +36,7 @@ sealed interface Page {
         val shelves: List<Shelf> = emptyList(),
         val sub: String? = null,
         val error: String? = null,
+        val allArtistSongs: PlaylistItem? = null,
     ) : Page
 
     /** Una lista tuya, por su id: el contenido se lee de Prefs, que es quien la cambia. */
@@ -197,7 +199,11 @@ open class MenuController(protected val scope: CoroutineScope) {
     private suspend fun load(item: YTItem): Page.Remote {
         val r: Result<Page.Remote> = when (item) {
             is AlbumItem -> YouTube.album(item.browseId).map { Page.Remote(item, it.songs) }
-            is PlaylistItem -> YouTube.playlist(item.id).map { Page.Remote(item, it.songs) }
+            is PlaylistItem -> if (item.artistSongsEndpoint == null) {
+                YouTube.playlist(item.id).map { Page.Remote(item, it.songs) }
+            } else {
+                loadArtistSongs(item)
+            }
             is ArtistItem -> YouTube.artist(item.id).map { page ->
                 // Las canciones más oídas son la lista que se reproduce; el resto, carruseles como en Explorar.
                 val top = page.sections.firstOrNull { s -> s.items.isNotEmpty() && s.items.all { it is SongItem } }
@@ -210,11 +216,39 @@ open class MenuController(protected val scope: CoroutineScope) {
                     top?.items?.filterIsInstance<SongItem>().orEmpty(),
                     shelves,
                     sub = page.monthlyListenerCount ?: page.subscriberCountText,
+                    allArtistSongs = top?.moreEndpoint?.let { endpoint ->
+                        val name = page.artist.title.ifEmpty { item.title }
+                        PlaylistItem(
+                            id = endpoint.browseId.removePrefix("VL"),
+                            title = "Canciones de $name",
+                            author = Artist(name, page.artist.id),
+                            songCountText = null,
+                            thumbnail = page.artist.thumbnail ?: item.thumbnail,
+                            playEndpoint = null,
+                            shuffleEndpoint = null,
+                            radioEndpoint = null,
+                            artistSongsEndpoint = endpoint,
+                        )
+                    },
                 )
             }
             else -> Result.success(Page.Remote(item, emptyList()))
         }
         return r.getOrElse { e -> Page.Remote(item, error = e.message ?: e::class.simpleName) }
+    }
+
+    private suspend fun loadArtistSongs(item: PlaylistItem): Result<Page.Remote> = runCatching {
+        val endpoint = requireNotNull(item.artistSongsEndpoint)
+        val first = YouTube.artistItems(endpoint).getOrThrow()
+        val songs = first.items.filterIsInstance<SongItem>().toMutableList()
+        val seen = HashSet<String>()
+        var continuation = first.continuation
+        while (continuation != null && seen.add(continuation)) {
+            val next = YouTube.artistItemsContinuation(continuation).getOrThrow()
+            songs += next.items.filterIsInstance<SongItem>()
+            continuation = next.continuation
+        }
+        Page.Remote(item, songs.distinctBy { it.id })
     }
 
     private suspend fun search(q: String, f: Filter) {

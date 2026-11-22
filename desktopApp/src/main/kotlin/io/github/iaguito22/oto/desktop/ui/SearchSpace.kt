@@ -17,6 +17,9 @@ import com.metrolist.innertube.models.*
 import io.github.iaguito22.oto.*
 import io.github.iaguito22.oto.desktop.playback.*
 import io.github.iaguito22.oto.playback.ArtistTracks
+import io.github.iaguito22.oto.playback.CollectionPlayback
+import io.github.iaguito22.oto.playback.collectionPlayback
+import io.github.iaguito22.oto.playback.toggleCollection
 import io.github.iaguito22.oto.ui.menu.*
 import kotlinx.coroutines.launch
 
@@ -24,11 +27,14 @@ import kotlinx.coroutines.launch
 internal fun SearchSpace(state:MenuState,lists:List<LocalPlaylist>,currentId:String?,player:DesktopPlayerConnection,menu:MenuController,prefs:Prefs,palette:ArtworkPalette,onSave:(Heard)->Unit,onOpen:(YTItem)->Unit,onLocal:(String)->Unit,onArtist:(String,String)->Unit={_,_->},onRemember:(YTItem?)->Unit={}) {
     val scope=rememberCoroutineScope()
     val songActions=rememberSongActions(player,prefs,onSave,onArtist)
+    val source by player.source.collectAsState()
+    val now by player.state.collectAsState()
     var loading by remember {mutableStateOf<String?>(null)}
     val local=if(state.filter==Filter.All||state.filter==Filter.Lists)lists.filter{it.name.contains(state.query,true)} else emptyList()
     fun playItem(item:YTItem) {
         onRemember(item)
         if(item is SongItem){player.play(item);return}
+        if((item is AlbumItem || item is PlaylistItem) && player.toggleCollection(item=item))return
         if(loading!=null)return
         loading=item.id
         scope.launch {
@@ -58,14 +64,18 @@ internal fun SearchSpace(state:MenuState,lists:List<LocalPlaylist>,currentId:Str
                     val subtitle=when(item){is SongItem->"Canción · "+item.artists.joinToString{it.name};is ArtistItem->"Artista";is AlbumItem->listOfNotNull("Álbum",item.artists?.joinToString{it.name}?.takeIf{it.isNotBlank()},item.year?.toString()).joinToString(" · ");is PlaylistItem->listOfNotNull("Lista",item.author?.name).joinToString(" · ");else->""}
                     val open={onRemember(item);if(item is SongItem)player.play(item) else onOpen(item)}
                     if(i==0 && state.filter==Filter.All) {
+                        val isCollection = item is AlbumItem || item is PlaylistItem
+                        val playback = if (isCollection) collectionPlayback(source, now.id, now.playing, item = item) else CollectionPlayback.Start
                         Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color.White.copy(alpha=.045f)).clickable(onClick=open).padding(20.dp)) {
                             Column(Modifier.padding(end=60.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                                 Box(Modifier.size(88.dp).clip(if(item is ArtistItem)CircleShape else RoundedCornerShape(12.dp))){LibraryArt(item.thumbnail,Modifier.fillMaxSize())}
                                 Text(item.title,style=OtoType.title,color=if(item.id==currentId)palette.primary else Color.White,maxLines=2,overflow=TextOverflow.Ellipsis)
                                 Text(subtitle,style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),maxLines=1,overflow=TextOverflow.Ellipsis)
                             }
-                            Box(Modifier.align(Alignment.BottomEnd).size(48.dp).clip(CircleShape).background(palette.primary.copy(alpha=if(loading==item.id).5f else 1f)).clickable(enabled=loading==null){playItem(item)},contentAlignment=Alignment.Center) {
-                                androidx.compose.foundation.Canvas(Modifier.size(20.dp)) {val p=androidx.compose.ui.graphics.Path().apply{moveTo(size.width*.32f,size.height*.16f);lineTo(size.width*.82f,size.height*.5f);lineTo(size.width*.32f,size.height*.84f);close()};drawPath(p,Color(0xFF111111),style=androidx.compose.ui.graphics.drawscope.Stroke(1.8.dp.toPx(),cap=androidx.compose.ui.graphics.StrokeCap.Round,join=androidx.compose.ui.graphics.StrokeJoin.Round))}
+                            Box(Modifier.align(Alignment.BottomEnd).size(48.dp).clip(CircleShape).background(palette.primary.copy(alpha=if(loading==item.id).5f else 1f))
+                                .clickable(enabled=loading==null,onClickLabel=playback.label(item.title),role=androidx.compose.ui.semantics.Role.Button){playItem(item)},contentAlignment=Alignment.Center) {
+                                if (isCollection) CollectionPlayIcon(playback == CollectionPlayback.Pause, 28.dp, Color(0xFF111111))
+                                else androidx.compose.foundation.Canvas(Modifier.size(20.dp)) {val p=androidx.compose.ui.graphics.Path().apply{moveTo(size.width*.32f,size.height*.16f);lineTo(size.width*.82f,size.height*.5f);lineTo(size.width*.32f,size.height*.84f);close()};drawPath(p,Color(0xFF111111),style=androidx.compose.ui.graphics.drawscope.Stroke(1.8.dp.toPx(),cap=androidx.compose.ui.graphics.StrokeCap.Round,join=androidx.compose.ui.graphics.StrokeJoin.Round))}
                             }
                         }
                     } else if(item is SongItem) {

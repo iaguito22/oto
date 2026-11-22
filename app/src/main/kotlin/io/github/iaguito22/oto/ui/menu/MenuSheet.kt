@@ -139,6 +139,9 @@ import io.github.iaguito22.oto.dj.DjMode
 import io.github.iaguito22.oto.dj.DjMood
 import io.github.iaguito22.oto.dj.Smart
 import io.github.iaguito22.oto.playback.PlayerConnection
+import io.github.iaguito22.oto.playback.CollectionPlayback
+import io.github.iaguito22.oto.playback.collectionPlayback
+import io.github.iaguito22.oto.playback.toggleCollection
 import io.github.iaguito22.oto.toHeard
 import io.github.iaguito22.oto.toSong
 import io.github.iaguito22.oto.ui.theme.Motion
@@ -498,12 +501,24 @@ fun MenuSheet(
                             play = play, onOpen = vm::open, onHold = { hold(it, null) },
                         ) else DetailView(
                             p, currentId, onBack = vm::closeDetail,
-                            onPlay = { songs, i -> connection.playAll(songs, i, p.item); onClose() }, onHold = { hold(it, null) },
+                            playback = collectionPlayback(source, np.id, np.playing, item = p.item),
+                            onPlay = { songs, i ->
+                                if (i != null || !connection.toggleCollection(item = p.item)) {
+                                    connection.playAll(songs, i, p.item)
+                                    onClose()
+                                }
+                            }, onHold = { hold(it, null) },
                             onSave = { songs -> saving = Saving(songs.map { it.toHeard() }, p.item.title, count(songs.size), p.item.thumbnail) },
                         )
                         is Page.Local -> LocalView(
                             if (p.id == LIKED_ID) liked else playlists?.firstOrNull { it.id == p.id }, currentId, onBack = vm::closeDetail,
-                            onPlay = { list, i, newest -> connection.playLocal(list, i, newest); onClose() },
+                            playback = collectionPlayback(source, np.id, np.playing, localId = p.id),
+                            onPlay = { list, i, newest ->
+                                if (i != null || !connection.toggleCollection(localId = list.id)) {
+                                    connection.playLocal(list, i, newest)
+                                    onClose()
+                                }
+                            },
                             onHold = { song -> hold(song, p.id) }, onMenu = { listMenu = it },
                             downloaded = p.id in downloadLists.orEmpty(), downloadStates = downloadStates,
                             play = play, onHoldOther = { hold(it, null) },
@@ -1173,6 +1188,7 @@ private fun DetailView(
     d: Page.Remote,
     currentId: String?,
     onBack: () -> Unit,
+    playback: CollectionPlayback,
     onPlay: (List<SongItem>, Int?) -> Unit,
     onHold: (SongItem) -> Unit,
     onSave: (List<SongItem>) -> Unit,
@@ -1188,7 +1204,7 @@ private fun DetailView(
             val context = LocalContext.current
             PageHeader(onBack, { Art(d.item.thumbnail, 112.dp, Radius.md) }, d.item.title, sub, onMenu = { shareItem(context, d.item) }, menuIcon = R.drawable.ic_share) {
                 if (!songs.isNullOrEmpty()) {
-                    Pill("Reproducir", { onPlay(songs, null) }, icon = R.drawable.ic_play_arrow)
+                    CollectionPill(playback) { onPlay(songs, null) }
                     ShuffleButton(d.item.id)
                     // El álbum entero a Me gusta o a una lista tuya (o a una nueva con su nombre). Redondo: al lado
                     // de «Reproducir» no cabe otra píldora con texto.
@@ -1200,6 +1216,7 @@ private fun DetailView(
         when {
             detailErr != null -> item(key = "error") { Empty(R.drawable.ic_library_music, "No se pudo abrir", detailErr, Modifier.height(240.dp)) }
             songs == null -> item(key = "loading") { Skeleton(rows = 8) }
+            songs.isEmpty() -> item(key = "empty") { Empty(R.drawable.ic_library_music, "No hay canciones disponibles", "", Modifier.height(240.dp)) }
             else -> itemsIndexed(songs, key = { i, it -> "${it.id}-$i" }) { i, song ->
                 SongRow(song.title, song.subtitle(), song.thumbnail, song.id == currentId, onClick = { onPlay(songs, i) }, onLongClick = { onHold(song) })
             }
@@ -1263,6 +1280,13 @@ private fun ArtistView(
                             modifier = Modifier.padding(horizontal = Space.sm))
                     }
                 }
+                d.allArtistSongs?.let { collection ->
+                    item(key = "allSongs") {
+                        Box(Modifier.padding(horizontal = Space.sm, vertical = Space.xs)) {
+                            Pill("Ver todas", { onOpen(collection) }, filled = false)
+                        }
+                    }
+                }
                 shelves(d.shelves, currentId, play, onHold, onOpen)
             }
         }
@@ -1275,6 +1299,7 @@ private fun LocalView(
     list: LocalPlaylist?,
     currentId: String?,
     onBack: () -> Unit,
+    playback: CollectionPlayback,
     onPlay: (LocalPlaylist, Int?, Boolean) -> Unit,
     onHold: (SongItem) -> Unit,
     onMenu: (LocalPlaylist) -> Unit,
@@ -1316,7 +1341,7 @@ private fun LocalView(
             }
             PageHeader(onBack, art, list.name, sub, onMenu = { onMenu(list) }) {
                 if (list.songs.isNotEmpty()) {
-                    Pill("Reproducir", { onPlay(shown, null, newest) }, icon = R.drawable.ic_play_arrow)
+                    CollectionPill(playback) { onPlay(shown, null, newest) }
                     ShuffleButton(list.id)
                 }
             }
@@ -1339,6 +1364,16 @@ private fun LocalView(
             Suggestions(list, currentId, play, onHoldOther) { onAdd(list, it) }
         }
     }
+}
+
+@Composable
+private fun CollectionPill(playback: CollectionPlayback, onClick: () -> Unit) {
+    val text = when (playback) {
+        CollectionPlayback.Start -> "Reproducir"
+        CollectionPlayback.Resume -> "Reanudar"
+        CollectionPlayback.Pause -> "Pausar"
+    }
+    Pill(text, onClick, icon = if (playback == CollectionPlayback.Pause) R.drawable.ic_pause else R.drawable.ic_play_arrow)
 }
 
 /** «Lo último que añadiste» o «Lo primero que añadiste» arriba; tocar le da la vuelta. */

@@ -43,9 +43,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Explore
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.DpOffset
@@ -70,10 +67,12 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.FilterQuality
 import kotlin.math.roundToInt
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.style.TextOverflow
 import io.github.iaguito22.oto.dj.DjMode
 import io.github.iaguito22.oto.dj.DjReaction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -90,9 +89,13 @@ import io.github.iaguito22.oto.desktop.LocalWindowTooltipEpoch
 import io.github.iaguito22.oto.desktop.WindowWorkTrace
 import io.github.iaguito22.oto.OtoDirs
 import io.github.iaguito22.oto.desktop.playback.*
+import io.github.iaguito22.oto.playback.CollectionPlayback
+import io.github.iaguito22.oto.playback.collectionPlayback
+import io.github.iaguito22.oto.playback.toggleCollection
 import io.github.iaguito22.oto.importer.Importer
 import io.github.iaguito22.oto.ui.menu.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
@@ -117,12 +120,15 @@ private data class LibraryDestination(
     val folder: String?,
 )
 
+private val EmbeddedLibrarySidePadding = 28.dp
+
 /** Biblioteca de escritorio: navegación lateral y un lienzo que cambia entre colección, búsqueda y escucha. */
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuController,importer:Importer,
     account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={},playerVisible:Boolean=false,remoteLink:io.github.iaguito22.oto.remote.LocalLink?=null,following:io.github.iaguito22.oto.playback.NowPlaying?=null,showVolume:Boolean=true,embedded:Boolean=false,onEmbeddedSearch:()->Unit={},onEmbeddedLocation:(Int,String?)->Unit={ _,_ -> },
-    embeddedBack:Int=0,embeddedRecents:Boolean=false,onEmbeddedRecentsDismiss:()->Unit={},onEmbeddedRecentsFocus:(Boolean)->Unit={},onQuit:(()->Unit)?=null) {
+    embeddedBack:Int=0,embeddedRecents:Boolean=false,onEmbeddedRecentsDismiss:()->Unit={},onEmbeddedRecentsFocus:(Boolean)->Unit={},onQuit:(()->Unit)?=null,
+    embeddedGridWidth:Dp?=null) {
     val lists by prefs.playlists.collectAsState(initial=emptyList())
     val liked by prefs.likedList.collectAsState(initial=LocalPlaylist(LIKED_ID,"Me gusta",emptyList()))
     val history by prefs.history.collectAsState(initial=emptyList())
@@ -132,6 +138,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     val entries by downloads.entries.collectAsState()
     val state by menu.state.collectAsState()
     val np by player.state.collectAsState()
+    val source by player.source.collectAsState()
+    val flipped by prefs.sortFlipped.collectAsState(initial=emptySet())
     val coverBeat by prefs.coverBeat.collectAsState(initial=true)
     val pulse=if(embedded) remember { mutableFloatStateOf(0f) } else rememberCoverPulse(np.playing,coverBeat,player::beat)
     val qualityPlaying by player.currentQuality.collectAsState()
@@ -264,6 +272,33 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
         }
     }
     fun openItem(item:YTItem) {if(item is SongItem)player.play(item) else {local=null;menu.onQuery("");menu.open(item)}}
+    var collectionLoad by remember { mutableStateOf<Job?>(null) }
+    fun playRemoteCollection(item: YTItem) {
+        collectionLoad?.cancel()
+        if (player.toggleCollection(item = item)) return
+        val previous = player.source.value
+        val trackId = player.state.value.id
+        collectionLoad = scope.launch {
+            val songs = menu.songsOf(item)
+            if (player.source.value != previous || player.state.value.id != trackId) return@launch
+            if (songs == null) snackbar.showSnackbar("No se pudieron cargar las canciones de ${item.title}")
+            else player.playAll(songs, null, item)
+        }
+    }
+    @Composable fun RemoteCard(item: YTItem, width: Dp) {
+        val subtitle = if (item is SongItem) item.artists.joinToString { it.name } else ""
+        val onPlay = if (item is AlbumItem || item is PlaylistItem) ({ playRemoteCollection(item) }) else null
+        LibraryCard(item.title, subtitle, item.thumbnail, Modifier.width(width),
+            playback = collectionPlayback(source, np.id, np.playing, item = item), onPlay = onPlay) { openItem(item) }
+    }
+    fun localPlayback(id: String) = collectionPlayback(source, np.id, np.playing, localId = id)
+    fun playLocalCollection(list: LocalPlaylist) {
+        collectionLoad?.cancel()
+        if (player.toggleCollection(localId = list.id)) return
+        val reversed = list.id in flipped
+        val shown = if (reversed) list.copy(songs = list.songs.asReversed()) else list
+        player.playLocal(shown, null, (list.id == LIKED_ID) != reversed)
+    }
     fun openArtist(id:String,name:String) {home("Tu música");menu.openArtist(id,name)}
     val songActions=rememberSongActions(player,prefs,onSave,::openArtist)
     /** Toda la carpeta seguida, como una lista (igual que el móvil). */
@@ -420,8 +455,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 val animatedSection = preferencesPage ?: screen.section
                 val showRecents = screen.recents
                 val immersiveArtist = embedded && screen.key.startsWith("remote:") && page?.item is ArtistItem
-                val pagePadding = if (embedded) Modifier.padding(start=if(immersiveArtist)0.dp else 28.dp,
-                    end=if(immersiveArtist)0.dp else 28.dp, top=if(immersiveArtist)0.dp else 22.dp,bottom=12.dp) else Modifier
+                val pagePadding = if (embedded) Modifier.padding(start=if(immersiveArtist)0.dp else EmbeddedLibrarySidePadding,
+                    end=if(immersiveArtist)0.dp else EmbeddedLibrarySidePadding, top=if(immersiveArtist)0.dp else 22.dp,bottom=12.dp) else Modifier
                 Column(Modifier.fillMaxSize().then(pagePadding).focusProperties {
                     onEnter = { if (screen.key != destination.key) cancelFocusChange() }
                 }.focusGroup(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -502,7 +537,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         animatedSection=="Recientes" -> SongList(history,np.id,{i->player.play(history[i].toSong())},onSave,player,prefs,onArtist=::openArtist)
                         animatedSection=="Explorar" && embedded -> CaelestiaHome(state.shelves, lists, liked, history,
                             state.chips.map { it.title }, state.chip, menu::onChip, state.homeError, menu::loadHome,
-                            onLocal = { local = it }, onOpen = ::openItem, hasPersonal = recap?.empty == false || smart.isNotEmpty(), personal = {
+                            onLocal = { local = it }, onOpen = ::openItem, remoteCard = { item, width -> RemoteCard(item, width) },
+                            hasPersonal = recap?.empty == false || smart.isNotEmpty(), personal = {
                                 recap?.takeIf { !it.empty }?.let { r -> RecapCard(r,palette) { recapOpen=true } }
                                 if(smart.isNotEmpty()) SmartRow(smart,palette) { smartOpen=it }
                             })
@@ -512,7 +548,14 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                             if(smart.isNotEmpty() && state.chip==null) item(key="smart") { SmartRow(smart,palette) { smartOpen=it } }
                             if(state.homeError!=null)item{TextButton(onClick=menu::loadHome){Text("Volver a cargar Explorar")}}
                             if(state.shelves==null)item{LinearProgressIndicator(Modifier.fillMaxWidth())}
-                            state.shelves.orEmpty().forEach{shelf->item{Column(verticalArrangement=Arrangement.spacedBy(14.dp)){Text(shelf.title,style=OtoType.section);Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(18.dp)){shelf.items.forEach{item->LibraryCard(item.title,when(item){is SongItem->item.artists.joinToString{it.name};else->""},item.thumbnail,Modifier.width(150.dp)){openItem(item)}}}}}}
+                            state.shelves.orEmpty().forEach { shelf -> item {
+                                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                                    Text(shelf.title, style = OtoType.section)
+                                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                                        shelf.items.forEach { item -> RemoteCard(item, 150.dp) }
+                                    }
+                                }
+                            } }
                         }
                         else -> {
                             // Mismo orden que el móvil: el de tus listas (compartido) y los sitios del DJ y Me gusta.
@@ -561,18 +604,31 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                         onPlay={player.playDj(DjMode.Normal) {scope.launch{snackbar.showSnackbar("No se pudo iniciar el DJ")}}}
                                     ) {djOpen=true}
                                     e.special!=null -> PlaylistContextMenu(listOf(ContextMenuItem(if(LIKED_ID in wanted) "Quitar la descarga" else "Descargar") {scope.launch { prefs.setDownloadList(LIKED_ID,LIKED_ID !in wanted) }})) {
-                                        PlaylistCard("Me gusta",songCount(liked.songs.size),null,modifier,special="liked",accent=palette.primary,lifted=dragging,onPlay=if(liked.songs.isNotEmpty()){{player.playLocal(liked,null,true)}}else null) {local=LIKED_ID}
+                                        val playback = localPlayback(LIKED_ID)
+                                        PlaylistCard("Me gusta",songCount(liked.songs.size),null,modifier,special="liked",accent=palette.primary,lifted=dragging,
+                                            playback=playback,onPlay=if(liked.songs.isNotEmpty() || playback!=CollectionPlayback.Start){{playLocalCollection(liked)}}else null) {local=LIKED_ID}
                                     }
                                     e.folder!=null -> PlaylistContextMenu(folderMenu(e.folder)) {
+                                        val id = FOLDER_PREFIX + e.folder
+                                        val playback = localPlayback(id)
                                         PlaylistCard(e.folder,folderCount(e.lists.size),null,modifier,special="folder",accent=palette.primary,lifted=dragging,folderLists=e.lists,
-                                            onPlay=if(e.lists.any{it.songs.isNotEmpty()}){{playFolder(e.folder,e.lists)}}else null){folder=e.folder}
+                                            playback=playback,onPlay=if(e.lists.any{it.songs.isNotEmpty()} || playback!=CollectionPlayback.Start){{if(!player.toggleCollection(localId=id))playFolder(e.folder,e.lists)}}else null){folder=e.folder}
                                     }
                                     else -> { val list=e.lists.first(); PlaylistContextMenu(listMenu(list)) {
-                                        PlaylistCard(list.name,"${list.songs.size} canciones",list.songs.firstOrNull()?.artwork,modifier,onPlay=if(list.songs.isNotEmpty()){{player.playLocal(list,null,false)}}else null,lifted=dragging,playlist=list){local=list.id}
+                                        val playback = localPlayback(list.id)
+                                        PlaylistCard(list.name,songCount(list.songs.size),list.songs.firstOrNull()?.artwork,modifier,
+                                            onPlay=if(list.songs.isNotEmpty() || playback!=CollectionPlayback.Start){{playLocalCollection(list)}}else null,
+                                            lifted=dragging,playlist=list,playback=playback){local=list.id}
                                     } }
                                 }
                             }
-                            LazyVerticalGrid(columns=GridCells.FixedSize(featuredWidth),state=grid,verticalArrangement=Arrangement.spacedBy(18.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(bottom=28.dp+LocalFloatingDockInset.current)) {
+                            val gridModifier = if (embeddedGridWidth == null) Modifier else Modifier.clipToBounds().layout { measurable, constraints ->
+                                // La ventana recorta la cuadrícula mientras cambia de ancho. Las columnas se calculan una vez para el destino.
+                                val width = (embeddedGridWidth - EmbeddedLibrarySidePadding * 2).roundToPx().coerceAtLeast(1)
+                                val grid = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
+                                layout(constraints.constrainWidth(width), grid.height) { grid.placeRelative(0, 0) }
+                            }
+                            LazyVerticalGrid(columns=GridCells.FixedSize(featuredWidth),modifier=gridModifier,state=grid,verticalArrangement=Arrangement.spacedBy(18.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(bottom=28.dp+LocalFloatingDockInset.current)) {
                                 if(inFolder==null) item(key="featured",span={GridItemSpan(maxLineSpan)}) {
                                     Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
                                         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
@@ -605,8 +661,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                 }
                                 if(gridOrder.isNotEmpty())item(key="lists-title",span={GridItemSpan(maxLineSpan)}) {Text(if(inFolder==null) "Más de tus listas" else "Listas de la carpeta",style=OtoType.section)}
                                 items(gridOrder,key={it.key}) { e ->
-                                    Box(Modifier.fillMaxWidth()) {
-                                        ReorderableItem(reorder,e.key) { dragging ->
+                                    ReorderableItem(reorder,e.key) { dragging ->
+                                        Box(Modifier.fillMaxWidth()) {
                                             ShelvedCard(e,Modifier.width(featuredWidth).longPressDraggableHandle(enabled=e.movable,onDragStopped={saveGrid()}),dragging)
                                         }
                                     }
@@ -842,29 +898,32 @@ private fun LibraryNavigation(name:String,icon:androidx.compose.ui.graphics.vect
 @Composable private fun LibraryArtPlaceholder() {
     Icon(MobileIcons.libraryMusic,null,Modifier.size(24.dp),tint=Color.White.copy(alpha=.15f))
 }
-@Composable private fun LibraryCard(title:String,sub:String,url:String?,modifier:Modifier=Modifier,click:()->Unit) {
+@Composable private fun LibraryCard(title:String,sub:String,url:String?,modifier:Modifier=Modifier,
+    playback:CollectionPlayback=CollectionPlayback.Start,onPlay:(()->Unit)?=null,click:()->Unit) {
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val grow by animateFloatAsState(if(hovered)1f else 0f,Motion.hover(),label="cardHover")
     Column(modifier.cascadeIn().hoverable(interaction).pointerHoverIcon(PointerIcon.Hand).clickable(interactionSource=interaction,indication=null,onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
         val cardShape=RoundedCornerShape(12.dp)
-        LibraryArt(url,Modifier.fillMaxWidth().aspectRatio(1f).graphicsLayer {
-            val s=.97f+.03f*grow;scaleX=s;scaleY=s
-            translationY=-4.dp.toPx()*grow
-            shadowElevation=14.dp.toPx()*grow.coerceIn(0f,1f)
-            shape=cardShape;clip=true
-        })
+        Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
+            LibraryArt(url,Modifier.fillMaxSize().graphicsLayer {
+                val s=.97f+.03f*grow;scaleX=s;scaleY=s
+                translationY=-4.dp.toPx()*grow
+                shadowElevation=14.dp.toPx()*grow.coerceIn(0f,1f)
+                shape=cardShape;clip=true
+            })
+            if (onPlay != null) CollectionCardPlay(title, playback, hovered, onPlay)
+        }
         Text(title,Modifier.fillMaxWidth().padding(start=2.dp),style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis)
         Text(sub,Modifier.fillMaxWidth().padding(start=2.dp),style=OtoType.rowSub,color=Color.White.copy(alpha=.38f),maxLines=1,overflow=TextOverflow.Ellipsis)
     }
 }
 internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $n listas"
 
-@Composable private fun PlaylistCard(title:String,sub:String,url:String?,modifier:Modifier=Modifier,special:String?=null,accent:Color=Color.White,onPlay:(()->Unit)?=null,lifted:Boolean=false,playlist:LocalPlaylist?=null,folderLists:List<LocalPlaylist> = emptyList(),click:()->Unit) {
+@Composable private fun PlaylistCard(title:String,sub:String,url:String?,modifier:Modifier=Modifier,special:String?=null,accent:Color=Color.White,onPlay:(()->Unit)?=null,lifted:Boolean=false,playlist:LocalPlaylist?=null,folderLists:List<LocalPlaylist> = emptyList(),playback:CollectionPlayback=CollectionPlayback.Start,click:()->Unit) {
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val grow by animateFloatAsState(if(hovered)1f else 0f,Motion.hover(),label="playlistHover")
-    val playVisibility by animateFloatAsState(if(hovered && onPlay!=null)1f else 0f,Motion.hover(),label="playlistPlay")
     val elevation by animateFloatAsState(if(lifted)1f else 0f,tween(140),label="dragLift")
     Column(modifier.cascadeIn().graphicsLayer { alpha=1f-.08f*elevation }.hoverable(interaction).pointerHoverIcon(PointerIcon.Hand).clickable(interactionSource=interaction,indication=null,enabled=!lifted,onClick=click),verticalArrangement=Arrangement.spacedBy(6.dp)) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f),contentAlignment=Alignment.Center) {
@@ -893,14 +952,28 @@ internal fun folderCount(n:Int)=if(n==1) "Carpeta · 1 lista" else "Carpeta · $
                     else -> if(playlist != null) PlaylistMosaic(playlist,accent,Modifier.fillMaxSize()) else LibraryArt(url,Modifier.fillMaxSize())
                 }
             }
-            if(onPlay!=null) Box(Modifier.align(Alignment.BottomEnd).padding(10.dp).graphicsLayer { alpha=playVisibility;scaleX=.8f+.2f*playVisibility;scaleY=.8f+.2f*playVisibility }.size(38.dp).background(Color.White.copy(alpha=.94f),CircleShape).pointerHoverIcon(PointerIcon.Hand).clickable(interactionSource=remember { MutableInteractionSource() },indication=null,enabled=hovered,onClick=onPlay),contentAlignment=Alignment.Center) {Canvas(Modifier.size(18.dp).semantics { contentDescription="Reproducir $title" }) {
-                val path=Path().apply { moveTo(size.width*.32f,size.height*.16f);lineTo(size.width*.82f,size.height*.5f);lineTo(size.width*.32f,size.height*.84f);close() }
-                drawPath(path,Color(0xFF171A18),style=Stroke(1.8.dp.toPx(),cap=StrokeCap.Round,join=StrokeJoin.Round))
-            }}
+            if(onPlay!=null && !lifted) CollectionCardPlay(title, playback, hovered, onPlay)
         }
         Text(title,style=OtoType.rowTitle,maxLines=1,overflow=TextOverflow.Ellipsis)
         Text(sub,style=OtoType.rowSub,color=Color.White.copy(alpha=.42f),maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)
     }
+}
+
+@Composable
+private fun BoxScope.CollectionCardPlay(title: String, playback: CollectionPlayback, hovered: Boolean, onPlay: () -> Unit) {
+    val playing = playback == CollectionPlayback.Pause
+    val visible = hovered || playing
+    val visibility by animateFloatAsState(if (visible) 1f else 0f, Motion.hover(), label = "botónColección")
+    if (visible || visibility > 0f) Box(
+        Modifier.align(Alignment.BottomEnd).padding(10.dp).size(38.dp).graphicsLayer {
+            alpha = visibility
+            scaleX = .8f + .2f * visibility
+            scaleY = scaleX
+        }.clip(CircleShape).background(Color.White.copy(alpha = .94f)).pointerHoverIcon(PointerIcon.Hand)
+            .clickable(remember { MutableInteractionSource() }, null, enabled = visible, onClickLabel = playback.label(title),
+                role = androidx.compose.ui.semantics.Role.Button, onClick = onPlay),
+        contentAlignment = Alignment.Center,
+    ) { CollectionPlayIcon(playing, 23.dp, Color(0xFF171A18)) }
 }
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable internal fun PlaylistContextMenu(items:List<ContextMenuItem>,content:@Composable ()->Unit) {
@@ -990,7 +1063,8 @@ private data class HomeShortcut(val key: String, val title: String, val artwork:
 @Composable
 private fun CaelestiaHome(shelves: List<Shelf>?, lists: List<LocalPlaylist>, liked: LocalPlaylist, history: List<Heard>,
     moods: List<String>, mood: String?, onMood: (String) -> Unit, error: String?, onRetry: () -> Unit,
-    onLocal: (String) -> Unit, onOpen: (YTItem) -> Unit, hasPersonal: Boolean, personal: @Composable () -> Unit) {
+    onLocal: (String) -> Unit, onOpen: (YTItem) -> Unit, remoteCard: @Composable (YTItem, Dp) -> Unit,
+    hasPersonal: Boolean, personal: @Composable () -> Unit) {
     var filter by remember { mutableIntStateOf(0) }
     var moodMenu by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -1052,9 +1126,9 @@ private fun CaelestiaHome(shelves: List<Shelf>?, lists: List<LocalPlaylist>, lik
                     TextButton(onClick = { expanded = if(all) expanded - key else expanded + key }) { Text(if(all) "Mostrar menos" else "Mostrar todos", style = OtoType.rowSub, color = Color.White.copy(.65f)) }
                 }
                 if(all) FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    shelf.items.forEach { item -> LibraryCard(item.title, if(item is SongItem)item.artists.joinToString { it.name } else "", item.thumbnail, Modifier.width(144.dp)) { onOpen(item) } }
+                    shelf.items.forEach { item -> remoteCard(item, 144.dp) }
                 } else Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    shelf.items.take(8).forEach { item -> LibraryCard(item.title, if(item is SongItem)item.artists.joinToString { it.name } else "", item.thumbnail, Modifier.width(144.dp)) { onOpen(item) } }
+                    shelf.items.take(8).forEach { item -> remoteCard(item, 144.dp) }
                 }
             }
         } }
