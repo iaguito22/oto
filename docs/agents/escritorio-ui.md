@@ -22,6 +22,8 @@
 
 ## Reproductor, letra y volumen
 
+- Con una ventana de Oto enfocada, Espacio pausa o reanuda. Escribir una letra o un número sin Ctrl, Alt ni Windows abre y enfoca el buscador con ese carácter. Los campos de texto conservan su escritura normal. Escape sale de la búsqueda.
+
 - **Letra:** `LyricsStore` (memoria `MemCache(64)` + disco, `peek`, `get`, `romanized`). `DesktopPlayerConnection.fetchLyrics` publica al instante lo que haya en caché (`peek`) y `prefetchNextLyrics` precarga la de la siguiente canción. En `MobileLyrics.kt`, `SungLine` pinta `active`/`preview`/`lit`; la línea siguiente se previsualiza completa y el desenfoque es 0 dp (distancia 0–1), 1,2 dp (2) o 2 dp (resto). Fluidez sin medir.
 - **Volumen:** la ganancia es `volumen^1,5` (`volumeGain()` en `DesktopPlayerConnection.kt`); la ruta Windows escala muestras PCM de FFmpeg en `DesktopAudioEngine`. Aprox.: 50 % ≈ −9 dB, 10 % ≈ −30 dB, 1 % ≈ −60 dB, 100 % sin cambio. Lineal sonaba demasiado alto abajo y el cuadrado dejaba casi mudo por debajo del 10 %. Sin commit y sin confirmar por Iago; alternativa: exponente 1,25.
 - **Búsqueda:** al abrir el buscador se muestra el historial (`RecentSearches` en `SmartSpace.kt`). Pulsar una fila le quitaba el foco al campo y cerraba la lista antes del clic; `LibrarySpace.kt` marca `pressingRecents`/`searchHasFocus` y retrasa el cierre. Iago no ha confirmado que ya navegue; si falla, preguntar por el tipo de entrada y probar en la app real.

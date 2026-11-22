@@ -32,7 +32,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.window.WindowDraggableArea
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -458,15 +457,25 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
     }
     fun openSearch() {
         restoreWorkspaceFocus = false
-        expandMini()
         lyricsOpen = false
         searchRequest = true
+    }
+    fun typeToSearch(character: Char) {
+        val prefix = if (searchRequest) menu.state.value.query else ""
+        devicesOpen = false
+        saving = null
+        recentsOpen = false
+        menu.onQuery(prefix + character)
+        openSearch()
     }
     fun shortcuts(e: KeyEvent): Boolean {
         if (e.type != KeyEventType.KeyDown) return false
         if (devicesOpen || saving != null) return e.key == Key.Escape && closePanel()
         return when {
-            e.key == Key.Escape -> closePanel()
+            e.key == Key.Escape -> closePanel() || if (menu.state.value.query.isNotBlank()) {
+                menu.onQuery("")
+                true
+            } else false
             e.isAltPressed && e.key == Key.DirectionLeft -> { goBack(); true }
             e.isCtrlPressed && e.key == Key.L -> { toggleLyrics(); true }
             e.isCtrlPressed && (e.key == Key.K || e.key == Key.F) -> { openSearch(); true }
@@ -503,6 +512,7 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
     Window(onCloseRequest = { if (shouldQuitWhenNoTray(java.awt.SystemTray.isSupported(), supportsDesktopShortcut, shortcutIssue)) quit() else shown = false },
         state = state, visible = shown, title = "Oto", icon = painterResource("oto-icon.png"),
         undecorated = customFrame, onKeyEvent = ::shortcuts) {
+        val shortcutCapture = rememberDesktopTypingShortcuts(window, DesktopTypingShortcuts(::playPause, ::typeToSearch))
         var nativeFrame by remember(window) { mutableStateOf(false) }
         val caption = remember(window) { SingleCaptionZones() }
         SideEffect {
@@ -592,13 +602,16 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                 miniFromMaximized = false
             }
         }
-        LaunchedEffect(mini, searchRequest) {
-            if (searchRequest && !mini) {
-                withFrameNanos { }
-                searchFocus.requestFocus()
-                recentsOpen = menu.state.value.query.isBlank()
-                searchRequest = false
+        LaunchedEffect(mini, miniTransition, searchRequest) {
+            if (!searchRequest || miniTransition) return@LaunchedEffect
+            if (mini) {
+                expandMini()
+                return@LaunchedEffect
             }
+            withFrameNanos { }
+            searchFocus.requestFocus()
+            recentsOpen = menu.state.value.query.isBlank()
+            searchRequest = false
         }
         LaunchedEffect(window) {
             snapshotFlow { Triple(state.position, state.size, state.placement to (state.isMinimized || miniReturn != null || miniTransition)) }
@@ -659,6 +672,7 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
             val windowFocused = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
             LaunchedEffect(windowFocused) { if (!windowFocused) hoverEpoch++ }
             CompositionLocalProvider(LocalContentColor provides Color(0xFFEDEDED), LocalHoverEpoch provides hoverEpoch, LocalKeyboardNav provides keyboardNav,
+                LocalDesktopShortcutCapture provides shortcutCapture,
                 LocalDensity provides Density(baseDensity.density * SingleScale, baseDensity.fontScale)) {
                 Box(Modifier.fillMaxSize().drawWithContent {
                     val fade = miniFade.value
@@ -760,7 +774,7 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                                 val searchWidth = (totalWidth * .38f).coerceIn(220.dp, 520.dp)
                                 Pill(Modifier.width(searchWidth)) {
                                     TopButton(MobileIcons.search, "Buscar o ver recientes", onClick = ::openSearch)
-                                    BasicTextField(menuState.query, {
+                                    DesktopSearchField(menuState.query, {
                                         lyricsOpen = false
                                         recentsOpen = false
                                         menu.onQuery(it)
@@ -772,12 +786,14 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                                                 if (it.isFocused && menuState.query.isBlank()) recentsOpen = true
                                             }
                                             .onPreviewKeyEvent { e ->
-                                                if (e.type == KeyEventType.KeyDown && e.key == Key.Escape && menuState.query.isNotBlank()) {
+                                                if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
                                                     menu.onQuery("")
+                                                    recentsOpen = false
+                                                    focusManager.clearFocus()
                                                     true
                                                 } else false
                                             },
-                                        textStyle = OtoType.body.copy(color = Color.White), cursorBrush = SolidColor(Color.White), singleLine = true,
+                                        textStyle = OtoType.body.copy(color = Color.White), cursorBrush = SolidColor(Color.White),
                                         decorationBox = { field ->
                                             Box {
                                                 if (menuState.query.isBlank()) Text("¿Qué quieres escuchar?", style = OtoType.body, color = Color.White.copy(.55f), maxLines = 1, overflow = TextOverflow.Ellipsis)
