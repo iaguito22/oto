@@ -35,7 +35,7 @@ class MobileConnection(private val app: OtoApp) {
                 .put("volume",audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()/audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)).put("index", queue.indexOfFirst { it.index == s.index }).put("shuffle", player.localShuffleEnabled()).put("loop", player.localLoopMode.value != LoopMode.Off)
                 .put("queue", queueJson(queue))
                 .put("radioSeed", player.localRadioSeed())
-                .put("sourceKind", player.localSource.value?.kind).put("sourceTitle", player.localSource.value?.title)
+                .put("sourceKind", player.localSource.value?.kind).put("sourceTitle", player.localSource.value?.title).put("sourceLocal", player.localSource.value?.local)
         }
         override suspend fun like() { val s = player.localState.value; s.id?.let { app.prefs.toggleLike(Heard(it,s.title,s.artist,s.artwork,s.artists.firstOrNull()?.second)) } }
         override fun toggle() = player.here { player.toggle() }

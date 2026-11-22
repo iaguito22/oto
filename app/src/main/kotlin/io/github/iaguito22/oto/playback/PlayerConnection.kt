@@ -254,6 +254,8 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
             .put("id", p.currentMediaItem?.mediaId).put("index", current).put("position", p.currentPosition.coerceAtLeast(0))
             .put("playing", playing).put("shuffle", localShuffleEnabled()).put("loop", _loopMode.value != LoopMode.Off)
             .put("radioSeed", radioSeed)
+            // De dónde viene, para que el ordenador lo siga mostrando.
+            .put("sourceKind", _source.value?.kind).put("sourceTitle", _source.value?.title).put("sourceLocal", _source.value?.local)
             .put("queue", JSONArray(order.map { i ->
                 val item = p.getMediaItemAt(i)
                 val m = item.mediaMetadata

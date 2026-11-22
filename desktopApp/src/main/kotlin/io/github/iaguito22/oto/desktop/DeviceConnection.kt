@@ -40,7 +40,7 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
                 .put("volume",player.volume.value).put("index", s.index).put("shuffle", player.shuffle.value).put("loop", player.loop.value)
                 .put("queue", queueJson(player.queue.value))
                 .put("radioSeed", player.radioSeed())
-                .put("sourceKind", player.source.value?.kind).put("sourceTitle", player.source.value?.title)
+                .put("sourceKind", player.source.value?.kind).put("sourceTitle", player.source.value?.title).put("sourceLocal", player.source.value?.local)
         }
         override fun dj() = player.playDj {}
         override suspend fun like() { val s = player.state.value; s.id?.let { prefs.toggleLike(Heard(it,s.title,s.artist,s.artwork,s.artists.firstOrNull()?.second)) } }

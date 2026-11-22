@@ -19,7 +19,8 @@ fun JSONObject.transferredRadioSeed(): String? =
 fun JSONObject.transferredSource(): io.github.iaguito22.oto.playback.Source? {
     fun text(key: String) = optString(key).takeUnless { it.isBlank() || it == "null" }
     val title = text("sourceTitle") ?: return null
-    return io.github.iaguito22.oto.playback.Source(text("sourceKind") ?: "Lista", title)
+    // Las listas se sincronizan con el mismo id: con él, el origen se puede abrir también aquí.
+    return io.github.iaguito22.oto.playback.Source(text("sourceKind") ?: "Lista", title, local = text("sourceLocal"))
 }
 
 interface LinkPlayer {
