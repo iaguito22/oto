@@ -348,6 +348,11 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
         player.playLocal(shown, null, (list.id == LIKED_ID) != (list.id in flipped))
     }
     val playingSource = if (mirrored != null) mirrored?.source else source
+    // Lo que suena en el móvil se dice siempre: «En el móvil · rock», o solo dónde suena si no se sabe de dónde viene.
+    val sourceLabel = playingSource?.let { if (it.kind == "Radio") "Radio de ${it.title}" else it.title }.let { label ->
+        val phone = mirrored ?: return@let label
+        label?.let { "En el móvil · $it" } ?: if (phone.now.playing) "Sonando en el móvil" else "En pausa en el móvil"
+    }
     val canOpenSource = playingSource?.let { it.local != null || it.item != null || it.kind in listOf("DJ", "Radio") } == true
     fun showLibrary() {
         expandMini()
@@ -921,7 +926,7 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                                         }
                                     }, end = { draggingPanel = false; saveRight() })
                                 NowPlayingPanel(Modifier.width(animatedRight).fillMaxHeight(), animatedRight > 180.dp, accent,
-                                    now, playingSource?.let { if (it.kind == "Radio") "Radio de ${it.title}" else it.title }, drawing && !mini && localNow.playing && mirrored == null, coverBeat, player,
+                                    now, sourceLabel, drawing && !mini && localNow.playing && mirrored == null, coverBeat, player,
                                     qualityLabel.takeIf { mirrored == null }, mixingNow && mirrored == null, nextMix?.style,
                                     onSource = if (canOpenSource) ::openSource else null,
                                     onTrack = ::openTrack, onArtist = ::openArtist,

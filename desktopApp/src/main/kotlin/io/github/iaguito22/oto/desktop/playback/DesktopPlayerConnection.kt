@@ -2102,6 +2102,7 @@ class DesktopPlayerConnection(
         shuffled: Boolean,
         manualIndices: Set<Int> = emptySet(),
         radioSeed: String? = null,
+        source: Source? = null,
     ) = djIndexGate.locked {
         engine.pause()
         _shuffle.value = shuffled
@@ -2116,6 +2117,7 @@ class DesktopPlayerConnection(
             if (i in manualIndices) song.copy().also { manualQueueEntries += it } else song
         }.toMutableList()
         syncQueueFlow()
+        _source.value = source
         startCurrentTrack(false, positionMs)
         topUpRadio()
     }

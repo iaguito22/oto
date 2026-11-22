@@ -27,6 +27,12 @@ class DesktopQueueTest {
     }
     private fun song(id: String) = Heard(id, id, "Prueba", null).toSong()
 
+    @Test fun transferKeepsWhereTheMusicCameFrom() = withPlayer { player ->
+        val from = io.github.iaguito22.oto.playback.Source("Tu lista", "rock")
+        player.prepareTransfer(listOf(song("a"), song("b")), 0, 0, false, source = from)
+        assertEquals(from, player.source.value)
+    }
+
     @Test fun playNextMovesExistingSongWithoutDuplicatingIt() = withPlayer { player ->
         player.prepareTransfer(listOf(song("a"), song("b"), song("c")), 0, 0, false)
         player.playNext(song("c"))

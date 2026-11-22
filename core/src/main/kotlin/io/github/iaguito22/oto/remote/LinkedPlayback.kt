@@ -15,6 +15,13 @@ fun JSONArray.manualQueueIndices(): Set<Int> = buildSet {
 fun JSONObject.transferredRadioSeed(): String? =
     optString("radioSeed").takeUnless { it.isBlank() || it == "null" }
 
+/** De dónde venía la música en el otro dispositivo («Tu lista · rock»), para seguir mostrándolo aquí. */
+fun JSONObject.transferredSource(): io.github.iaguito22.oto.playback.Source? {
+    fun text(key: String) = optString(key).takeUnless { it.isBlank() || it == "null" }
+    val title = text("sourceTitle") ?: return null
+    return io.github.iaguito22.oto.playback.Source(text("sourceKind") ?: "Lista", title)
+}
+
 interface LinkPlayer {
     fun snapshot(): JSONObject
     fun toggle()

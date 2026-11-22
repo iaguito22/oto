@@ -62,7 +62,7 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
         override fun replace(state: JSONObject) {
             val a = state.getJSONArray("queue")
             val songs = (0 until a.length()).map { i -> a.getJSONObject(i).let { Heard(it.getString("id"), it.getString("title"), it.getString("artist"), it.optString("artwork").takeUnless { s -> s.isBlank() || s == "null" }, it.optString("artistId").takeUnless { s -> s.isBlank() || s == "null" }).toSong() } }
-            player.prepareTransfer(songs, state.optInt("index").coerceIn(songs.indices), state.optLong("position"), state.optBoolean("shuffle"), a.manualQueueIndices(), state.transferredRadioSeed())
+            player.prepareTransfer(songs, state.optInt("index").coerceIn(songs.indices), state.optLong("position"), state.optBoolean("shuffle"), a.manualQueueIndices(), state.transferredRadioSeed(), state.transferredSource())
         }
     }
     private val syncIssueMutable = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)

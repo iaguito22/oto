@@ -375,6 +375,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         shuffled: Boolean,
         manualIndices: Set<Int> = emptySet(),
         radioSeed: String? = null,
+        source: Source? = null,
     ) = withController { c ->
         shuffling?.cancel(); currentListId = null
         _shuffle.value = shuffled
@@ -390,6 +391,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         c.playWhenReady = false
         c.setMediaItems(items, index.coerceIn(items.indices), positionMs)
         c.prepare()
+        _source.value = source
     }
 
     /** Una lista tuya, tal y como se ve ([newestFirst]: lo último que entró, arriba). */
