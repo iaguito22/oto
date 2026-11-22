@@ -17,6 +17,9 @@ import com.metrolist.innertube.models.AlbumItem
 import com.metrolist.innertube.models.PlaylistItem
 import io.github.iaguito22.oto.*
 import io.github.iaguito22.oto.desktop.playback.DesktopPlayerConnection
+import io.github.iaguito22.oto.playback.CollectionPlayback
+import io.github.iaguito22.oto.playback.collectionPlayback
+import io.github.iaguito22.oto.playback.toggleCollection
 import io.github.iaguito22.oto.ui.menu.Page
 import kotlinx.coroutines.launch
 import java.awt.Toolkit
@@ -27,6 +30,9 @@ internal fun AlbumSpace(page:Page.Remote,currentId:String?,player:DesktopPlayerC
     val album=page.item
     val songs=page.songs
     val shuffle=rememberListShuffle(player,album.id)
+    val source by player.source.collectAsState()
+    val now by player.state.collectAsState()
+    val playback=collectionPlayback(source,now.id,now.playing,item=album)
     var saving by remember(album.id){mutableStateOf(false)}
     val downloaded by prefs.downloadSongs.collectAsState(initial=emptyList())
     val scope=rememberCoroutineScope()
@@ -49,7 +55,15 @@ internal fun AlbumSpace(page:Page.Remote,currentId:String?,player:DesktopPlayerC
                     }
                     if(sub.isNotBlank())Text(sub,style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),maxLines=2,overflow=TextOverflow.Ellipsis)
                     if(!songs.isNullOrEmpty())Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                        Button(onClick={play(null)},colors=ButtonDefaults.buttonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))){Text("Reproducir",fontWeight=FontWeight.SemiBold)}
+                        Button(onClick={if(!player.toggleCollection(item=album))play(null)},colors=ButtonDefaults.buttonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))) {
+                            CollectionPlayIcon(playback==CollectionPlayback.Pause,20.dp,LocalContentColor.current)
+                            Spacer(Modifier.width(6.dp))
+                            Text(when(playback) {
+                                CollectionPlayback.Pause -> "Pausar"
+                                CollectionPlayback.Resume -> "Reanudar"
+                                CollectionPlayback.Start -> "Reproducir"
+                            },fontWeight=FontWeight.SemiBold)
+                        }
                         HoverAction(MobileIcons.shuffle,if(shuffle)"Desactivar aleatorio" else "Activar aleatorio",onClick={player.setShuffle(!shuffle,album.id)},tint=if(shuffle)palette.primary else Color.White.copy(alpha=.6f))
                         HoverAction(MobileIcons.add,"Guardar canciones",onClick={saving=true})
                     }

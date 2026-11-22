@@ -52,6 +52,8 @@ data class ArtistPage(
                     fromMusicResponsiveListItemRenderer(it)
                 }?.ifEmpty { null } ?: return null,
                 moreEndpoint = renderer.title?.runs?.firstOrNull()?.navigationEndpoint?.browseEndpoint
+                    ?: renderer.bottomEndpoint?.browseEndpoint
+                    ?: renderer.moreContentButton?.buttonRenderer?.navigationEndpoint?.browseEndpoint
             )
         }
 

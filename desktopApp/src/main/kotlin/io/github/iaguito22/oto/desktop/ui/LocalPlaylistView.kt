@@ -18,13 +18,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.PlayArrow
 import com.metrolist.innertube.models.SongItem
 import io.github.iaguito22.oto.*
 import io.github.iaguito22.oto.desktop.playback.*
 import io.github.iaguito22.oto.importer.songKey
 import io.github.iaguito22.oto.playback.Radio
+import io.github.iaguito22.oto.playback.CollectionPlayback
+import io.github.iaguito22.oto.playback.collectionPlayback
+import io.github.iaguito22.oto.playback.toggleCollection
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.*
 import kotlin.random.Random
 
@@ -40,6 +43,9 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
     val downloadedSongs by prefs.downloadSongs.collectAsState(initial=emptyList())
     val wantedSongs=downloadedSongs.mapTo(HashSet()){it.id}
     val shuffle=rememberListShuffle(player,list.id)
+    val source by player.source.collectAsState()
+    val now by player.state.collectAsState()
+    val playback=collectionPlayback(source,now.id,now.playing,localId=list.id)
     var menuOpen by remember(list.id){mutableStateOf(false)}
     val shown=remember(list,flipped){ if(list.id in flipped) list.copy(songs=list.songs.reversed()) else list }
     val newest=(list.id==LIKED_ID) != (list.id in flipped)
@@ -52,7 +58,11 @@ internal fun LocalPlaylistView(list:LocalPlaylist,currentId:String?,player:Deskt
     val wideHeader = immersive && maxWidth >= 600.dp
     val transport: @Composable () -> Unit = {
             Row(Modifier.fillMaxWidth().padding(vertical=4.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-                FilledIconButton(onClick={play(null)},modifier=Modifier.size(if(compactHeader)40.dp else 48.dp),colors=IconButtonDefaults.filledIconButtonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))) { Icon(Icons.Rounded.PlayArrow,"Reproducir lista",Modifier.size(28.dp)) }
+                FilledIconButton(onClick={if(!player.toggleCollection(localId=list.id))play(null)},
+                    modifier=Modifier.size(if(compactHeader)40.dp else 48.dp).semantics { contentDescription=playback.label(list.name) },
+                    colors=IconButtonDefaults.filledIconButtonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))) {
+                    CollectionPlayIcon(playback==CollectionPlayback.Pause,28.dp,LocalContentColor.current)
+                }
                 HoverAction(MobileIcons.shuffle,if(shuffle) "Desactivar aleatorio" else "Activar aleatorio",onClick={player.setShuffle(!shuffle,list.id)},tint=if(shuffle)palette.primary else Color.White.copy(.6f))
                 Spacer(Modifier.weight(1f))
                 if(list.songs.size>1) TextButton(onClick={scope.launch { prefs.flipSort(list.id) }},contentPadding=PaddingValues(horizontal=6.dp)) {

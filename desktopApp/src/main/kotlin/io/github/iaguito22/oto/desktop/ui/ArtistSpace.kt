@@ -79,6 +79,13 @@ internal fun ArtistSpace(page:Page.Remote,currentId:String?,player:DesktopPlayer
                         }
                     }
                 }
+                page.allArtistSongs?.let { collection ->
+                    item(key="allSongs") {
+                        TextButton(onClick={onOpen(collection)},modifier=Modifier.padding(start=if(immersive)16.dp else 0.dp)) {
+                            Text("Ver todas")
+                        }
+                    }
+                }
                 page.shelves.forEachIndexed { index,shelf -> item(key="shelf:$index") {
                     Column(Modifier.fillMaxWidth().padding(start=if(immersive)24.dp else 0.dp,end=if(immersive)24.dp else 0.dp,top=20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
                         Text(shelf.title,style=OtoType.section)

@@ -99,6 +99,9 @@ import io.github.iaguito22.oto.*
 import io.github.iaguito22.oto.account.*
 import io.github.iaguito22.oto.desktop.playback.*
 import io.github.iaguito22.oto.desktop.ui.*
+import io.github.iaguito22.oto.playback.CollectionPlayback
+import io.github.iaguito22.oto.playback.collectionPlayback
+import io.github.iaguito22.oto.playback.toggleCollection
 import io.github.iaguito22.oto.importer.Importer
 import io.github.iaguito22.oto.lyrics.LyricsQuery
 import io.github.iaguito22.oto.lyrics.LyricsStore
@@ -336,6 +339,7 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
         jump = LibraryJump(jump.version + 1, local = id)
     }
     fun playList(list: LocalPlaylist) {
+        if (player.toggleCollection(localId = list.id)) return
         if (list.songs.isEmpty()) return
         // Igual que el botón de la vista de lista: con el orden invertido se reproduce la lista invertida.
         val shown = if (list.id in flipped) list.copy(songs = list.songs.reversed()) else list
@@ -724,8 +728,8 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                         val resizing = lastTotal.value != totalWidth
                         SideEffect { lastTotal.value = totalWidth }
                         val panelSpec: androidx.compose.animation.core.AnimationSpec<Dp> = if (resizing || draggingPanel && !foldChanged) androidx.compose.animation.core.snap() else spring(.85f, 420f)
-                        // El resorte puede rebotar por debajo de 0 al plegar: nunca anchos negativos.
-                        val animatedLib = animateDpAsState(libEff, panelSpec, label = "biblioteca").value.coerceAtLeast(0.dp)
+                        // El rebote no debe estrechar las carátulas de la barra plegada.
+                        val animatedLib = animateDpAsState(libEff, panelSpec, label = "biblioteca").value.coerceAtLeast(RailNarrow)
                         val animatedRight = animateDpAsState(rightEff, panelSpec, label = "ahoraSuena").value.coerceAtLeast(0.dp)
                         // El dock flota encima: dentro del panel central si cabe entero; si no, a lo ancho de la ventana.
                         // El dock va centrado sobre el panel central con su ancho. Si no cabe entero, ocupa solo
@@ -818,8 +822,9 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                             // En el mini la vista central sigue compuesta (altura cero y sin foco): al volver está como se dejó.
                             Row((if (mini) Modifier.height(0.dp) else Modifier.weight(1f)).fillMaxWidth().clipToBounds()
                                 .focusProperties { onEnter = { if (mini) cancelFocusChange() } }.focusGroup()) {
-                                SingleLibraryRail(Modifier.width(animatedLib), animatedLib > 180.dp, accent, activeSection, activeLocal,
+                                SingleLibraryRail(animatedLib, accent, activeSection, activeLocal,
                                     likedList, playlists, recentLists, djActive, ::goSection, ::openList, ::playList,
+                                    playback = { collectionPlayback(source, localNow.id, localNow.playing, localId = it) },
                                     onToggle = {
                                         libraryWide = !libShown
                                         if (libraryWide && rightShown && !bothFit && sideRoom >= 240.dp + RailNarrow) {
@@ -856,6 +861,7 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                                                 },
                                                 playerVisible = true, floatingPanel = false, onSource = ::openSource,
                                                 remoteLink = devices.link, following = mirrored?.now, showVolume = false, embedded = true,
+                                                embeddedGridWidth = totalWidth - libEff - rightEff - Gap * 2,
                                                 onEmbeddedSearch = ::openSearch,
                                                 onEmbeddedLocation = { section, id -> activeSection = section; activeLocal = id },
                                                 embeddedBack = backRequest, embeddedRecents = recentsOpen,
@@ -1006,15 +1012,18 @@ private fun PanelHandle(accent: Color, label: String, start: () -> Dp, reversed:
 }
 
 @Composable
-private fun SingleLibraryRail(modifier: Modifier, wide: Boolean, accent: Color, activeSection: Int, activeLocal: String?,
+private fun SingleLibraryRail(width: Dp, accent: Color, activeSection: Int, activeLocal: String?,
     likedList: LocalPlaylist, playlists: List<LocalPlaylist>, recentLists: List<String>, djActive: Boolean,
-    onSection: (Int) -> Unit, onList: (String) -> Unit, onPlay: (LocalPlaylist) -> Unit, onToggle: () -> Unit) {
+    onSection: (Int) -> Unit, onList: (String) -> Unit, onPlay: (LocalPlaylist) -> Unit,
+    playback: (String) -> CollectionPlayback, onToggle: () -> Unit) {
     // Primero las listas abiertas o reproducidas hace poco; el resto, en su orden.
     val ordered = remember(playlists, recentLists) {
         val ranks = recentLists.withIndex().associate { it.value to it.index }
         playlists.sortedBy { ranks[it.id] ?: Int.MAX_VALUE }
     }
-    Column(modifier.fillMaxHeight().island()) {
+    val labelWidth = 180.dp
+    val wide = width > labelWidth
+    Column(Modifier.width(width).fillMaxHeight().island()) {
         Row(Modifier.fillMaxWidth().height(64.dp).padding(start = if (wide) 14.dp else 0.dp, end = if (wide) 12.dp else 0.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = if (wide) Arrangement.spacedBy(2.dp) else Arrangement.Center) {
             if (wide) {
@@ -1031,16 +1040,34 @@ private fun SingleLibraryRail(modifier: Modifier, wide: Boolean, accent: Color, 
                 TopButton(Icons.Rounded.FirstPage, "Plegar la biblioteca", onClick = onToggle)
             } else TopButton(Icons.Rounded.LastPage, "Desplegar la biblioteca", onClick = onToggle)
         }
-        val railPadding = if (wide) 12.dp else 8.dp
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(start = railPadding, end = railPadding, bottom = 12.dp + FloatingScrollEnd),
-            verticalArrangement = Arrangement.spacedBy(if (wide) 2.dp else 4.dp)) {
-            if (!wide) item { LibraryRow(false, null, MobileIcons.libraryMusic, "Tu música", "", activeSection == 0 && activeLocal == null, accent, null) { onSection(0) } }
-            item { LibraryRow(wide, null, Icons.Rounded.GraphicEq, "DJ", if (djActive) "Pinchando" else "Modos y géneros", activeSection == 6, accent, null, special = true) { onSection(6) } }
-            item { LibraryRow(wide, null, Icons.Rounded.Favorite, "Me gusta", "Lista · ${songCount(likedList.songs.size)}", activeLocal == LIKED_ID, accent,
-                likedList.takeIf { it.songs.isNotEmpty() }?.let { { onPlay(it) } }, special = true) { onList(LIKED_ID) } }
+        val railPadding = 8.dp + 6.dp * ((width - RailNarrow) / (labelWidth - RailNarrow)).coerceIn(0f, 1f)
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(start = railPadding, end = 8.dp, bottom = 12.dp + FloatingScrollEnd),
+            verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            item(key = "entrada:tu-musica") {
+                // Conserva el primer elemento de la lista y anima su altura al plegar.
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = !wide,
+                    enter = fadeIn(tween(140)) + androidx.compose.animation.expandVertically(spring(.85f, 420f), expandFrom = Alignment.Top),
+                    exit = fadeOut(tween(100)) + androidx.compose.animation.shrinkVertically(spring(.85f, 420f), shrinkTowards = Alignment.Top),
+                ) {
+                    LibraryRow(false, null, MobileIcons.libraryMusic, "Tu música", "", activeSection == 0 && activeLocal == null, accent, null) { onSection(0) }
+                }
+            }
+            item(key = "entrada:dj") {
+                LibraryRow(wide, null, Icons.Rounded.GraphicEq, "DJ", if (djActive) "Pinchando" else "Modos y géneros", activeSection == 6, accent, null,
+                    special = true) { onSection(6) }
+            }
+            item(key = "entrada:me-gusta") {
+                val likedPlayback = playback(LIKED_ID)
+                LibraryRow(wide, null, Icons.Rounded.Favorite, "Me gusta", "Lista · ${songCount(likedList.songs.size)}", activeLocal == LIKED_ID, accent,
+                    if (likedList.songs.isNotEmpty() || likedPlayback != CollectionPlayback.Start) ({ onPlay(likedList) }) else null,
+                    special = true, playback = likedPlayback) { onList(LIKED_ID) }
+            }
             items(ordered, key = { it.id }) { l ->
+                val listPlayback = playback(l.id)
                 LibraryRow(wide, null, MobileIcons.libraryMusic, l.name, "Lista · ${songCount(l.songs.size)}", activeLocal == l.id, accent,
-                    if (l.songs.isNotEmpty()) ({ onPlay(l) }) else null, mosaic = l.takeIf { it.songs.isNotEmpty() }) { onList(l.id) }
+                    if (l.songs.isNotEmpty() || listPlayback != CollectionPlayback.Start) ({ onPlay(l) }) else null,
+                    mosaic = l.takeIf { it.songs.isNotEmpty() }, playback = listPlayback) { onList(l.id) }
             }
         }
     }
@@ -1124,7 +1151,8 @@ private fun TopButton(icon: ImageVector, label: String, enabled: Boolean = true,
 
 @Composable
 private fun LibraryRow(wide: Boolean, artwork: String?, fallback: ImageVector, title: String, subtitle: String, active: Boolean, accent: Color,
-    onPlay: (() -> Unit)?, special: Boolean = false, mosaic: LocalPlaylist? = null, onClick: () -> Unit) {
+    onPlay: (() -> Unit)?, special: Boolean = false, mosaic: LocalPlaylist? = null,
+    playback: CollectionPlayback = CollectionPlayback.Start, onClick: () -> Unit) {
     val source = remember(LocalHoverEpoch.current) { MutableInteractionSource() }
     val hovered by source.collectIsHoveredAsState()
     val focused by source.collectIsFocusedAsState()
@@ -1132,27 +1160,28 @@ private fun LibraryRow(wide: Boolean, artwork: String?, fallback: ImageVector, t
     val bg by animateColorAsState(if (active) Color.White.copy(.11f) else if (focused && keyboard) Color.White.copy(.06f) else Color.Transparent, tween(150))
     val label = Modifier.semantics {
         if (!wide) contentDescription = title
-        if (onPlay != null) customActions = listOf(androidx.compose.ui.semantics.CustomAccessibilityAction("Reproducir $title") { onPlay(); true })
+        if (onPlay != null) customActions = listOf(androidx.compose.ui.semantics.CustomAccessibilityAction(playback.label(title)) { onPlay(); true })
     }.then(if (onPlay == null) Modifier else Modifier.onPreviewKeyEvent { e ->
         // Con la fila enfocada, P o Mayús+Intro reproduce la lista.
         if (e.type == KeyEventType.KeyDown && (e.key == Key.P || e.key == Key.Enter && e.isShiftPressed)) { onPlay(); true } else false
     })
     Row(Modifier.fillMaxWidth().then(label).clip(RoundedCornerShape(10.dp)).background(bg).hoverable(source)
         .pointerHoverIcon(PointerIcon.Hand).clickable(source, null, onClick = onClick).subtleHoverScale(source, 1.02f)
-        .padding(horizontal = if (wide) 6.dp else 4.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = if (wide) Arrangement.spacedBy(12.dp) else Arrangement.Center) {
-        Box(Modifier.widthIn(max = 48.dp).fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(if (special) 10.dp else 6.dp))
+        .padding(horizontal = 4.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Box(Modifier.size(48.dp).clip(RoundedCornerShape(if (special) 10.dp else 6.dp))
             .background(if (special) Brush.linearGradient(listOf(accent.copy(.75f), accent.copy(.25f))) else SolidColor(Color.White.copy(.07f))),
             contentAlignment = Alignment.Center) {
             if (mosaic != null) PlaylistMosaic(mosaic, accent, Modifier.fillMaxSize(), radius = 0.dp)
             else if (artwork != null) LibraryArt(artwork, Modifier.fillMaxSize(), rounded = false)
             else Icon(fallback, null, Modifier.size(22.dp), tint = if (special) Color(0xFF111111) else if (active) accent else Color.White.copy(.7f))
-            val play by animateFloatAsState(if ((hovered || focused && keyboard) && onPlay != null) 1f else 0f, tween(140), label = "reproducirLista")
+            val controlsVisible = hovered || focused && keyboard || playback == CollectionPlayback.Pause
+            val play by animateFloatAsState(if (controlsVisible && onPlay != null) 1f else 0f, tween(140), label = "reproducirLista")
             if (onPlay != null && play > 0f) Box(Modifier.matchParentSize().graphicsLayer { alpha = play }.background(Color.Black.copy(.45f))
                 .focusProperties { canFocus = false }
-                .pointerHoverIcon(PointerIcon.Hand).clickable(null, null, onClickLabel = "Reproducir $title", role = androidx.compose.ui.semantics.Role.Button, onClick = onPlay),
+                .pointerHoverIcon(PointerIcon.Hand).clickable(null, null, enabled = controlsVisible, onClickLabel = playback.label(title), role = androidx.compose.ui.semantics.Role.Button, onClick = onPlay),
                 contentAlignment = Alignment.Center) {
-                Icon(Icons.Rounded.PlayArrow, "Reproducir $title", Modifier.size(28.dp), tint = Color.White)
+                CollectionPlayIcon(playback == CollectionPlayback.Pause, 28.dp)
             }
         }
         if (wide) Column(Modifier.weight(1f)) {

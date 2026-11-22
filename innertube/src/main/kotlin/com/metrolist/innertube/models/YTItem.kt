@@ -73,11 +73,13 @@ data class PlaylistItem(
     val isPodcast: Boolean = false,
     val description: String? = null,
     val authorAvatarUrl: String? = null,
+    val artistSongsEndpoint: BrowseEndpoint? = null,
 ) : YTItem() {
     override val explicit: Boolean
         get() = false
     override val shareLink: String
-        get() = "https://music.youtube.com/playlist?list=$id"
+        get() = if (artistSongsEndpoint != null && !artistSongsEndpoint.browseId.startsWith("VL") && author?.id != null)
+            "https://music.youtube.com/channel/${author.id}" else "https://music.youtube.com/playlist?list=$id"
 }
 
 data class ArtistItem(
