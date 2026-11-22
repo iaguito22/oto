@@ -1,9 +1,7 @@
 package io.github.iaguito22.oto.desktop.ui
 
 import sh.calvin.reorderable.ReorderableItem
-import sh.calvin.reorderable.DragGestureDetector
 import sh.calvin.reorderable.rememberReorderableLazyListState
-import sh.calvin.reorderable.rememberScroller
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 
@@ -4203,6 +4201,8 @@ private fun TopResultCard(
     }
 }
 
+private data class QueueRowItem(val key: String, val entry: io.github.iaguito22.oto.playback.QueueEntry)
+
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
 internal fun QueuePane(
@@ -4255,27 +4255,23 @@ internal fun QueuePane(
             if (pastOrCurrent) !compactDj else entry.id !in nextUpIds || entry.id == currentMediaId
         }
     }
-    val reorder = remember(keyedQueue, visibleQueue) { QueueReorder(visibleQueue) }
-    val currentReorder by rememberUpdatedState(reorder)
     val commitMove by rememberUpdatedState(onMove)
+    val currentRows by rememberUpdatedState(visibleQueue)
+    // Solo se reordena lo que queda por sonar: la actual y las ya sonadas no se mueven.
+    val upcomingFrom = (curIdx ?: -1) + 1
+    val currentUpcoming by rememberUpdatedState(upcomingFrom)
     val density = LocalDensity.current
-    val scroller = rememberScroller(listState, pixelPerSecond = with(density) { 85.dp.toPx() })
     val reorderState = rememberReorderableLazyListState(
         listState,
         scrollThresholdPadding = PaddingValues(bottom = bottomInset),
-        scrollThreshold = 52.dp,
-        scroller = scroller,
-    ) { from, to -> currentReorder.move(from.key, to.key) }
-    val dragging = reorderState.isAnyItemDragging
-    var settlingRows by remember { mutableStateOf(false) }
-    LaunchedEffect(dragging) {
-        if (dragging) {
-            settlingRows = true
-        } else if (settlingRows) {
-            delay(220)
-            settlingRows = false
-        }
+    ) { from, to ->
+        val rows = currentRows
+        val fromIdx = rows.firstOrNull { it.key == from.key }?.entry?.index ?: return@rememberReorderableLazyListState
+        val toIdx = rows.firstOrNull { it.key == to.key }?.entry?.index ?: return@rememberReorderableLazyListState
+        if (fromIdx < currentUpcoming || toIdx < currentUpcoming) return@rememberReorderableLazyListState
+        commitMove(fromIdx, toIdx)
     }
+    val dragging = reorderState.isAnyItemDragging
     val userScroll = remember(listState) { QueueUserScroll() }
     val activeKey = if (panelHeader == null) null else visibleQueue.firstOrNull {
         it.entry.index == curIdx && it.entry.id == currentMediaId
@@ -4295,7 +4291,7 @@ internal fun QueuePane(
             }
             if (delta != 0) listState.animateScrollBy(delta.toFloat(), tween(230))
         } else {
-            val position = reorder.rows.indexOfFirst { it.key == activeKey }
+            val position = visibleQueue.indexOfFirst { it.key == activeKey }
             // En el panel, la carátula y la cabecera de cola preceden a las canciones.
             val index = position + 2
             val offset = if (index <= listState.firstVisibleItemIndex) 0
@@ -4471,23 +4467,12 @@ internal fun QueuePane(
                     }
                 }
             }
-            items(reorder.rows, key = { it.key }) { (key, entry) ->
+            items(visibleQueue, key = { it.key }) { (key, entry) ->
                 val origIdx = entry.index
-                // El aviso de mezcla también cambia el alto de una fila. Solo animamos
-                // las posiciones como parte del gesto de reordenar.
-                val placement = if (dragging || settlingRows) {
-                    Modifier.animateItem(fadeInSpec = null, placementSpec = tween(200), fadeOutSpec = null)
-                } else Modifier
-                ReorderableItem(reorderState, key, animateItemModifier = placement) { dragging ->
-                    val releaseDetector = remember(key) {
-                        DragGestureDetector { start, end, cancel, drag ->
-                            detectDragGestures(start, {
-                                currentReorder.release(key)?.let { (from, to) -> commitMove(from, to) }
-                                end()
-                            }, cancel, drag)
-                        }
-                    }
-                    Column(rowPadding) {
+                val movable = visibleQueue.size >= 2 && origIdx >= upcomingFrom
+                ReorderableItem(reorderState, key, enabled = movable) { dragging ->
+                    // Se arrastra desde el asa o manteniendo pulsada la fila.
+                    Column(rowPadding.then(if (movable) Modifier.longPressDraggableHandle() else Modifier)) {
                         QueueRowDesktop(
                             refined = refined,
                             index = origIdx + 1,
@@ -4497,11 +4482,7 @@ internal fun QueuePane(
                             artwork = entry.artwork,
                             isCurrent = if (currentIndex != null) origIdx == currentIndex else entry.id == currentMediaId,
                             accent = palette.primary,
-                            dragModifier = if (visibleQueue.size < 2) null else Modifier.draggableHandle(
-                                onDragStarted = { currentReorder.start(key) },
-                                onDragStopped = { currentReorder.cancel(key) },
-                                dragGestureDetector = releaseDetector,
-                            ),
+                            dragModifier = if (movable) Modifier.draggableHandle() else null,
                             isDragging = dragging,
                             onClick = { onSkipTo(origIdx) },
                             onRemove = { onRemove(origIdx) },
