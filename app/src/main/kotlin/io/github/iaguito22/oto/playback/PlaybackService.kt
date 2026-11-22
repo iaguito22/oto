@@ -786,10 +786,10 @@ class PlaybackService : MediaLibraryService() {
 
     private fun requestPlayback(playing: Boolean) {
         if (playing && player.playbackState == Player.STATE_IDLE) player.prepare()
-        transportFade.request(playing, player.playWhenReady, player::play, player::pause) {
+        transportFade.request(playing, player.playWhenReady, player::play, player::pause, awaitAudio = {
             while (player.playWhenReady && !player.isPlaying && player.playbackState != Player.STATE_ENDED &&
                 player.playbackState != Player.STATE_IDLE) delay(10L)
-        }
+        })
     }
 
     // --- Errores ---
@@ -1323,7 +1323,8 @@ class PlaybackService : MediaLibraryService() {
                     val sections = sectionsOf(key.first).orEmpty()
                     val jumpAt = AdhdForcedExitGate.jumpAtMs(target, pos, DUCK_MS) { live.forcedExitTargetMs(it, sections, guardMs = DUCK_MS, duckBefore = true) }
                     MixLog.i("DJ rápido: fin del trozo sin fundido, salto en ${jumpAt} ms (objetivo $target, ahora $pos)")
-                    val nextIdx = player.currentMediaItemIndex + 1
+                    // En aleatorio la siguiente no es la contigua de la lista.
+                    val nextIdx = player.nextMediaItemIndex
                     duckAndAdvanceAdhd(key, seg, jumpAt, nextIdx)
                 }
                 break

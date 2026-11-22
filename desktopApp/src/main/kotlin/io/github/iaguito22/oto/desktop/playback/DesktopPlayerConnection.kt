@@ -619,7 +619,7 @@ class DesktopPlayerConnection(
                 val ready = preparedNext?.takeIf { it.currentId == current?.id && it.next.id == next.id }
                 val window = ready?.let {
                     DesktopTransitionPlanner.mixWindow(state.durationMs, fadeSeconds, ramSaverEnabled, pcmSupported, activeAdhd, it.plan,
-                        current?.let { song -> sectionsOf(song.id) }.orEmpty()).takeIf { ready.plan != null || !fallbackEnabled }
+                        current?.let { song -> sectionsOf(song.id) }.orEmpty())
                         ?: DjCrossfadeFallback.window(state.durationMs, activeAdhd?.endMs ?: state.durationMs, length,
                             current?.let { song -> sectionsOf(song.id) }.orEmpty())?.let { it.startMs to it.durationMs }
                 }

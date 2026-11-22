@@ -552,7 +552,9 @@ class Crossfade(
         val canPrepareBridge = bridgeSupported && bridgeSpec != null &&
             (canStartBridge || bridgeRenderJob?.isActive == true) && pairKey != preparedBridgeFailedFor &&
             bridgeOffsetMs(pos, bridgeSpec.preRollStartMs, bridgeSpec.preRollMs) != null
-        val fallback = fallbackWindow.takeIf { !fallbackAttempted && (liveFrom == null || mixAttempt.skipped) }
+        // Con un puente del DJ listo o ya cargado no hace falta el respaldo: solo entra si el puente no llega.
+        val bridgeInHand = readyBridge != null || (preparedFor == me && preparedBridgeWav != null)
+        val fallback = fallbackWindow.takeIf { !fallbackAttempted && !bridgeInHand && (liveFrom == null || mixAttempt.skipped) }
         val fallbackFrom = fallback?.let { window ->
             val deckStart = preparedFromMs.takeIf {
                 preparedFor == me && preparedBridgeWav == null && preparedAtMs == window.startMs

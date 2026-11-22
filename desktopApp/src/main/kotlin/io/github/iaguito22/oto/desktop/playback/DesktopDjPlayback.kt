@@ -87,10 +87,9 @@ internal object DesktopTransitionPlanner {
         plan: DjTransitionPlan?,
     ): TransitionAction {
         if (window == null || !ready) return planned
-        if (planned is TransitionAction.StartCrossfade && plan != null) return planned
-        if (positionMs < window.startMs) {
-            return if (planned is TransitionAction.StartCrossfade) TransitionAction.None else planned
-        }
+        // Cualquier mezcla ya planificada (plan del DJ, trozo del DJ rápido o fundido configurado) va primero.
+        if (planned is TransitionAction.StartCrossfade) return planned
+        if (positionMs < window.startMs) return planned
         val remaining = window.endMs - positionMs
         return if (remaining >= 100L) TransitionAction.StartCrossfade(remaining, fallback = true) else planned
     }

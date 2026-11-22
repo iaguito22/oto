@@ -29,7 +29,8 @@ class DesktopDjPlaybackTest {
         )
         val window = DjCrossfadeFallback.window(210_000L, 210_000L, 6_000L, emptyList())
         assertEquals(TransitionAction.None, previous)
-        assertEquals(TransitionAction.None,
+        // El fundido configurado (sin plan) no se recorta al respaldo de 3 s.
+        assertEquals(TransitionAction.StartCrossfade(6_000L),
             DesktopTransitionPlanner.withFallback(TransitionAction.StartCrossfade(6_000L), window, 204_000L, true, null))
         assertEquals(TransitionAction.StartCrossfade(2_000L, fallback = true),
             DesktopTransitionPlanner.withFallback(previous, window, 208_000L, true, rejected))

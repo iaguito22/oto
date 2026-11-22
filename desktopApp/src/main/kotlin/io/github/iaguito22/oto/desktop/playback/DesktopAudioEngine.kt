@@ -186,8 +186,9 @@ class DesktopAudioEngine(
     private val useFfmpegPcm: Boolean get() = hasFfmpegPcm && !pcmLineUnavailable
     val supportsCrossfade: Boolean get() = useFfmpegPcm
 
+    // La línea puede cerrarse a la vez desde el hilo de audio; sin línea no queda nada pendiente.
     internal fun pendingOutputMs(): Long = currentLine?.let { line ->
-        ((line.bufferSize - line.available()).coerceAtLeast(0) * 1000L / 192_000L)
+        runCatching { (line.bufferSize - line.available()).coerceAtLeast(0) * 1000L / 192_000L }.getOrDefault(0L)
     } ?: 0L
 
     init {
