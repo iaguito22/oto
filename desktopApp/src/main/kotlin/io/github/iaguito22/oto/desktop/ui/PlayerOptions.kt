@@ -81,7 +81,10 @@ internal fun optionsPosition(parent: Rectangle?, area: Rectangle, width:Int=270,
                     }
                 }
                 Column {
-                    Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text("Volumen",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f));Text("${(volume*100).toInt()} %",style=OtoType.rowSub,color=Color.White.copy(alpha=.4f))}
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Volumen", style = OtoType.rowSub, color = Color.White.copy(alpha = .5f))
+                        VolumePercentage(volume)
+                    }
                     FineSlider(volume,setVolume,label="Volumen")
                 }
                 HorizontalDivider(color=Color.White.copy(alpha=.07f))

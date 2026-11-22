@@ -26,7 +26,9 @@ import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.*
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import io.github.iaguito22.oto.desktop.DesktopPreferences
 import io.github.iaguito22.oto.dj.DjMode
 import io.github.iaguito22.oto.dj.DjMood
 import io.github.iaguito22.oto.playback.NowPlaying
@@ -76,7 +78,28 @@ internal fun FineSlider(value:Float, onChange:(Float)->Unit, modifier:Modifier=M
             val gap=1.5.dp.toPx()
             drawRect(Color.Black.copy(alpha=mixAlpha),Offset(mx-gap/2f,y-stroke),Size(gap,stroke*2f),blendMode=BlendMode.DstOut)
         }
-        if(emphasis>0f) drawCircle(Color.White.copy(alpha=emphasis),radius=(4.dp * emphasis).toPx(),center=Offset(size.width*fraction,y))
+        if (emphasis > 0f) {
+            val radius = (4.dp * emphasis).toPx()
+            val x = size.width * fraction
+            // La capa de la muesca recorta el dibujo. Deja el pomo dentro sin acortar la pista.
+            val inset = if (bottomAligned) 0f else min(radius, size.width / 2f)
+            drawCircle(Color.White.copy(alpha = emphasis), radius, Offset(x.coerceIn(inset, size.width - inset), y))
+        }
+    }
+}
+
+@Composable
+internal fun VolumePercentage(volume: Float, modifier: Modifier = Modifier) {
+    if (DesktopPreferences.showVolumePercentage) {
+        Text(
+            "${round(volume * 100).toInt()} %",
+            modifier,
+            style = OtoType.rowSub,
+            color = Color.White.copy(alpha = .68f),
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            softWrap = false,
+        )
     }
 }
 

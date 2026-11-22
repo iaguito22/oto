@@ -354,13 +354,19 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically) {
                         Icon(Icons.AutoMirrored.Rounded.VolumeUp,"Volumen",Modifier.size(18.dp),tint=Color.White.copy(alpha=.55f))
                         Spacer(Modifier.weight(1f))
-                        Text("${(volume*100).toInt()} %",style=OtoType.rowSub,color=Color.White.copy(alpha=.4f))
+                        VolumePercentage(volume)
                     }
                     }
                 } else Box {
                     HoverAction(Icons.AutoMirrored.Rounded.VolumeUp,"Volumen",onClick={volumeMenu=true})
                     LibraryDropdownMenu(volumeMenu,{volumeMenu=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(190.dp)) {
-                        Column(Modifier.padding(horizontal=16.dp,vertical=8.dp)) {Text("Volumen · ${(volume*100).toInt()} %",style=OtoType.rowSub);FineSlider(volume,player::setVolume,label="Volumen")}
+                        Column(Modifier.padding(horizontal=16.dp,vertical=8.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Volumen", style = OtoType.rowSub)
+                                VolumePercentage(volume)
+                            }
+                            FineSlider(volume, player::setVolume, label = "Volumen")
+                        }
                     }
                 }
                 LibraryNavigation("Ajustes",MobileIcons.settings,wide,section=="Ajustes") { home("Ajustes") }
