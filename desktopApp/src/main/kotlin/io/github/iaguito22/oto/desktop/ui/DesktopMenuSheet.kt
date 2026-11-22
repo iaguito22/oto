@@ -30,8 +30,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.animateScrollBy
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -123,9 +121,6 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -4251,7 +4246,8 @@ internal fun QueuePane(
     val visibleQueue = remember(keyedQueue, curIdx, currentMediaId, nextUpIds, compactDj) {
         keyedQueue.filter { (_, entry) ->
             val pastOrCurrent = entry.index <= (curIdx ?: -1)
-            if (pastOrCurrent) !compactDj else entry.id !in nextUpIds || entry.id == currentMediaId
+            // En el panel solo queda lo que viene: la actual ya está arriba con su carátula.
+            if (pastOrCurrent) !refined else entry.id !in nextUpIds || entry.id == currentMediaId
         }
     }
     val commitMove by rememberUpdatedState(onMove)
@@ -4259,7 +4255,6 @@ internal fun QueuePane(
     // Solo se reordena lo que queda por sonar: la actual y las ya sonadas no se mueven.
     val upcomingFrom = (curIdx ?: -1) + 1
     val currentUpcoming by rememberUpdatedState(upcomingFrom)
-    val density = LocalDensity.current
     val reorderState = rememberReorderableLazyListState(
         listState,
         scrollThresholdPadding = PaddingValues(bottom = bottomInset),
@@ -4271,33 +4266,6 @@ internal fun QueuePane(
         commitMove(fromIdx, toIdx)
     }
     val dragging = reorderState.isAnyItemDragging
-    val userScroll = remember(listState) { QueueUserScroll() }
-    val activeKey = if (panelHeader == null) null else visibleQueue.firstOrNull {
-        it.entry.index == curIdx && it.entry.id == currentMediaId
-    }?.key
-    LaunchedEffect(activeKey, listState) {
-        if (activeKey == null || dragging || userScroll.isRecent() || listState.isScrollInProgress) {
-            return@LaunchedEffect
-        }
-        val layout = listState.layoutInfo
-        val viewportEnd = layout.viewportEndOffset - with(density) { bottomInset.roundToPx() }
-        val row = layout.visibleItemsInfo.firstOrNull { it.key == activeKey }
-        if (row != null) {
-            val delta = when {
-                row.offset < layout.viewportStartOffset -> row.offset - layout.viewportStartOffset
-                row.offset + row.size > viewportEnd -> row.offset + row.size - viewportEnd
-                else -> 0
-            }
-            if (delta != 0) listState.animateScrollBy(delta.toFloat(), tween(230))
-        } else {
-            val position = visibleQueue.indexOfFirst { it.key == activeKey }
-            // En el panel, la carátula y la cabecera de cola preceden a las canciones.
-            val index = position + 2
-            val offset = if (index <= listState.firstVisibleItemIndex) 0
-                else -(viewportEnd - with(density) { 70.dp.roundToPx() }).coerceAtLeast(0)
-            if (position >= 0) listState.animateScrollToItem(index, scrollOffset = offset)
-        }
-    }
     val canPlayFull = compactDj && djMode == DjMode.Adhd && onPlayDjFullOnce != null
     @Composable fun QueueOptions() {
         if (!refined || (queue.size <= 1 && !canPlayFull)) return
@@ -4328,7 +4296,7 @@ internal fun QueuePane(
                 Column(if (refined) Modifier.weight(1f) else Modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            text = if (djActive) "Cola del DJ" else "Cola de reproducción",
+                            text = if (djActive) "Cola del DJ" else if (refined) "A continuación" else "Cola de reproducción",
                             style = if (refined) OtoType.rowTitle else OtoType.section,
                             color = Color.White,
                         )
@@ -4428,7 +4396,7 @@ internal fun QueuePane(
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(if (compactDj) 8.dp else 14.dp)) {
         if (panelHeader == null) header()
         LazyColumn(
-            Modifier.weight(1f).fillMaxWidth().nestedScroll(userScroll),
+            Modifier.weight(1f).fillMaxWidth(),
             state = listState,
             contentPadding = PaddingValues(top = if (refined) 0.dp else 16.dp, bottom = 12.dp + bottomInset),
             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -4547,17 +4515,6 @@ internal fun QueuePane(
             }
         }
     }
-}
-
-private class QueueUserScroll : NestedScrollConnection {
-    private var lastInput: Long? = null
-
-    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-        if (source == NestedScrollSource.UserInput && available.y != 0f) lastInput = System.nanoTime()
-        return Offset.Zero
-    }
-
-    fun isRecent(): Boolean = lastInput?.let { System.nanoTime() - it < 250_000_000L } == true
 }
 
 /**
