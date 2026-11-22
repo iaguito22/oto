@@ -135,7 +135,7 @@ class PlaybackService : MediaLibraryService() {
     private val retries = HashMap<String, Int>()
     private var retryJob: Job? = null
 
-    private var radio: Radio? = null
+    private var radio: RadioQueue<MediaItem>? = null
     private var radioJob: Job? = null
     // Lo que suena es una lista (un álbum, una tuya…) y no la radio de una canción ni el DJ.
     private var list = false
@@ -868,13 +868,16 @@ class PlaybackService : MediaLibraryService() {
     // --- Radio ---
 
     private fun startRadio(seedId: String) {
-        radioJob?.cancel()
-        radio = Radio(seedId)
-        topUpRadio()
+        stopRadio()
+        radio = RadioQueue(seedId, { item ->
+            val meta = item.mediaMetadata
+            RadioTrackKey(item.mediaId, songKey(meta.title?.toString().orEmpty(), meta.artist?.toString().orEmpty()))
+        }, { it.toMediaItem() })
     }
 
     private fun stopRadio() {
         radioJob?.cancel()
+        radioJob = null
         radio = null
         auto = null
     }
@@ -902,9 +905,16 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    /** Cuando quedan [RADIO_AHEAD] canciones o menos por delante, añade la siguiente página de la radio. */
+    /** Mantiene la radio explícita y la reproducción automática con sus propios límites. */
     private fun topUpRadio() {
-        if ((radio == null && auto == null) || radioJob?.isActive == true) return
+        radio?.let { session ->
+            trimRadio(session)
+            if (radioJob?.isActive != true && session.needsRefill(player.mediaItemCount, player.currentMediaItemIndex)) {
+                radioJob = scope.launch(Dispatchers.Main) { refillRadio(session) }
+            }
+            return
+        }
+        if (auto == null || radioJob?.isActive == true) return
         if (player.mediaItemCount - player.currentMediaItemIndex - 1 > RADIO_AHEAD) return
         radioJob = scope.launch {
             auto?.let { a ->
@@ -928,29 +938,68 @@ class PlaybackService : MediaLibraryService() {
                 }
                 return@launch
             }
-            repeat(RADIO_PAGES) {
-                var r = radio ?: return@launch
-                if (r.exhausted && player.mediaItemCount > 0) {
-                    r = Radio(player.getMediaItemAt(player.mediaItemCount - 1).mediaId).also { radio = it }
-                }
-                val page = withContext(Dispatchers.IO) { r.more() }
-                    .getOrElse { Timber.w(it, "radio"); return@launch }
-                val queued = HashSet<String>()
-                for (i in 0 until player.mediaItemCount) {
-                    val m = player.getMediaItemAt(i)
-                    queued += m.mediaId
-                    queued += sameSong(m.mediaMetadata.title?.toString().orEmpty(), m.mediaMetadata.artist?.toString().orEmpty())
-                }
-                val fresh = page
-                    .filter { s -> s.id !in queued && s.id !in recent && sameSong(s.title, s.artists.joinToString { it.name }).let { it !in queued && it !in recent } }
-                    .distinctBy { sameSong(it.title, it.artists.joinToString { a -> a.name }) }
-                if (fresh.isNotEmpty()) {
-                    player.addMediaItems(fresh.map { it.toMediaItem() })
-                    Timber.d("radio: +%d", fresh.size)
-                    return@launch
-                }
-            }
         }
+    }
+
+    private fun mediaQueue() = List(player.mediaItemCount, player::getMediaItemAt)
+
+    private fun trimRadio(session: RadioQueue<MediaItem>) {
+        val trim = session.trim(mediaQueue(), player.currentMediaItemIndex)
+        if (trim.until < player.mediaItemCount) player.removeMediaItems(trim.until, player.mediaItemCount)
+        if (trim.from > 0) player.removeMediaItems(0, trim.from)
+    }
+
+    private suspend fun refillRadio(session: RadioQueue<MediaItem>) {
+        var pagesRequested = 0
+        while (radio === session && session.needsRefill(player.mediaItemCount, player.currentMediaItemIndex)) {
+            val recentSongs = recent.mapTo(HashSet()) { it.removePrefix("~") }
+            val fresh = session.take(mediaQueue(), player.currentMediaItemIndex, recentSongs)
+            if (fresh.isNotEmpty()) {
+                val resume = player.playbackState == Player.STATE_ENDED && player.playWhenReady && player.repeatMode == Player.REPEAT_MODE_OFF
+                player.addMediaItems(fresh)
+                if (resume && player.hasNextMediaItem()) {
+                    player.seekToNextMediaItem()
+                    player.prepare()
+                }
+                Timber.d("radio: +%d", fresh.size)
+            }
+            if (!session.needsRefill(player.mediaItemCount, player.currentMediaItemIndex)) return
+            if (pagesRequested == RADIO_PAGES) {
+                delay(RADIO_RETRY_MS)
+                pagesRequested = 0
+            }
+            val seeds = mediaQueue().asReversed().map { it.mediaId }
+            val page = withContext(Dispatchers.IO) { session.fetch(seeds) }
+            if (radio !== session) return
+            pagesRequested++
+            page.onSuccess(session::offer).onFailure { Timber.w(it, "radio") }
+            if (page.isFailure) delay(RADIO_RETRY_MS)
+        }
+    }
+
+    private fun insertManually(song: MediaItem, next: Boolean) {
+        val current = player.currentMediaItemIndex
+        val queued = mediaQueue()
+        if (current !in queued.indices) return
+        val session = radio
+        val items = session?.withDeferred(queued) ?: queued
+        val edit = manualQueueEdit(items, current, song.mediaId, next, { it.isManual }, MediaItem::mediaId)
+        if (edit.removals.isEmpty() && edit.insertion == null) return
+        val existing = edit.removals.lastOrNull()?.let(items::get)
+        val item = (existing ?: song.withPlaybackUri()).markManual()
+        if (session == null) {
+            edit.removals.forEach { player.removeMediaItem(it) }
+            edit.insertion?.let { player.addMediaItem(it, item) }
+            return
+        }
+        val edited = items.toMutableList()
+        edit.removals.forEach { edited.removeAt(it) }
+        edit.insertion?.let { edited.add(it, item) }
+        val trim = session.trimEditedQueue(edited, edit.current)
+        edit.removals.filter { it < current }.forEach { player.removeMediaItem(it) }
+        val upcoming = edited.subList(edit.current + 1, trim.until)
+        replaceUpcomingItems(upcoming)
+        if (trim.from > 0) player.removeMediaItems(0, trim.from)
     }
 
     // --- DJ ---
@@ -1675,21 +1724,24 @@ class PlaybackService : MediaLibraryService() {
         }
         val base = player.currentMediaItemIndex + 1
         if (base < 0) return
-        val existingCount = (player.mediaItemCount - base).coerceAtLeast(0)
+        val existing = (base until player.mediaItemCount).map(player::getMediaItemAt)
+        val manual = existing.filter { it.isManual }
+        val manualIds = manual.mapTo(HashSet()) { it.mediaId }
+        val upcoming = manual + picks.filter { it.track.id !in manualIds }.map { it.track.toDjItem(d) }
+        replaceUpcomingItems(upcoming)
+    }
+
+    private fun replaceUpcomingItems(upcoming: List<MediaItem>) {
+        val base = player.currentMediaItemIndex + 1
+        val existing = (base until player.mediaItemCount).map(player::getMediaItemAt)
         var common = 0
-        val limit = min(existingCount, picks.size)
-        while (common < limit && player.getMediaItemAt(base + common).mediaId == picks[common].track.id) {
+        val limit = min(existing.size, upcoming.size)
+        while (common < limit && existing[common].mediaId == upcoming[common].mediaId && existing[common].isManual == upcoming[common].isManual) {
             common++
         }
         // Si ya coincide exactamente con los ítems en cola (p. ej. índice+1 intacto), no tocamos la precarga de ExoPlayer.
-        if (common == picks.size && existingCount == picks.size) return
-        val removeFrom = base + common
-        if (removeFrom < player.mediaItemCount) {
-            player.removeMediaItems(removeFrom, player.mediaItemCount)
-        }
-        if (common < picks.size) {
-            player.addMediaItems(picks.drop(common).map { it.toDjItem(d) })
-        }
+        if (common == upcoming.size && existing.size == upcoming.size) return
+        player.replaceMediaItems(base + common, player.mediaItemCount, upcoming.drop(common))
     }
 
     private var lastShownMix: String? = null
@@ -1929,6 +1981,9 @@ class PlaybackService : MediaLibraryService() {
             publishLevels()
             prefetch()
             publishDjSessionExtras()
+            if (radio != null && reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
+                scope.launch(Dispatchers.Main) { if (radio != null) topUpRadio() }
+            }
         }
 
         override fun onPlaybackStateChanged(state: Int) {
@@ -2030,6 +2085,7 @@ class PlaybackService : MediaLibraryService() {
                         .add(DJ_FULL_ONCE_CMD)
                         .add(DJ_VETO_CMD)
                         .add(DJ_START_FROM_CMD)
+                        .add(MANUAL_QUEUE_CMD)
                         .build(),
                 )
                 .build()
@@ -2041,6 +2097,15 @@ class PlaybackService : MediaLibraryService() {
             args: Bundle,
         ): ListenableFuture<SessionResult> {
             return when (customCommand.customAction) {
+                MANUAL_QUEUE_CMD.customAction -> {
+                    val item = args.getBundle(EXTRA_QUEUE_SONG)?.let(MediaItem::fromBundle)
+                    if (item == null || item.mediaId.isBlank()) {
+                        Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                    } else {
+                        insertManually(item, args.getBoolean(EXTRA_QUEUE_NEXT))
+                        Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
+                }
                 DJ.customAction -> {
                     val requestedMode = args.getString(EXTRA_DJ_MODE)?.let { name -> DjMode.entries.firstOrNull { it.name == name } }
                     startDj(requestedMode)
@@ -2171,7 +2236,7 @@ class PlaybackService : MediaLibraryService() {
             stopDj()
             list = items.size > 1
             // Una lista corta puede acabarse enseguida: se mira ya si toca seguir con parecidas.
-            if (items.size == 1) scope.launch(Dispatchers.Main) { startRadio(items[0].mediaId) } else { stopRadio(); scope.launch(Dispatchers.Main) { autoplay() } }
+            if (items.size == 1) startRadio(items[0].mediaId) else { stopRadio(); scope.launch(Dispatchers.Main) { autoplay() } }
             return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(items, startIndex, startPositionMs))
         }
     }
@@ -2202,6 +2267,7 @@ class PlaybackService : MediaLibraryService() {
         const val ANALYSIS_WATCH_MS = 5_000L
         const val RADIO_AHEAD = 2
         const val RADIO_PAGES = 3
+        const val RADIO_RETRY_MS = 8_000L
         const val RECENT = 400
         const val HEARD_MS = 30_000L
         const val STALL_MS = 6_000L
@@ -2233,6 +2299,10 @@ class PlaybackService : MediaLibraryService() {
         val DJ_START_FROM_CMD = SessionCommand(DJ_START_FROM_COMMAND, Bundle.EMPTY)
     }
 }
+
+internal val MANUAL_QUEUE_CMD = SessionCommand("io.github.iaguito22.oto.MANUAL_QUEUE", Bundle.EMPTY)
+internal const val EXTRA_QUEUE_SONG = "oto_queue_song"
+internal const val EXTRA_QUEUE_NEXT = "oto_queue_next"
 
 /** Lo que pide la interfaz para arrancar el DJ. */
 const val DJ_COMMAND = "io.github.iaguito22.oto.DJ"

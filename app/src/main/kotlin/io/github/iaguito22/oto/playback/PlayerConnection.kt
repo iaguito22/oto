@@ -251,8 +251,9 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         .put("id", p.currentMediaItem?.mediaId).put("index", p.currentMediaItemIndex).put("position", p.currentPosition.coerceAtLeast(0))
         .put("playing", playing).put("shuffle", _shuffle.value).put("loop", _loopMode.value != LoopMode.Off)
         .put("queue", JSONArray((0 until p.mediaItemCount).map { i ->
-            val m = p.getMediaItemAt(i).mediaMetadata
-            JSONObject().put("id", p.getMediaItemAt(i).mediaId).put("title", m.title?.toString().orEmpty())
+            val item = p.getMediaItemAt(i)
+            val m = item.mediaMetadata
+            JSONObject().put("id", item.mediaId).put("title", m.title?.toString().orEmpty()).put("manual", item.isManual)
                 .put("artist", m.artist?.toString().orEmpty()).put("artwork", m.artworkUri?.toString())
                 .put("artistId", m.extras?.getStringArray(ARTIST_IDS)?.firstOrNull()?.ifEmpty { null })
         }))
@@ -336,10 +337,14 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     }
 
     /** Recibe una sesión sin sonar hasta colocar la posición y confirmar la transferencia. */
-    fun prepareTransfer(songs: List<SongItem>, index: Int, positionMs: Long, shuffled: Boolean) = withController { c ->
+    fun prepareTransfer(songs: List<SongItem>, index: Int, positionMs: Long, shuffled: Boolean, manualIds: Set<String> = emptySet()) = withController { c ->
         shuffling?.cancel(); currentListId = null
         _shuffle.value = shuffled
-        val items = songs.map { song -> song.toMediaItem().buildUpon().setRequestMetadata(MediaItem.RequestMetadata.Builder().setExtras(Bundle().apply {putBoolean("oto_exact_transfer",true)}).build()).build() }
+        val items = songs.map { song ->
+            val item = song.toMediaItem().buildUpon().setRequestMetadata(MediaItem.RequestMetadata.Builder()
+                .setExtras(Bundle().apply { putBoolean("oto_exact_transfer", true) }).build()).build()
+            if (song.id in manualIds) item.markManual() else item
+        }
         original = items; ages = List(items.size) { null }
         c.playWhenReady = false
         c.setMediaItems(items, index.coerceIn(items.indices), positionMs)
@@ -411,19 +416,26 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         withController { c ->
             c.shuffleModeEnabled = false
             val current = c.currentMediaItem ?: return@withController
-            val at = items.indexOfFirst { it.mediaId == current.mediaId }
-            if (at < 0) return@withController
-            if (!on) return@withController c.replaceMediaItems(c.currentMediaItemIndex + 1, c.mediaItemCount, items.drop(at + 1))
+            val others = items.indices.filter { i -> items[i].mediaId != current.mediaId }
+            fun applyOrder(controller: MediaController, ids: List<String>) {
+                val start = controller.currentMediaItemIndex + 1
+                val pending = (start until controller.mediaItemCount).map(controller::getMediaItemAt)
+                val (manual, rest) = pending.partition { it.isManual }
+                val (listed, extra) = rest.partition { !it.isAuto }
+                val rank = ids.withIndex().associate { (index, id) -> id to index }
+                controller.replaceMediaItems(start, controller.mediaItemCount,
+                    manual + listed.sortedBy { rank[it.mediaId] ?: Int.MAX_VALUE } + extra)
+            }
+            if (!on) return@withController applyOrder(c, items.map { it.mediaId })
             val played = (0 until c.currentMediaItemIndex).mapTo(HashSet()) { c.getMediaItemAt(it).mediaId }
-            val others = items.indices.filter { it != at }
             val shuffleItems = shuffleItems(others)
             shuffling = scope.launch {
                 val order = Shuffle.order(shuffleItems, null, liked, heardAt, played = played, after = current.mediaMetadata.artist?.toString())
                 withContext(Dispatchers.Main) {
                     withController { c2 ->
                         // Si entretanto cambió de canción, lo barajado ya no vale.
-                        if (c2.currentMediaItem?.mediaId != current.mediaId) return@withController
-                        c2.replaceMediaItems(c2.currentMediaItemIndex + 1, c2.mediaItemCount, order.map { items[others[it]] })
+                        if (original !== items || c2.currentMediaItem?.mediaId != current.mediaId) return@withController
+                        applyOrder(c2, order.map { items[others[it]].mediaId })
                     }
                 }
             }
@@ -605,16 +617,23 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         }, ContextCompat.getMainExecutor(context))
     }
 
-    /** Detrás de la que suena. */
-    override fun playNext(song: SongItem) {
-        mirror?.let { m -> return m.send("addToQueue") { it.put("next", true).put("song", songJson(song)) } }
-        withController { if (it.mediaItemCount == 0) play(song) else it.addMediaItem(it.currentMediaItemIndex + 1, song.toMediaItem()) }
-    }
+    override fun playNext(song: SongItem) = insertManually(song, next = true)
 
-    /** Añade una canción recibida del otro dispositivo al final de la cola. */
-    fun enqueue(song: SongItem) {
-        mirror?.let { m -> return m.send("addToQueue") { it.put("next", false).put("song", songJson(song)) } }
-        withController { if (it.mediaItemCount == 0) play(song) else it.addMediaItem(song.toMediaItem()) }
+    override fun enqueue(song: SongItem) = insertManually(song, next = false)
+
+    private fun insertManually(song: SongItem, next: Boolean) {
+        mirror?.let { m -> return m.send("addToQueue") { it.put("next", next).put("song", songJson(song)) } }
+        withController { c ->
+            if (c.mediaItemCount == 0) {
+                play(song)
+            } else {
+                val args = Bundle().apply {
+                    putBundle(EXTRA_QUEUE_SONG, song.toMediaItem().toBundle())
+                    putBoolean(EXTRA_QUEUE_NEXT, next)
+                }
+                c.sendCustomCommand(MANUAL_QUEUE_CMD, args)
+            }
+        }
     }
 
     /** Mueve una de la cola a otro sitio ([from] y [to]: posiciones en la lista del reproductor, como [QueueEntry.index]). */
@@ -765,6 +784,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
             artwork = item.mediaMetadata.artworkUri?.toString(),
             auto = item.isAuto,
             artistId = item.mediaMetadata.extras?.getStringArray(ARTIST_IDS)?.firstOrNull()?.ifEmpty { null },
+            manual = item.isManual,
         )
     }
 }

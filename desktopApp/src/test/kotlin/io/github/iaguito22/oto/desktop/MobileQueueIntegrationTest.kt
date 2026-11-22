@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
 /** Móvil físico y reproductor de escritorio reales, con perfiles aislados y sin audio. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MobileQueueIntegrationTest {
-    @Test fun phoneAppendsToDesktopWithoutReplacingItsQueue(): Unit = runBlocking {
+    @Test fun phoneAddsToDesktopManualQueueWithoutDuplicates(): Unit = runBlocking {
         val adb = System.getenv("OTO_LINK_TEST_ADB")
         val serial = System.getenv("OTO_LINK_TEST_SERIAL")
         assumeTrue("Requiere dispositivo explícito y APK .linktest", !adb.isNullOrBlank() && !serial.isNullOrBlank())
@@ -64,17 +64,17 @@ class MobileQueueIntegrationTest {
             withTimeout(20000) { devices.link.remote.first { it != null } }
             activity("test-queue")
             withTimeout(15000) { player.queue.first { it.size == 3 } }
-            assertEquals(listOf("a", "b", "oto-link-test-queue"), player.queue.value.map { it.id })
-            assertEquals("Prueba de cola remota", player.queue.value.last().title)
+            assertEquals(listOf("a", "oto-link-test-queue", "b"), player.queue.value.map { it.id })
+            assertEquals("Prueba de cola remota", player.queue.value[1].title)
             assertEquals(before.id, player.state.value.id)
             assertEquals(before.index, player.state.value.index)
             assertEquals(before.playing, player.state.value.playing)
             assertEquals(position, player.position())
             assertEquals(current, player.queue.value[player.state.value.index].id)
+            player.enqueue(Heard("c", "Añadida en el PC", "Oto", null).toSong())
             activity("test-queue")
-            withTimeout(15000) { player.queue.first { it.size == 4 } }
-            assertEquals(listOf("a", "b", "oto-link-test-queue", "oto-link-test-queue"), player.queue.value.map { it.id })
-            println("Móvil físico → cola Desktop: dos envíos al final, metadatos, canción actual, posición y pausa conservados.")
+            val expected = listOf("a", "c", "oto-link-test-queue", "b")
+            withTimeout(15000) { player.queue.first { queue -> queue.map { it.id } == expected } }
         } finally {
             runCatching { command("shell", "am", "force-stop", pkg) }
             runCatching { command("reverse", "--remove", "tcp:${devices.port}") }

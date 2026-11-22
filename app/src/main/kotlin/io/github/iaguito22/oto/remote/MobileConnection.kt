@@ -22,7 +22,7 @@ class MobileConnection(private val app: OtoApp) {
     private var queueCache: Pair<Any, JSONArray>? = null
     private fun queueJson(queue: List<io.github.iaguito22.oto.playback.QueueEntry>): JSONArray =
         queueCache?.takeIf { it.first === queue }?.second
-            ?: JSONArray(queue.map { JSONObject().put("id",it.id).put("title",it.title).put("artist",it.artist).put("artwork",it.artwork).put("artistId",it.artistId) }).also { queueCache = queue to it }
+            ?: JSONArray(queue.map { JSONObject().put("id",it.id).put("title",it.title).put("artist",it.artist).put("artwork",it.artwork).put("artistId",it.artistId).put("manual",it.manual) }).also { queueCache = queue to it }
     // Siempre lo de este teléfono, aunque la interfaz esté mostrando el ordenador (ver PlayerConnection.Mirror).
     val adapter = object : LinkPlayer {
         override fun snapshot(): JSONObject {
@@ -58,7 +58,7 @@ class MobileConnection(private val app: OtoApp) {
         override fun replace(state: JSONObject) {
             val a = state.getJSONArray("queue")
             val songs = (0 until a.length()).map { i -> a.getJSONObject(i).let { Heard(it.getString("id"),it.getString("title"),it.getString("artist"),it.optString("artwork").takeUnless { s -> s.isBlank() || s=="null" },it.optString("artistId").takeUnless { s -> s.isBlank() || s=="null" }).toSong() } }
-            player.prepareTransfer(songs, state.optInt("index").coerceIn(songs.indices), state.optLong("position"), state.optBoolean("shuffle"))
+            player.prepareTransfer(songs, state.optInt("index").coerceIn(songs.indices), state.optLong("position"), state.optBoolean("shuffle"), a.manualQueueIds())
         }
     }
     private val followingMutable = kotlinx.coroutines.flow.MutableStateFlow<RemoteNow?>(null)

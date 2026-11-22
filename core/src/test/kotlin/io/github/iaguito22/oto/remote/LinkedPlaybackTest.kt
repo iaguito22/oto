@@ -58,9 +58,15 @@ class LinkedPlaybackTest {
         val song=JSONObject().put("id","track").put("title","Song").put("artist","Artist")
         LinkedPlayback(player).execute(JSONObject().put("action","addToQueue").put("song",song).put("next",true))
         assertEquals("track",player.added?.getString("id"));assertTrue(player.nextAdded)
+        LinkedPlayback(player).execute(JSONObject().put("action","addToQueue").put("song",song))
+        assertFalse(player.nextAdded)
         assertTrue(runCatching { LinkedPlayback(player).execute(JSONObject().put("action","addToQueue").put("song",JSONObject().put("id","").put("title","Song"))) }.isFailure)
     }
     @Test fun unsupportedCommandIsRejected(): Unit=runBlocking {
         assertTrue(runCatching{LinkedPlayback(Player()).execute(JSONObject().put("action","unknown"))}.isFailure)
+    }
+    @Test fun manualQueueFlagsAreOptionalInTransfers() {
+        val queue = JSONArray().put(JSONObject().put("id", "old")).put(JSONObject().put("id", "new").put("manual", true))
+        assertEquals(setOf("new"), queue.manualQueueIds())
     }
 }

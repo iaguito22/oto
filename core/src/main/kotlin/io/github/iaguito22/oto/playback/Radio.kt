@@ -6,7 +6,7 @@ import com.metrolist.innertube.models.WatchEndpoint
 
 /**
  * Radio de una canción: la mezcla automática de YouTube Music (`RDAMVM` + videoId), página a página.
- * Cuando se acaba, [PlaybackService] siembra otra a partir de la última canción de la cola, así que nunca para.
+ * [RadioQueue] siembra otra a partir de la última canción de la cola cuando se agota.
  */
 class Radio(val seedId: String) {
     private var endpoint = WatchEndpoint(videoId = seedId, playlistId = "RDAMVM$seedId")
@@ -24,7 +24,7 @@ class Radio(val seedId: String) {
             }
             started = true
             endpoint = page.endpoint
-            continuation = page.continuation
+            continuation = page.continuation?.takeIf { it != continuation }
             page.items
         }
 }

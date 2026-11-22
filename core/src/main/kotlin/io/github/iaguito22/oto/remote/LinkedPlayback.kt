@@ -2,7 +2,15 @@ package io.github.iaguito22.oto.remote
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
 import org.json.JSONObject
+
+fun JSONArray.manualQueueIds(): Set<String> = buildSet {
+    for (index in 0 until length()) {
+        val entry = optJSONObject(index) ?: continue
+        if (entry.optBoolean("manual")) add(entry.getString("id"))
+    }
+}
 
 interface LinkPlayer {
     fun snapshot(): JSONObject
@@ -15,7 +23,7 @@ interface LinkPlayer {
     fun skip(index: Int)
     fun move(from: Int, to: Int)
     fun remove(index: Int)
-    /** La canción se envía como {id,title,artist,artwork}; next elige siguiente o final de cola. */
+    /** La canción se envía como {id,title,artist,artwork}; next elige siguiente o final del bloque manual. */
     fun addToQueue(song: JSONObject, next: Boolean)
     fun volume(value: Float)
     suspend fun like()

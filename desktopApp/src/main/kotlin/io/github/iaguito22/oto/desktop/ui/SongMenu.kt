@@ -41,6 +41,7 @@ internal fun rememberSongActions(
         { h: Heard, listId: String? ->
             buildList {
                 add(ContextMenuItem("Reproducir a continuación") { player.playNext(h.toSong()) })
+                add(ContextMenuItem("Añadir a la cola") { player.enqueue(h.toSong()) })
                 add(ContextMenuItem("Arrancar DJ desde aquí") { player.playDjFrom(h.toSong()) })
                 add(ContextMenuItem("Guardar en…") { save(h) })
                 val downloaded = h.id in requestedIds

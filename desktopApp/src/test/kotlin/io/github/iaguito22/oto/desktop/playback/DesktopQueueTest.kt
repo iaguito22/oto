@@ -27,14 +27,33 @@ class DesktopQueueTest {
     }
     private fun song(id: String) = Heard(id, id, "Prueba", null).toSong()
 
-    @Test fun addingToEndAndNextKeepsCurrentTrack() = withPlayer { player ->
-        player.prepareTransfer(listOf(song("a"), song("b")), 0, 0, false)
+    @Test fun playNextMovesExistingSongWithoutDuplicatingIt() = withPlayer { player ->
+        player.prepareTransfer(listOf(song("a"), song("b"), song("c")), 0, 0, false)
+        player.playNext(song("c"))
+        assertEquals(listOf("a", "c", "b"), player.queue.value.map { it.id })
+        assertEquals("a", player.queue.value[player.state.value.index].id)
+    }
+
+    @Test fun addingKeepsAManualBlockBeforeThePlaylist() = withPlayer { player ->
+        player.prepareTransfer(listOf(song("a"), song("b"), song("e")), 0, 0, false)
         player.enqueue(song("c"))
         player.playNext(song("d"))
-        assertEquals(listOf("a", "d", "b", "c"), player.queue.value.map { it.id })
+        player.enqueue(song("e"))
+        player.enqueue(song("d"))
+        assertEquals(listOf("a", "c", "e", "d", "b"), player.queue.value.map { it.id })
         assertEquals(0, player.state.value.index)
         player.setShuffle(true); player.setShuffle(false)
-        assertEquals(setOf("a", "b", "c", "d"), player.queue.value.map { it.id }.toSet())
+        assertEquals(listOf("a", "c", "e", "d", "b"), player.queue.value.map { it.id })
+        player.prepareTransfer(listOf(song("a"), song("d"), song("b")), 0, 0, false)
+        player.enqueue(song("c"))
+        assertEquals(listOf("a", "c", "d", "b"), player.queue.value.map { it.id })
+    }
+
+    @Test fun transferKeepsTheManualBlockAtItsDestination() = withPlayer { player ->
+        player.prepareTransfer(listOf(song("a"), song("b"), song("c")), 0, 0, false, manualIds = setOf("b"))
+        player.enqueue(song("d"))
+        assertEquals(listOf("a", "b", "d", "c"), player.queue.value.map { it.id })
+        assertEquals(listOf("b", "d"), player.queue.value.filter { it.manual }.map { it.id })
     }
 
     @Test fun removingCurrentAdvancesAndRemovingLastClearsPlayback() = withPlayer { player ->

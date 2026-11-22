@@ -596,6 +596,11 @@ fun MenuSheet(
                     say("«${h.song.title}» va después de esta")
                     held = null
                 },
+                onEnqueue = {
+                    connection.enqueue(h.song)
+                    say("«${h.song.title}» añadida a la cola")
+                    held = null
+                },
                 onStartDj = {
                     held = null
                     connection.playDjFrom(h.song, onFail = { say("El DJ no ha podido empezar") })
@@ -2453,6 +2458,7 @@ private fun ActionRow(icon: Int, text: String, tint: Color = Oto.colors.text, tr
 private fun ColumnScope.SongActions(
     h: Held,
     onNext: () -> Unit,
+    onEnqueue: () -> Unit,
     onStartDj: () -> Unit,
     onSave: () -> Unit,
     onRemoteQueue: (() -> Unit)?,
@@ -2468,6 +2474,7 @@ private fun ColumnScope.SongActions(
     FloatHeader({ Art(song.thumbnail, 48.dp, Radius.sm) }, song.title, song.artists.joinToString { it.name })
     Spacer(Modifier.height(Space.xs))
     ActionRow(R.drawable.ic_queue_music, "Reproducir a continuación", onClick = onNext)
+    ActionRow(R.drawable.ic_queue_music, "Añadir a la cola", onClick = onEnqueue)
     ActionRow(R.drawable.ic_graphic_eq, "Arrancar DJ desde aquí", onClick = onStartDj)
     if (onRemoteQueue != null) ActionRow(R.drawable.ic_link_devices, "Añadir a la cola del ordenador", onClick = onRemoteQueue)
     ActionRow(R.drawable.ic_add, "Guardar en…", onClick = onSave)

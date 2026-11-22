@@ -36,7 +36,7 @@ $env:OTO_PHONE_KEYSTORE = (Resolve-Path ..\tools\signing\oto-mobile-linux.keysto
 
 ## Cola del PC desde el móvil
 
-- `MenuSheet` ofrece «Añadir a la cola del ordenador» en el menú de pulsación larga cuando `link.remote` está conectado (añade al final; «Reproducir a continuación» sigue siendo local). `MobileConnection.addToRemoteQueue` envía id/título/artista/portada y espera la respuesta; un error o desconexión se muestra en la hoja.
+- `MenuSheet` ofrece «Añadir a la cola del ordenador» en el menú de pulsación larga cuando `link.remote` está conectado. La canción se mueve al final del bloque añadido a mano, antes de la lista o radio. «Reproducir a continuación» y «Añadir a la cola» actúan sobre el reproductor que muestra el móvil. `MobileConnection.addToRemoteQueue` envía id/título/artista/portada y espera la respuesta; un error o desconexión se muestra en la hoja.
 - Pendiente: comprobarlo con los perfiles habituales vinculados desde Dispositivos.
 
 ## Lo que suena en el otro dispositivo (modo tipo Connect)

@@ -18,7 +18,7 @@ class DesktopTransitionCommitTest {
         var prepared = false
         val chorus = listOf(SongSection(97_000L, 120_000L, 1.0))
         val result = async {
-            commitPreparedTransition(mutex,
+            commitPreparedTransition(mutex, IndexGate(),
                 prepare = { prepared = true },
                 isSafe = { ChorusSafety.allowsLive(sourceNow, 6_000L, 1.0, chorus) },
                 commit = { committed = true })
@@ -36,7 +36,7 @@ class DesktopTransitionCommitTest {
 
     @Test fun safeCommitRunsOnlyAfterMetadataAndLatestValidation() = runTest {
         val events = mutableListOf<String>()
-        assertTrue(commitPreparedTransition(Mutex(),
+        assertTrue(commitPreparedTransition(Mutex(), IndexGate(),
             prepare = { events += "prepare"; 42 },
             isSafe = { events += "validate"; true },
             commit = { events += "commit:$it" }))
