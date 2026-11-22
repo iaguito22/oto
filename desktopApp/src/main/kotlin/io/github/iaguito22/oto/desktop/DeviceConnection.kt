@@ -93,8 +93,13 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
             else -> bridge.execute(command)
         }
     }
+    // El último equipo que se conectó: distingue «vinculado sin conexión» de «sin vincular».
+    private val peerMutable = kotlinx.coroutines.flow.MutableStateFlow(kv.getString("peer"))
+    val peer = peerMutable.asStateFlow()
+    fun forgetPeer() { kv.putString("peer", null); peerMutable.value = null }
     private val sync = scope.launch {
         link.remote.collect { state ->
+            state?.optString("name")?.takeIf { it.isNotBlank() && it != "null" && it != peerMutable.value }?.let { kv.putString("peer", it); peerMutable.value = it }
             if (state != null && state.optString("libraryHash") != replica.digest()) {
                 runCatching { replica.merge(link.command(JSONObject().put("action", "library"))) }
                     .onSuccess { syncIssueMutable.value = null }.onFailure { syncIssueMutable.value = "No se pudo sincronizar: ${it.message}"; timber.log.Timber.w(it, "No se pudo sincronizar la biblioteca local") }

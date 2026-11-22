@@ -4470,8 +4470,8 @@ internal fun QueuePane(
                 val origIdx = entry.index
                 val movable = visibleQueue.size >= 2 && origIdx >= upcomingFrom
                 ReorderableItem(reorderState, key, enabled = movable) { dragging ->
-                    // Se mueve manteniendo pulsada la fila y arrastrando; sin botones.
-                    Column(rowPadding.then(if (movable) Modifier.longPressDraggableHandle() else Modifier)) {
+                    // Se mueve pulsando la fila y arrastrando (ratón o trackpad), sin esperar ni botones.
+                    Column(rowPadding.then(if (movable) Modifier.draggableHandle() else Modifier)) {
                         QueueRowDesktop(
                             refined = refined,
                             index = origIdx + 1,

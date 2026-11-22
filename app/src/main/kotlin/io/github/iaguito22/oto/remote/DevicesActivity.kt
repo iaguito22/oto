@@ -43,6 +43,7 @@ class DevicesActivity : ComponentActivity() {
             var details by remember { mutableStateOf(false) }
             var confirmDisconnect by remember { mutableStateOf(false) }
             var result by remember { mutableStateOf<String?>(null) }
+            var paired by remember { mutableStateOf(devices.canResume) }
             fun action(block:suspend ()->Unit) {
                 if(busy) return
                 busy=true; error=null; result=null
@@ -52,48 +53,64 @@ class DevicesActivity : ComponentActivity() {
                     finally { busy=false }
                 }
             }
+            fun scan() {
+                GmsBarcodeScanning.getClient(this@DevicesActivity).startScan()
+                    .addOnSuccessListener { scan -> runCatching { devices.pair(scan.rawValue ?: error("Código vacío")); paired=true }.onFailure { error=it.message } }
+                    .addOnFailureListener { error=it.message }
+            }
+            val connected = remote!=null
+            val linked = connected || paired
+            val faint = MaterialTheme.colorScheme.onSurface.copy(alpha=.6f)
             Surface(Modifier.fillMaxSize()) {
                 Column(Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal=24.dp).padding(bottom=28.dp), verticalArrangement=Arrangement.spacedBy(18.dp)) {
                     Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                         RemoteIcon(ImageVector.vectorResource(R.drawable.ic_arrow_back),"Volver") { finish() }
                         Text("Dispositivos",style=MaterialTheme.typography.titleMedium)
                     }
-                    DeviceIdentity(remote?.optString("name") ?: "Conectar con Oto",remote!=null)
-                    Text("Tus listas y Me gusta de Oto se sincronizan entre los dispositivos vinculados cuando están conectados. Los Me gusta de YouTube Music se mantienen en una lista aparte.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.6f))
-                    if(remote==null) {
-                        Text("Tu música puede seguir en el ordenador. Conecta ambos a la misma red y escanea el QR de Oto Desktop.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.6f))
-                        Button(onClick={ GmsBarcodeScanning.getClient(this@DevicesActivity).startScan().addOnSuccessListener { scan -> runCatching { devices.pair(scan.rawValue ?: error("Código vacío")) }.onFailure { error=it.message } }.addOnFailureListener { error=it.message } },shape=RoundedCornerShape(18.dp),modifier=Modifier.fillMaxWidth().height(54.dp)) {
-                            Icon(ImageVector.vectorResource(R.drawable.ic_link_qr),null,Modifier.size(20.dp))
-                            Spacer(Modifier.width(10.dp))
-                            Text("Escanear código QR",color=MaterialTheme.colorScheme.onPrimary)
+                    // Primero el estado del vínculo; debajo, mover la música y gestionar el enlace.
+                    DeviceIdentity(
+                        remote?.optString("name")?.takeIf { it.isNotBlank() && it!="null" } ?: if(linked) "Oto Desktop" else "Vincula un ordenador",
+                        when { connected -> "Conectado · Red local"; linked -> "Sin conexión"; else -> "Sin vincular" },
+                        connected,
+                    )
+                    when {
+                        connected -> TransferChoices("Este móvil","El ordenador",!busy,remote!!.optString("id").let { it.isNotBlank() && it!="null" },local.id!=null, { action { devices.transferHere();result="La música continúa aquí" } }, { action { devices.transferThere();result="La música continúa en el ordenador" } })
+                        linked -> {
+                            Text("Oto reintentará la conexión. Comprueba que los dos equipos estén en la misma red y que Oto esté abierto en el ordenador.",style=MaterialTheme.typography.bodyMedium,color=faint)
+                            OutlinedButton(onClick=::scan,shape=RoundedCornerShape(16.dp)) { Text("Volver a escanear el QR") }
                         }
-                        Text(status,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.45f))
-                    } else {
-                        RemoteActions(devices.link)
-                        TransferChoices("Este móvil","El ordenador",!busy,remote!!.optString("id").let { it.isNotBlank() && it!="null" },local.id!=null, { action { devices.transferHere();result="La música continúa aquí" } }, { action { devices.transferThere();result="La música continúa en el ordenador" } })
+                        else -> {
+                            Text("Conecta los dos equipos a la misma red. En Oto Desktop, abre Dispositivos y escanea su código.",style=MaterialTheme.typography.bodyMedium,color=faint)
+                            Button(onClick=::scan,shape=RoundedCornerShape(18.dp),modifier=Modifier.fillMaxWidth().height(54.dp)) {
+                                Icon(ImageVector.vectorResource(R.drawable.ic_link_qr),null,Modifier.size(20.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Text("Escanear código QR",color=MaterialTheme.colorScheme.onPrimary)
+                            }
+                        }
                     }
                     if(busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                     result?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.primary) }
                     error?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error) }
-                    syncIssue?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error) }
-                    if(devices.enabled || remote!=null) {
+                    if(linked) {
                         HorizontalDivider(color=MaterialTheme.colorScheme.onSurface.copy(alpha=.07f))
-                        RemoteDisclosure("Conexión y cuenta",if(remote!=null) "Vinculado" else "Sin conexión",details,{details=!details})
-                        AnimatedVisibility(details) {
-                            Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
-                                syncNotice?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.55f)) }
-                                if(remote!=null) {
-                                    OutlinedButton(enabled=!busy,onClick={confirmAccount=true},shape=RoundedCornerShape(16.dp),modifier=Modifier.fillMaxWidth()) { Text("Compartir cuenta") }
-                                    Text("Inicia sesión en el ordenador con tu cuenta del móvil.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.45f))
-                                }
-                                if(accountSent) Text("Cuenta enviada al ordenador",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.primary)
-                                TextButton(onClick={confirmDisconnect=true}) { Text("Desvincular",color=MaterialTheme.colorScheme.error) }
-                            }
+                        Column(verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                            Text("Cuenta y sincronización",style=MaterialTheme.typography.titleSmall)
+                            Text(if(connected) "Tus listas y Me gusta de Oto se sincronizan en la red local. Los Me gusta de YouTube Music van en su propia lista." else "La sincronización se reanudará al conectar.",style=MaterialTheme.typography.bodySmall,color=faint)
+                            syncNotice?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurface.copy(alpha=.55f)) }
+                            syncIssue?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error) }
+                            OutlinedButton(enabled=connected && !busy,onClick={confirmAccount=true},shape=RoundedCornerShape(16.dp),modifier=Modifier.fillMaxWidth()) { Text("Compartir cuenta") }
+                            Text(if(accountSent) "Cuenta enviada al ordenador" else "Inicia sesión en el ordenador con tu cuenta del móvil.",style=MaterialTheme.typography.bodySmall,color=if(accountSent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha=.45f))
                         }
                     }
+                    HorizontalDivider(color=MaterialTheme.colorScheme.onSurface.copy(alpha=.07f))
+                    RemoteDisclosure("Conexión",status,details,{details=!details})
+                    AnimatedVisibility(details) {
+                        Text("La conexión es directa entre los dos equipos, sin pasar por internet.",style=MaterialTheme.typography.bodySmall,color=faint)
+                    }
+                    if(linked) TextButton(onClick={confirmDisconnect=true}) { Text("Desvincular",color=MaterialTheme.colorScheme.error) }
                 }
             }
-            if(confirmDisconnect) AlertDialog(onDismissRequest={confirmDisconnect=false},shape=RoundedCornerShape(24.dp),title={Text("Desvincular el ordenador")},text={Text("Se cerrará la conexión local. Tu música y tus listas se conservarán.")},confirmButton={TextButton(onClick={confirmDisconnect=false;devices.disconnect()}){Text("Desvincular",color=MaterialTheme.colorScheme.error)}},dismissButton={TextButton(onClick={confirmDisconnect=false}){Text("Cancelar")}})
+            if(confirmDisconnect) AlertDialog(onDismissRequest={confirmDisconnect=false},shape=RoundedCornerShape(24.dp),title={Text("Desvincular el ordenador")},text={Text("Se cerrará la conexión local. Tu música y tus listas se conservarán.")},confirmButton={TextButton(onClick={confirmDisconnect=false;devices.disconnect();paired=false}){Text("Desvincular",color=MaterialTheme.colorScheme.error)}},dismissButton={TextButton(onClick={confirmDisconnect=false}){Text("Cancelar")}})
             if(confirmAccount) AlertDialog(
                 onDismissRequest={confirmAccount=false},
                 shape=RoundedCornerShape(24.dp),

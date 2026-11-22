@@ -168,12 +168,12 @@ internal fun RemoteDisclosure(title: String, subtitle: String, expanded: Boolean
 }
 
 @Composable
-internal fun DeviceIdentity(name: String, connected: Boolean) {
+internal fun DeviceIdentity(name: String, subtitle: String, connected: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         Box(Modifier.size(52.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = .1f), RoundedCornerShape(18.dp)), contentAlignment = Alignment.Center) { Icon(ImageVector.vectorResource(R.drawable.ic_link_devices), null, Modifier.size(27.dp), tint = MaterialTheme.colorScheme.primary) }
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Text(if (connected) "Conectado · Red local" else "Tu música, entre dispositivos", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary.copy(alpha = .7f))
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = if (connected) MaterialTheme.colorScheme.primary.copy(alpha = .8f) else MaterialTheme.colorScheme.onSurface.copy(alpha = .5f))
         }
     }
 }
