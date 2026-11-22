@@ -69,7 +69,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import io.github.iaguito22.oto.OtoApp
 import io.github.iaguito22.oto.R
 import kotlinx.coroutines.launch
@@ -244,29 +247,32 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
 
     val clock = remember { LyricsClock() }
     val covered = LocalCovered.current
-    LaunchedEffect(id, playing) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(id, playing, lifecycle) {
         // Se ancla a la posición y avanza con el tiempo del fotograma; si el reproductor se separa mucho (un salto,
         // un corte), se vuelve a anclar, y si se separa poco se le acerca sin que se note.
-        if (!playing) {
-            while (true) { clock.ms = connection.position() + LEAD_MS; delay(200) }
-        }
-        var anchorPos = connection.position().toDouble()
-        var anchorT = -1L
-        while (true) {
-            // Tapada por una hoja se queda quieta: se ve desenfocada a través de ella, y moverla obligaba a desenfocar
-            // otra vez toda la pantalla de detrás en cada fotograma. Al destaparse, vuelve a anclarse.
-            if (covered()) {
-                snapshotFlow { covered() }.first { !it }
-                anchorPos = connection.position().toDouble()
-                anchorT = -1L
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            if (!playing) {
+                while (true) { clock.ms = connection.position() + LEAD_MS; delay(200) }
             }
-            withFrameNanos { now ->
-            if (anchorT < 0) anchorT = now
-            val est = anchorPos + (now - anchorT) / 1e6
-            val real = connection.position().toDouble()
-            val diff = real - est
-            if (abs(diff) > 180) { anchorPos = real; anchorT = now } else anchorPos += diff * 0.08
-            clock.ms = (anchorPos + (now - anchorT) / 1e6).toLong() + LEAD_MS
+            var anchorPos = connection.position().toDouble()
+            var anchorT = -1L
+            while (true) {
+                // Tapada por una hoja se queda quieta: se ve desenfocada a través de ella, y moverla obligaba a desenfocar
+                // otra vez toda la pantalla de detrás en cada fotograma. Al destaparse, vuelve a anclarse.
+                if (covered()) {
+                    snapshotFlow { covered() }.first { !it }
+                    anchorPos = connection.position().toDouble()
+                    anchorT = -1L
+                }
+                withFrameNanos { now ->
+                    if (anchorT < 0) anchorT = now
+                    val est = anchorPos + (now - anchorT) / 1e6
+                    val real = connection.position().toDouble()
+                    val diff = real - est
+                    if (abs(diff) > 180) { anchorPos = real; anchorT = now } else anchorPos += diff * 0.08
+                    clock.ms = (anchorPos + (now - anchorT) / 1e6).toLong() + LEAD_MS
+                }
             }
         }
     }
