@@ -75,7 +75,6 @@ import androidx.compose.ui.zIndex
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Tune
-import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import io.github.iaguito22.oto.importer.SourceList
@@ -4471,7 +4470,7 @@ internal fun QueuePane(
                 val origIdx = entry.index
                 val movable = visibleQueue.size >= 2 && origIdx >= upcomingFrom
                 ReorderableItem(reorderState, key, enabled = movable) { dragging ->
-                    // Se arrastra desde el asa o manteniendo pulsada la fila.
+                    // Se mueve manteniendo pulsada la fila y arrastrando; sin botones.
                     Column(rowPadding.then(if (movable) Modifier.longPressDraggableHandle() else Modifier)) {
                         QueueRowDesktop(
                             refined = refined,
@@ -4482,7 +4481,6 @@ internal fun QueuePane(
                             artwork = entry.artwork,
                             isCurrent = if (currentIndex != null) origIdx == currentIndex else entry.id == currentMediaId,
                             accent = palette.primary,
-                            dragModifier = if (movable) Modifier.draggableHandle() else null,
                             isDragging = dragging,
                             onClick = { onSkipTo(origIdx) },
                             onRemove = { onRemove(origIdx) },
@@ -4716,7 +4714,6 @@ private fun QueueRowDesktop(
     artwork: String? = null,
     isCurrent: Boolean,
     accent: Color,
-    dragModifier: Modifier?,
     isDragging: Boolean,
     onClick: () -> Unit,
     onRemove: () -> Unit,
@@ -4832,25 +4829,10 @@ private fun QueueRowDesktop(
         }
         Row(
             horizontalArrangement = Arrangement.spacedBy(0.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (dragModifier != null) Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .pointerHoverIcon(PointerIcon(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.MOVE_CURSOR)))
-                    .then(dragModifier),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.DragHandle,
-                    contentDescription = "Arrastrar para mover",
-                    tint = if (isDragging) accent else Color.White.copy(alpha = .38f + .27f * hoverAmount),
-                    modifier = Modifier.size(18.dp),
-                )
-            }
             Box(
                 modifier = Modifier
                     .size(28.dp)
-                    .graphicsLayer { alpha = if (refined && !isDragging) hoverAmount else 1f }
+                    .graphicsLayer { alpha = if (refined) hoverAmount * (1f - dragAmount) else 1f }
                     .clip(CircleShape)
                     .trackLink(onRemove, "Quitar"),
                 contentAlignment = Alignment.Center,
