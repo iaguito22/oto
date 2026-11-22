@@ -13,7 +13,7 @@
 - **El agente no oye.** Medir por señal y logs, y dejar los cambios como «sin oír» hasta que Iago lo confirme con auriculares. Confirmado por Iago (19/11): tras un cuadre de beats la entrante ya no pierde calidad en el PC.
 - **Ganancia nunca por encima de 1** al acabar una mezcla (`incomingMixGain`, `mixInGain`). Dejar margen antes de PCM16; sin recorte en niveles normales (`softClip` lineal hasta 0,89).
 - **El tempo vuelve a 1×.** En el PC, `cancelCrossfade()` también se usa para preparar la siguiente mezcla: no debe cancelar `tempoReturnJob` (solo `startCurrentTrack`), y el `finally` de la vuelta deja siempre 1×. Sin test de integración todavía; `DjTailAfterTest` es de la cola del DJ, no de esto.
-- **Proteger estribillos y letra:** no salir ni entrar en mitad de una frase cantada. Si no hay hueco, mejor sin mezcla que un corte malo.
+- **Proteger estribillos y letra:** los planes del DJ evitan salir o entrar en mitad de una frase cantada. Si el plan no se puede ejecutar, se intenta un fundido sencillo cerca de la salida, con prioridad para un hueco fuera del estribillo.
 - **Género con continuidad:** la elección mira el género del destino, y una racha larga lo relaja poco a poco.
 - **No ajustar pesos de estilos** sin antes medir una tanda y comparar con la anterior.
 - PC y Android planifican distinto: Android usa puentes WAV pre-renderizados (`DjBridgePlanner` + `DjBridgeRenderer`); el PC mezcla en vivo con `DjTransitionPlanner` y WSOLA. Comparten análisis, secciones y protección de estribillos. Un arreglo en `core` se comprueba en las dos.

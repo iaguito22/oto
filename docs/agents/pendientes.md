@@ -10,7 +10,6 @@
 
 ## Por comprobar
 
-- Android: el aviso «Preparando la mezcla» de la cola en listas normales cuando el plan no mezcla (en el PC está arreglado con `nextMixState`).
 - «Diles» → «Ram Pam Pam» (Android): causa sin confirmar; mirar `oto.mix` si vuelve.
 - CI `Tests` en Linux: aún no ha pasado entera (fallos de red de GitHub). La prueba de cancelación de descargas tiene márgenes de 30 s; ver si aguanta.
 - Escucha de las mezclas del DJ en general (el agente no oye). Confirmado por Iago el 19/11: «Faint» va a tiempo y no hay distorsión tras un cuadre de beats.

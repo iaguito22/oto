@@ -139,6 +139,7 @@ internal fun DjSpace(player: DesktopPlayerConnection, palette: ArtworkPalette, o
                             accent = accent,
                         ) { if (active) player.toggle() else start(mode) }
                         if (active) {
+                            DjButton("Volver a empezar DJ", MobileIcons.play, accent, filled = false, outlined = !embedded) { start(mode) }
                             DjButton("Otro ambiente", MobileIcons.skipNext, accent, filled = false, outlined = !embedded) { player.skipDjTanda() }
                             if (mode == DjMode.Adhd) DjButton(if (fullOnce) "Suena entera" else "Oír esta entera", MobileIcons.timer, accent, filled = fullOnce, outlined = !embedded) {
                                 if (!fullOnce) player.playDjFullOnce()
