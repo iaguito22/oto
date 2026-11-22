@@ -92,7 +92,9 @@ object Search {
             s.artists.any { Matcher.norm(it.name) in taste.artists } -> 3
             else -> 0
         }
-        songs = songs.withIndex().sortedBy { (i, s) -> i - boost(s) }.map { it.value }
+        songs = songs.mapIndexed { i, song -> (i - boost(song)) to song }
+            .sortedBy { it.first }
+            .map { it.second }
 
         // Arriba, lo que YouTube Music da por principal; si es una canción, la versión de canción (o la tuya, si la
         // tienes y también responde).

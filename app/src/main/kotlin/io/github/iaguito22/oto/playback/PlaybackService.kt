@@ -176,6 +176,7 @@ class PlaybackService : MediaLibraryService() {
     private var duckJob: Job? = null
     private val analysisCache by lazy { AudioAnalysisCache() }
     private val audioAnalyzer by lazy { AndroidAudioAnalyzer(cache, app.downloads, analysisCache) }
+    private var analysisWatch: Job? = null
     private val sliceDecoder by lazy {
         AndroidAudioSliceDecoder(
             audioCache = cache,
@@ -299,28 +300,6 @@ class PlaybackService : MediaLibraryService() {
             },
         )
         crossfade.start()
-        // La que suena y la siguiente se terminan de bajar mientras suena esta: en cuanto están enteras, se analizan
-        // enteras (lo de la precarga era solo el principio y daba BPM dudosos).
-        scope.launch {
-            while (isActive) {
-                delay(ANALYSIS_WATCH_MS)
-                if (!player.isPlaying) continue
-                val at = player.currentMediaItemIndex
-                for (i in listOf(at, player.nextMediaItemIndex).distinct().filter { it in 0 until player.mediaItemCount }) {
-                    val id = player.getMediaItemAt(i).mediaId
-                    if (analysisCache.get(id)?.coversWholeSong == true) continue
-                    val key = keyOf(id)
-                    launch(Dispatchers.Default) {
-                        val updated = runCatching { audioAnalyzer.analyzeIfCached(id, key) }.getOrNull()
-                        if (updated?.coversWholeSong == true) {
-                            withContext(Dispatchers.Main) {
-                                publishDjSessionExtras()
-                            }
-                        }
-                    }
-                }
-            }
-        }
         AudioLevels.onChunk = { sr, bass, full -> recordLiveAudioChunk(sr, bass, full) }
 
         val sessionPlayer = object : ForwardingSimpleBasePlayer(player) {
@@ -1293,6 +1272,29 @@ class PlaybackService : MediaLibraryService() {
         return !abortIf()
     }
 
+    private fun watchAnalysisWhilePlaying() = scope.launch {
+        // La pista actual y la siguiente se terminan de bajar mientras suenan. La comprobación periódica
+        // solo hace falta durante la reproducción; un análisis ya iniciado puede terminar tras pausar.
+        while (isActive) {
+            delay(ANALYSIS_WATCH_MS)
+            if (!player.isPlaying) continue
+            val at = player.currentMediaItemIndex
+            for (i in listOf(at, player.nextMediaItemIndex).distinct().filter { it in 0 until player.mediaItemCount }) {
+                val id = player.getMediaItemAt(i).mediaId
+                if (analysisCache.get(id)?.coversWholeSong == true) continue
+                val key = keyOf(id)
+                scope.launch(Dispatchers.Default) {
+                    val updated = runCatching { audioAnalyzer.analyzeIfCached(id, key) }.getOrNull()
+                    if (updated?.coversWholeSong == true) {
+                        withContext(Dispatchers.Main) {
+                            publishDjSessionExtras()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun startAdhdMonitor(key: Pair<String, Int>, seg: AdhdSegment) {
         adhdMonitorJob?.cancel()
         adhdMonitorJob = scope.launch {
@@ -1997,6 +1999,8 @@ class PlaybackService : MediaLibraryService() {
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            analysisWatch?.cancel()
+            analysisWatch = if (isPlaying) watchAnalysisWhilePlaying() else null
             if (isPlaying) {
                 if (playStartedAtMs == 0L) playStartedAtMs = SystemClock.elapsedRealtime()
                 player.currentMediaItem?.mediaId?.let(::countInHistory)
