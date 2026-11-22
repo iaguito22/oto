@@ -27,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -46,6 +47,7 @@ import io.github.iaguito22.oto.desktop.isWindowsDesktop
 import io.github.iaguito22.oto.desktop.DesktopGraphics
 import io.github.iaguito22.oto.desktop.desktopVersion
 import io.github.iaguito22.oto.desktop.DesktopPreferences
+import io.github.iaguito22.oto.desktop.LocalDesktopShortcutCapture
 import io.github.iaguito22.oto.importer.ImportState
 import io.github.iaguito22.oto.playback.Tier
 import kotlinx.coroutines.Dispatchers
@@ -258,14 +260,20 @@ private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).t
 
 @Composable private fun ShortcutSetting(shortcut:String,issue:String?,accent:Color,onShortcut:(String)->Unit) {
     var recording by remember { mutableStateOf(false) }
+    var focused by remember { mutableStateOf(false) }
     var hint by remember { mutableStateOf<String?>(null) }
     val focus=remember { FocusRequester() }
+    val capture = LocalDesktopShortcutCapture.current
+    DisposableEffect(recording, focused, capture) {
+        capture(recording && focused)
+        onDispose { capture(false) }
+    }
     LaunchedEffect(recording) { if(recording) focus.requestFocus() }
     SettingFrame(MobileIcons.settings,accent) {
         Text("Atajo global",style=OtoType.rowTitle)
         Text("Muestra u oculta todas las ventanas de Oto.",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))
         Box(Modifier.padding(top=6.dp).clip(RoundedCornerShape(50)).background(Color.White.copy(alpha=if(recording).12f else .06f))
-            .focusRequester(focus).onPreviewKeyEvent { e ->
+            .focusRequester(focus).onFocusChanged { focused = it.isFocused }.onPreviewKeyEvent { e ->
                 if(!recording) false else {
                     if(e.type==KeyEventType.KeyDown) {
                         if(e.key==Key.Escape) { recording=false;hint=null }

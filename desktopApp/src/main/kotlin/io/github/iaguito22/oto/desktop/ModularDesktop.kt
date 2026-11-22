@@ -153,7 +153,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     val playerSolo = playerOpen && docking.layout.group(DockId.Player).members.size == 1
     LaunchedEffect(playerSolo) { if(!playerSolo) { pinned=false; kv.putString("pinned","false") } }
     var libraryRequest by remember { mutableStateOf(0 to 0) }
-    var librarySearchFocused by remember { mutableStateOf(false) }
+    var librarySearchRequested by remember { mutableStateOf(false) }
     var savingTrack by remember { mutableStateOf<Heard?>(null) }
     fun openSave(track: Heard, origin: String) {
         timber.log.Timber.i("Abrir Guardar: %s", origin)
@@ -273,7 +273,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             event.isCtrlPressed && event.key == Key.B -> { nowPlaying.id?.let{openSave(Heard(it,nowPlaying.title,nowPlaying.artist,nowPlaying.artwork,nowPlaying.artists.firstOrNull()?.second), "atajo Ctrl+B")};true }
             event.key == Key.F1 -> { libraryRequest=(libraryRequest.first+1) to 0;menuOpen=true;true }
             event.key == Key.F2 -> { libraryRequest=(libraryRequest.first+1) to 1;menuOpen=true;true }
-            event.key == Key.Spacebar || event.key == Key.MediaPlayPause -> { playPause();true }
+            event.key == Key.MediaPlayPause -> { playPause();true }
             event.isCtrlPressed && event.key == Key.DirectionRight -> { skipNext();true }
             event.isCtrlPressed && event.key == Key.DirectionLeft -> { skipPrevious();true }
             event.isCtrlPressed && event.key == Key.DirectionUp -> { player.adjustVolume(.04f);true }
@@ -281,6 +281,17 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             else -> false
         }
     }
+    fun typeToSearch(character: Char) {
+        val prefix = if (librarySearchRequested) menu.state.value.query else ""
+        menu.onQuery(prefix + character)
+        if (!librarySearchRequested) {
+            options = false
+            librarySearchRequested = true
+            libraryWindow.isMinimized = false
+            menuOpen = true
+        }
+    }
+    val typingShortcuts = DesktopTypingShortcuts(::playPause, ::typeToSearch)
     @Composable fun WindowOptions(open: Boolean, setOpen: (Boolean) -> Unit) {
         Box {
             SmallAction(Icons.Rounded.MoreHoriz,"Opciones") { setOpen(!open); docking.trace("options=${!open}") }
@@ -312,7 +323,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         volume=volume, setVolume=player::setVolume, title=nowPlaying.title, artist=nowPlaying.artist, artwork=nowPlaying.artwork)
     val taskbarPlayback = TaskbarPlayback(nowPlaying.id != null, nowPlaying.playing, ::skipPrevious, ::playPause, ::skipNext)
     ModuleWindow("Reproductor", playerWindow, playerOpen && !windowsHidden, { closePrimary(DockId.Player) }, pinned && playerSolo, accent = palette.primary, dock=docking, dockId=DockId.Player, taskbarPlayback = taskbarPlayback,
-        keys = ::shortcuts, onWindow = { playerFrame = it }, immersive = true, chrome = chrome,
+        keys = ::shortcuts, typingShortcuts = typingShortcuts, onWindow = { playerFrame = it }, immersive = true, chrome = chrome,
         minimum = if(form == PlayerForm.Vertical) DpSize(96.dp,240.dp) else if(form == PlayerForm.Horizontal) DpSize(280.dp,108.dp) else DpSize(260.dp,370.dp),
         backgroundArtwork = if(artworkBackground) backdrop else null, backgroundOpacity=backdropOpacity, actionsOnRight = form == PlayerForm.Horizontal, hover = {pointerInside = it}, extra = {
             WindowOptions(options,{options=it})
@@ -362,8 +373,8 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         }
         PlayerContents()
     }
-    ModuleWindow("Dispositivos", rememberModuleState("devices", 410, 720), devicesOpen && !windowsHidden, { devicesOpen = false }, minimum=DpSize(360.dp,480.dp), accent=palette.primary, keys = ::shortcuts) { DevicesPane(devices) { devices.close(); OtoDirs.keyValue("local_link").putString("secret", null); deviceRevision++ } }
-    ModuleWindow("Letra", lyricsWindow, lyricsOpen && !windowsHidden, { lyricsOpen = false }, dock=docking, dockId=DockId.Lyrics, taskbarPlayback = taskbarPlayback, keys = ::shortcuts, chrome=lyricsHover, backgroundArtwork = if(artworkBackground) backdrop else null, backgroundOpacity=backdropOpacity, hover={lyricsHover=it}, extra={
+    ModuleWindow("Dispositivos", rememberModuleState("devices", 410, 720), devicesOpen && !windowsHidden, { devicesOpen = false }, minimum=DpSize(360.dp,480.dp), accent=palette.primary, keys = ::shortcuts, typingShortcuts = typingShortcuts) { DevicesPane(devices) { devices.close(); OtoDirs.keyValue("local_link").putString("secret", null); deviceRevision++ } }
+    ModuleWindow("Letra", lyricsWindow, lyricsOpen && !windowsHidden, { lyricsOpen = false }, dock=docking, dockId=DockId.Lyrics, taskbarPlayback = taskbarPlayback, keys = ::shortcuts, typingShortcuts = typingShortcuts, chrome=lyricsHover, backgroundArtwork = if(artworkBackground) backdrop else null, backgroundOpacity=backdropOpacity, hover={lyricsHover=it}, extra={
         if(lyricsHover) {
             SmallAction(Icons.Rounded.Remove,"Letra más pequeña") { changeLyricsScale(-.1f) }
             SmallAction(Icons.Rounded.Add,"Letra más grande") { changeLyricsScale(.1f) }
@@ -388,7 +399,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             }
         }
     }
-    ModuleWindow("Cola", queueWindow, queueOpen && !windowsHidden, { queueOpen = false }, dock=docking, dockId=DockId.Queue, taskbarPlayback = taskbarPlayback, keys = ::shortcuts, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity) {
+    ModuleWindow("Cola", queueWindow, queueOpen && !windowsHidden, { queueOpen = false }, dock=docking, dockId=DockId.Queue, taskbarPlayback = taskbarPlayback, keys = ::shortcuts, typingShortcuts = typingShortcuts, backgroundArtwork = backdrop, backgroundOpacity=backdropOpacity) {
         Box(Modifier.fillMaxSize().padding(start=20.dp,end=20.dp,bottom=20.dp,top=4.dp)) {
             QueuePane(
                 queue, localNow.id, shuffle, loop, palette,
@@ -416,10 +427,17 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         extra={
             SmallAction(Icons.Rounded.PlayArrow,if(playerOpen) "Cerrar reproductor" else "Abrir reproductor",active=playerOpen) { docking.toggle(DockId.Player,DockId.Library) }
             SmallAction(MobileIcons.lyrics,if(lyricsOpen) "Cerrar letra" else "Abrir letra",active=lyricsOpen) { docking.toggle(DockId.Lyrics,DockId.Library) }
-            SmallAction(MobileIcons.queueMusic,if(queueOpen) "Cerrar cola" else "Abrir cola",active=queueOpen) { docking.toggle(DockId.Queue,DockId.Library) }        },keys={event -> if(librarySearchFocused && event.key==Key.Spacebar) false else shortcuts(event)}) {
-        LibrarySpace(player,prefs,menu,importer,account,cloud,login,downloads,palette,{openSave(it, "biblioteca")},{devicesOpen=true},libraryRequest,jump,artworkBackground,{ artworkBackground=it;kv.putString("artwork_background",it.toString()) },{librarySearchFocused=it},{ devices.requestAccount(); devicesOpen=true }, backdrop != null, backdropOpacity,{backdropOpacity=it;kv.putString("artwork_opacity",it.toString())}, { val src=source; if(src?.item != null || src?.local != null) jump=LibraryJump(jump.version+1,src?.item,src?.local) else if(src?.kind != "DJ") queueOpen=true }, shortcut,shortcutIssue,{shortcut=it;kv.putString("shortcut",it)},playerVisible=playerOpen && menuOpen && docking.layout.group(DockId.Library).members.contains(DockId.Player),remoteLink=devices.link,following=mirrored?.now)
+            SmallAction(MobileIcons.queueMusic,if(queueOpen) "Cerrar cola" else "Abrir cola",active=queueOpen) { docking.toggle(DockId.Queue,DockId.Library) }
+        }, keys = { event ->
+            if (event.type == KeyEventType.KeyDown && event.key == Key.Escape && menu.state.value.query.isNotBlank()) {
+                menu.onQuery("")
+                true
+            } else shortcuts(event)
+        }, typingShortcuts = typingShortcuts) {
+        LibrarySpace(player,prefs,menu,importer,account,cloud,login,downloads,palette,{openSave(it, "biblioteca")},{devicesOpen=true},libraryRequest,jump,artworkBackground,{ artworkBackground=it;kv.putString("artwork_background",it.toString()) },{ devices.requestAccount(); devicesOpen=true }, backdrop != null, backdropOpacity,{backdropOpacity=it;kv.putString("artwork_opacity",it.toString())}, { val src=source; if(src?.item != null || src?.local != null) jump=LibraryJump(jump.version+1,src?.item,src?.local) else if(src?.kind != "DJ") queueOpen=true }, shortcut,shortcutIssue,{shortcut=it;kv.putString("shortcut",it)},playerVisible=playerOpen && menuOpen && docking.layout.group(DockId.Library).members.contains(DockId.Player),remoteLink=devices.link,following=mirrored?.now,
+            searchRequested = librarySearchRequested, onSearchRequested = { librarySearchRequested = false })
     }
-    ModuleWindow("Guardar",rememberModuleState("save",380,540),savingTrack!=null && !windowsHidden,{savingTrack=null}) {
+    ModuleWindow("Guardar",rememberModuleState("save",380,540),savingTrack!=null && !windowsHidden,{savingTrack=null}, typingShortcuts = typingShortcuts) {
         savingTrack?.let { track ->
             SaveSpace(track, prefs, palette) { reaction ->
                 if (mirrored == null) player.reportDjReaction(track.id, reaction)
@@ -504,6 +522,7 @@ private fun SmallAction(icon: ImageVector, label: String, active:Boolean=false, 
 internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, close: () -> Unit, pinned: Boolean = false, accent: Color = Color(0xFFE2EADB),
     dock: DockSession? = null, dockId: DockId? = null,
     keys: (KeyEvent) -> Boolean = { false },
+    typingShortcuts: DesktopTypingShortcuts? = null,
     taskbarPlayback: TaskbarPlayback? = null,
     immersive:Boolean=false, chrome:Boolean=true, hover:(Boolean)->Unit={}, minimum:DpSize=DpSize((dockId?.minWidth ?: 260).dp,(dockId?.minHeight ?: 250).dp),
     backgroundArtwork:ImageBitmap?=null, backgroundOpacity:Float=1f, actionsOnRight:Boolean=false, onWindow: (java.awt.Window) -> Unit = {}, extra: @Composable () -> Unit = {}, content: @Composable () -> Unit) {
@@ -543,6 +562,7 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
     Window(onCloseRequest = close, state = windowState, visible = true, title = "Oto · $title", undecorated = true, transparent = true, alwaysOnTop = pinned,
         resizable = dock == null || dockId == null,
         icon = painterResource("oto-icon.png"), onKeyEvent = { if (keys(it)) true else if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { close(); true } else false }) {
+        val shortcutCapture = rememberDesktopTypingShortcuts(window, typingShortcuts.takeIf { visible })
         SmoothWheel.Driver(window)
         // Compose fija un único icono de 192 px y Windows lo reduce mal: darle todos los tamaños.
         DisposableEffect(window) { if (AppIcon.windowImages.isNotEmpty()) window.iconImages = AppIcon.windowImages; onDispose { } }
@@ -670,7 +690,7 @@ internal fun ModuleWindow(title: String, state: WindowState, visible: Boolean, c
                 }
             ), color = Color(0xFF171A18), shape = shape) {
                 val chromeAlpha by animateFloatAsState(if(chrome)1f else 0f,tween(180),label="windowChrome")
-                CompositionLocalProvider(LocalWindowTooltipEpoch provides tooltipEpoch) {
+                CompositionLocalProvider(LocalWindowTooltipEpoch provides tooltipEpoch, LocalDesktopShortcutCapture provides shortcutCapture) {
                 Box(Modifier.fillMaxSize().onPointerEvent(PointerEventType.Press) { if(registered && dock != null && dockId != null) dock.raise(dockId) }.onPointerEvent(PointerEventType.Enter){hover(true)}.onPointerEvent(PointerEventType.Exit){hover(false)}) {
                     if(backgroundArtwork != null) {
                         if(groupBounds != null && ownBounds != null && group != null && group.members.size > 1) {

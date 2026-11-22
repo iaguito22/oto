@@ -86,6 +86,7 @@ import com.metrolist.innertube.models.*
 import io.github.iaguito22.oto.*
 import io.github.iaguito22.oto.account.*
 import io.github.iaguito22.oto.desktop.BrowserLogin
+import io.github.iaguito22.oto.desktop.DesktopSearchField
 import io.github.iaguito22.oto.desktop.LocalWindowTooltipEpoch
 import io.github.iaguito22.oto.desktop.WindowWorkTrace
 import io.github.iaguito22.oto.OtoDirs
@@ -121,8 +122,9 @@ private data class LibraryDestination(
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuController,importer:Importer,
-    account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onSearchFocus:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={},playerVisible:Boolean=false,remoteLink:io.github.iaguito22.oto.remote.LocalLink?=null,following:io.github.iaguito22.oto.playback.NowPlaying?=null,showVolume:Boolean=true,embedded:Boolean=false,onEmbeddedSearch:()->Unit={},onEmbeddedLocation:(Int,String?)->Unit={ _,_ -> },
-    embeddedBack:Int=0,embeddedRecents:Boolean=false,onEmbeddedRecentsDismiss:()->Unit={},onEmbeddedRecentsFocus:(Boolean)->Unit={},onQuit:(()->Unit)?=null) {
+    account:Account,cloud:Cloud,login:BrowserLogin,downloads:DesktopDownloads,palette:ArtworkPalette,onSave:(Heard)->Unit,onDevices:()->Unit,navigation:Pair<Int,Int> = 0 to 0,jump:LibraryJump=LibraryJump(),artworkBackground:Boolean=false,onArtworkBackground:(Boolean)->Unit={},onAccountFromMobile:()->Unit={},floatingPanel:Boolean=false,backdropOpacity:Float=1f,onBackdropOpacity:(Float)->Unit={},onSource:()->Unit={},shortcut:String="CTRL + ALT + O",shortcutIssue:String?=null,onShortcut:(String)->Unit={},playerVisible:Boolean=false,remoteLink:io.github.iaguito22.oto.remote.LocalLink?=null,following:io.github.iaguito22.oto.playback.NowPlaying?=null,showVolume:Boolean=true,embedded:Boolean=false,onEmbeddedSearch:()->Unit={},onEmbeddedLocation:(Int,String?)->Unit={ _,_ -> },
+    embeddedBack:Int=0,embeddedRecents:Boolean=false,onEmbeddedRecentsDismiss:()->Unit={},onEmbeddedRecentsFocus:(Boolean)->Unit={},onQuit:(()->Unit)?=null,
+    searchRequested: Boolean = false, onSearchRequested: () -> Unit = {}) {
     val lists by prefs.playlists.collectAsState(initial=emptyList())
     val liked by prefs.likedList.collectAsState(initial=LocalPlaylist(LIKED_ID,"Me gusta",emptyList()))
     val history by prefs.history.collectAsState(initial=emptyList())
@@ -150,7 +152,21 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     val scope=rememberCoroutineScope()
     val snackbar=remember {SnackbarHostState()}
     val searchFocus=remember {FocusRequester()}
-    LaunchedEffect(Unit){kotlinx.coroutines.delay(120);if(!embedded)WindowWorkTrace.measure("biblioteca/foco") { searchFocus.requestFocus() }}
+    val windowFocused = searchRequested && androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
+    var requestedInitialFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(searchRequested, windowFocused) {
+        if (embedded) return@LaunchedEffect
+        if (searchRequested && windowFocused) {
+            withFrameNanos { }
+            WindowWorkTrace.measure("biblioteca/foco") { searchFocus.requestFocus() }
+            requestedInitialFocus = true
+            onSearchRequested()
+        } else if (!searchRequested && !requestedInitialFocus) {
+            kotlinx.coroutines.delay(120)
+            WindowWorkTrace.measure("biblioteca/foco") { searchFocus.requestFocus() }
+            requestedInitialFocus = true
+        }
+    }
     var section by remember {mutableStateOf("Tu música")}
     var preferencesPages by remember { mutableStateOf<List<String>>(emptyList()) }
     val preferencesPage = preferencesPages.lastOrNull()
@@ -377,7 +393,24 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 if(!embedded) Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                 Row(Modifier.weight(1f).height(48.dp).clip(CircleShape).background(Color.White.copy(alpha=.045f)).padding(start=16.dp,end=6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                     Icon(MobileIcons.search,null,Modifier.size(18.dp),tint=Color.White.copy(alpha=.35f))
-                    BasicTextField(state.query,{menu.onQuery(it);local=null;smartOpen=null},Modifier.weight(1f).onFocusChanged { onSearchFocus(it.isFocused);searchHasFocus=it.isFocused;if(!it.isFocused && !pressingRecents)recentsOpen=false }.focusRequester(searchFocus).onPointerEvent(PointerEventType.Press){recentsOpen=true}.onPreviewKeyEvent { e -> if(e.type==KeyEventType.KeyDown && e.key==Key.Escape && recentsOpen){recentsOpen=false;true} else false },textStyle=OtoType.body.copy(color=Color.White),cursorBrush=SolidColor(Color.White),singleLine=true,decorationBox={field -> if(state.query.isBlank())Text("Buscar canciones, artistas o listas",style=OtoType.body,color=Color.White.copy(alpha=.36f));field()})
+                    DesktopSearchField(state.query, { menu.onQuery(it); local = null; smartOpen = null },
+                        Modifier.weight(1f).onFocusChanged {
+                            searchHasFocus = it.isFocused
+                            if (!it.isFocused && !pressingRecents) recentsOpen = false
+                        }.focusRequester(searchFocus).onPointerEvent(PointerEventType.Press) { recentsOpen = true }
+                            .onPreviewKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                                    recentsOpen = false
+                                    menu.onQuery("")
+                                    focusManager.clearFocus()
+                                    true
+                                } else false
+                            },
+                        textStyle = OtoType.body.copy(color = Color.White), cursorBrush = SolidColor(Color.White),
+                        decorationBox = { field ->
+                            if (state.query.isBlank()) Text("Buscar canciones, artistas o listas", style = OtoType.body, color = Color.White.copy(alpha = .36f))
+                            field()
+                        })
                     if(state.query.isNotBlank())IconButton(onClick={menu.onQuery("")}){Icon(MobileIcons.close,"Limpiar búsqueda",Modifier.size(17.dp))}
                 }
                 Box(Modifier.size(48.dp).clip(CircleShape).background(Color.White.copy(alpha=.045f)),contentAlignment=Alignment.Center) {
