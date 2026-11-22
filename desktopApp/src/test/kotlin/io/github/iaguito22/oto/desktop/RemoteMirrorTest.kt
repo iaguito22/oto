@@ -78,4 +78,19 @@ class RemoteMirrorTest {
             assertEquals("m1", mirror.state.value?.now?.id)
         } finally { scope.cancel() }
     }
+
+    @Test fun followWaitsForThePhoneToHaveTheSong() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            // El móvil se trae la música: avisa antes de que su estado nuevo llegue aquí.
+            val remote = MutableStateFlow<JSONObject?>(JSONObject().put("playing", false))
+            val local = MutableStateFlow(NowPlaying(id = "m1", playing = false))
+            val mirror = RemoteMirror(remote, local, scope)
+            delay(200)
+            mirror.follow()
+            remote.value = phone(false)
+            withTimeout(2000) { mirror.state.first { it?.now?.id == "m1" } }
+            assertEquals(false, mirror.state.value?.now?.playing)
+        } finally { scope.cancel() }
+    }
 }

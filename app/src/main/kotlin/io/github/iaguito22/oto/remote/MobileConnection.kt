@@ -83,10 +83,13 @@ class MobileConnection(private val app: OtoApp) {
             app.scope.launch { runCatching { if (stamp == last) link.command(JSONObject().put("action", "transfer").put("state", state)) }.onFailure { timber.log.Timber.w(it, "No se pudo pasar la canción al ordenador") } }
         }
     }
+    // Pedido seguir al ordenador antes de que llegue su estado nuevo: se mantiene hasta ver una canción allí.
+    private var adopt = false
     private fun followRemote(state: JSONObject?) {
         val now = RemoteNow.of(state)
         val local = player.localState.value
-        val follow = RemoteNow.follow(followingMutable.value != null, local.id != null, local.playing, now)
+        val follow = RemoteNow.follow(followingMutable.value != null || adopt, local.id != null, local.playing, now)
+        if (now != null) adopt = false
         if (follow && state != null) { player.showRemote(state, mirror); followingMutable.value = now }
         else { player.hideRemote(); followingMutable.value = null }
     }
@@ -95,11 +98,15 @@ class MobileConnection(private val app: OtoApp) {
     private val replica = LibraryReplica(app.prefs, java.io.File(app.filesDir, "library-replica.json"))
     val syncNotice = replica.notice
     private val bridge = LinkedPlayback(adapter)
-    val link = LocalLink(app.scope, { adapter.snapshot().put("libraryHash",replica.digest()) }) { command ->
-        if(command.optString("action")=="library") replica.export()
-        else bridge.execute(command).also {
-            // Recibida aquí, aunque llegue en pausa, la gota vuelve a ser de este teléfono.
-            if(command.optString("action")=="transfer") withContext(Dispatchers.Main) { followingMutable.value = null; player.hideRemote() }
+    val link: LocalLink = LocalLink(app.scope, { adapter.snapshot().put("libraryHash",replica.digest()) }) { command ->
+        when(command.optString("action")) {
+            "library" -> replica.export()
+            // El ordenador se acaba de traer la música: el teléfono pasa a mostrarlo y controlarlo.
+            "follow" -> withContext(Dispatchers.Main) { adopt = true; followRemote(link.remote.value); JSONObject().put("ok", true) }
+            else -> bridge.execute(command).also {
+                // Recibida aquí, aunque llegue en pausa, la gota vuelve a ser de este teléfono.
+                if(command.optString("action")=="transfer") withContext(Dispatchers.Main) { adopt = false; followingMutable.value = null; player.hideRemote() }
+            }
         }
     }
     init {
@@ -160,13 +167,15 @@ class MobileConnection(private val app: OtoApp) {
         adapter.setPlaying(false)
         link.command(JSONObject().put("action","transfer").put("state",state))
         // Ya está en el ordenador, aunque en pausa: el teléfono pasa a mostrarlo y controlarlo.
-        link.remote.value?.let { now -> player.showRemote(now, mirror); followingMutable.value = RemoteNow.of(now) }
+        adopt = true; followRemote(link.remote.value)
     }
     suspend fun transferHere() = withContext(Dispatchers.Main) {
         val state=link.remote.value ?: error("No hay un dispositivo conectado")
         link.command(JSONObject().put("action","pause"))
         bridge.execute(JSONObject().put("action","transfer").put("state",state))
         // Traída aquí, aunque llegue en pausa, la gota vuelve a ser de este teléfono.
-        followingMutable.value = null; player.hideRemote()
+        adopt = false; followingMutable.value = null; player.hideRemote()
+        // Que el ordenador pase a mostrar lo de aquí aunque esté en pausa (uno antiguo no lo entiende).
+        runCatching { link.command(JSONObject().put("action","follow")) }
     }
 }

@@ -36,6 +36,8 @@ internal class RemoteMirror(remote: StateFlow<JSONObject?>, local: StateFlow<Now
     }
     @Volatile private var clock = Clock(0, 0, false, 0)
     private var following = false
+    // Pedido seguir al móvil antes de que llegue su estado nuevo: se mantiene hasta ver una canción allí.
+    private var adopt = false
     private var lastState: JSONObject? = null
     private var lastLocal: NowPlaying? = null
 
@@ -55,18 +57,19 @@ internal class RemoteMirror(remote: StateFlow<JSONObject?>, local: StateFlow<Now
     fun jump(ms: Long) { clock = clock.copy(base = ms, at = System.nanoTime() / 1_000_000); positionMutable.value = clock.now() }
 
     /** La música acaba de llegar aquí (aunque en pausa): deja de mostrar el móvil. */
-    @Synchronized fun release() { following = false; stateMutable.value = null }
+    @Synchronized fun release() { following = false; adopt = false; stateMutable.value = null }
 
     /** La música acaba de irse al móvil (aunque en pausa): pasa a mostrarlo y controlarlo desde aquí. */
     @Synchronized fun follow() {
-        following = true
-        val state = lastState ?: return
-        lastLocal?.let { update(state, it) }
+        adopt = true
+        lastLocal?.let { update(lastState, it) }
     }
 
     @Synchronized private fun update(state: JSONObject?, local: NowPlaying) {
         lastState = state; lastLocal = local
-        following = RemoteNow.follow(following, local.id != null, local.playing, RemoteNow.of(state))
+        val remote = RemoteNow.of(state)
+        following = RemoteNow.follow(following || adopt, local.id != null, local.playing, remote)
+        if (remote != null) adopt = false
         if (!following || state == null) { stateMutable.value = null; return }
         stateMutable.value = parse(state)
         val now = stateMutable.value!!.now

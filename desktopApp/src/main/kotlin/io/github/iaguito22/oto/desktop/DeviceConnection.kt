@@ -90,6 +90,8 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
                 }
                 JSONObject().put("ok", true)
             }
+            // El móvil se acaba de traer la música: el ordenador pasa a mostrarlo y controlarlo.
+            "follow" -> { mirror.follow(); JSONObject().put("ok", true) }
             // Recibida aquí, aunque llegue en pausa, deja de mostrarse lo del móvil.
             else -> bridge.execute(command).also { if (command.optString("action") == "transfer") mirror.release() }
         }
@@ -125,6 +127,8 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
         link.command(JSONObject().put("action", "pause"))
         bridge.execute(JSONObject().put("action", "transfer").put("state", state))
         mirror.release()
+        // Que el móvil pase a mostrar lo de aquí aunque esté en pausa (un móvil antiguo no lo entiende).
+        runCatching { link.command(JSONObject().put("action", "follow")) }
     }
     override fun close() { sync.cancel(); discovery.close(); link.close(); scope.cancel() }
 }
