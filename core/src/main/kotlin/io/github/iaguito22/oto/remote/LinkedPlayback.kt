@@ -5,12 +5,15 @@ import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 
-fun JSONArray.manualQueueIds(): Set<String> = buildSet {
+fun JSONArray.manualQueueIndices(): Set<Int> = buildSet {
     for (index in 0 until length()) {
         val entry = optJSONObject(index) ?: continue
-        if (entry.optBoolean("manual")) add(entry.getString("id"))
+        if (entry.optBoolean("manual")) add(index)
     }
 }
+
+fun JSONObject.transferredRadioSeed(): String? =
+    optString("radioSeed").takeUnless { it.isBlank() || it == "null" }
 
 interface LinkPlayer {
     fun snapshot(): JSONObject

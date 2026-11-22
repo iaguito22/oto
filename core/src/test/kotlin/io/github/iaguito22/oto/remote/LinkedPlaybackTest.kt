@@ -67,6 +67,6 @@ class LinkedPlaybackTest {
     }
     @Test fun manualQueueFlagsAreOptionalInTransfers() {
         val queue = JSONArray().put(JSONObject().put("id", "old")).put(JSONObject().put("id", "new").put("manual", true))
-        assertEquals(setOf("new"), queue.manualQueueIds())
+        assertEquals(setOf(1), queue.manualQueueIndices())
     }
 }

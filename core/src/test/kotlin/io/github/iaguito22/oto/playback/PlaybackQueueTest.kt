@@ -19,6 +19,12 @@ class PlaybackQueueTest {
         assertNull(current.insertion)
     }
 
+    @Test fun addingStopsAtTheFirstNonManualEntry() {
+        val queue = listOf("current", "manual", "automatic", "old-manual")
+        val edit = manualQueueEdit(queue, 0, "new", next = false, isManual = { it.contains("manual") }, idOf = { it })
+        assertEquals(2, edit.insertion)
+    }
+
     @Test fun radioCapsUpcomingKeepsPageOverflowAndRemembersTrimmedHistory() {
         val radio = RadioQueue("seed", { it: String -> RadioTrackKey(it, it) }, { it.id })
         val items = (0..70).map { "s$it" }
@@ -53,6 +59,13 @@ class PlaybackQueueTest {
         assertEquals(RadioQueue.Trim(0, 51), radio.trim(queue, 0))
         radio.offer(listOf(Heard("fresh", "", "", null).toSong()))
         assertEquals(listOf("s51", "s52", "fresh"), radio.take(queue.take(51), 3))
+    }
+
+    @Test fun trimmingTheSameWindowTwiceDoesNotDuplicateDeferredEntries() {
+        val radio = RadioQueue("seed", { it: String -> RadioTrackKey(it, it) }, { it.id })
+        val queue = (0..52).map { "s$it" }
+        repeat(2) { radio.trim(queue, 0) }
+        assertEquals(queue, radio.withDeferred(queue.take(51)))
     }
 
     @Test fun manualEditsKeepDeferredSongsInOrderWhenTheRadioWindowIsFull() {

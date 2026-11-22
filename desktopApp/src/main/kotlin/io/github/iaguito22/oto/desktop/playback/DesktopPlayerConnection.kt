@@ -183,7 +183,8 @@ class DesktopPlayerConnection(
     private val djTempoRunning = java.util.concurrent.atomic.AtomicBoolean(false)
     private val djGeneration = AtomicLong()
     private var djReplenishJob: Job? = null
-    private val manualQueueIds = HashSet<String>()
+    // Cada marca pertenece a una entrada concreta, aunque la lista repita la canción.
+    private val manualQueueEntries = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<SongItem, Boolean>())
     @Volatile private var resolvingTrack = false
     private var resolveJob: Job? = null
     private var lyricsJob: Job? = null
@@ -1080,17 +1081,18 @@ class DesktopPlayerConnection(
         }
         val session = radio
         val items = session?.withDeferred(songQueue) ?: songQueue
-        val edit = manualQueueEdit(items, currentIndex, song.id, next, { it.id in manualQueueIds }, SongItem::id)
+        val edit = manualQueueEdit(items, currentIndex, song.id, next, { it in manualQueueEntries }, SongItem::id)
         if (edit.removals.isEmpty() && edit.insertion == null) return@locked
         cancelCrossfade()
         val edited = items.toMutableList()
         val track = edit.removals.lastOrNull()?.let(items::get) ?: song
-        edit.removals.forEach { edited.removeAt(it) }
+        edit.removals.forEach { manualQueueEntries.remove(edited.removeAt(it)) }
         currentIndex = edit.current
         edit.insertion?.let { position ->
             autoIds.remove(song.id)
-            manualQueueIds += song.id
-            edited.add(position, track)
+            val entry = track.copy()
+            manualQueueEntries += entry
+            edited.add(position, entry)
         }
         session?.trimEditedQueue(edited, currentIndex)?.let { trim ->
             edited.subList(trim.until, edited.size).clear()
@@ -1134,7 +1136,7 @@ class DesktopPlayerConnection(
         dj = null
         djReplenishJob?.cancel()
         djReplenishJob = null
-        manualQueueIds.clear()
+        manualQueueEntries.clear()
         _djActive.value = false
         _djFullOnce.value = false
         fullOnceTrackId = null
@@ -1234,7 +1236,7 @@ class DesktopPlayerConnection(
                 stopAutoplay()
                 djReplenishJob?.cancel()
                 djReplenishJob = null
-                manualQueueIds.clear()
+                manualQueueEntries.clear()
                 dj = newDj
                 _djActive.value = true
                 _djMode.value = mode
@@ -1391,8 +1393,9 @@ class DesktopPlayerConnection(
         val kept = songQueue.take(split)
         // Si «Siguiente» ya movió el índice pero el DJ aún no consumió esa canción (lo hace bajo `djMutex`), su cola
         // empieza por la que ya suena: no se repite (B → B → X). Lo consume el avance al coger el candado.
-        val manual = songQueue.drop(split).filter { it.id in manualQueueIds }
-        val tail = djTailAfter(kept.map { it.id }, nextUp).filter { it.track.id !in manualQueueIds }
+        val manual = songQueue.drop(split).takeWhile { it in manualQueueEntries }
+        val manualIds = manual.mapTo(HashSet(), SongItem::id)
+        val tail = djTailAfter(kept.map { it.id }, nextUp).filter { it.track.id !in manualIds }
         tail.forEach { info -> info.tanda?.let { djTandas[info.track.id] = it } }
         songQueue = (kept + manual + tail.map { it.track.toSong() }).toMutableList()
         _djNextUp.value = tail
@@ -1426,7 +1429,7 @@ class DesktopPlayerConnection(
         cancelCrossfade()
         val split = (currentIndex + 1).coerceIn(0, songQueue.size)
         val kept = songQueue.take(split)
-        val manual = songQueue.drop(split).filter { it.id in manualQueueIds }
+        val manual = songQueue.drop(split).takeWhile { it in manualQueueEntries }
         songQueue = (kept + manual).toMutableList()
         _djNextUp.value = emptyList()
         syncQueueFlow()
@@ -1466,7 +1469,7 @@ class DesktopPlayerConnection(
         if (songQueue.size > currentIndex + 1) {
             songQueue = songQueue.take(currentIndex + 1).toMutableList()
         }
-        manualQueueIds.clear()
+        manualQueueEntries.clear()
         _djNextUp.value = emptyList()
         syncQueueFlow()
         djReplenishJob = scope.launch {
@@ -1617,12 +1620,12 @@ class DesktopPlayerConnection(
     }
 
     override fun move(from: Int, to: Int) = djIndexGate.locked {
-        if (from !in songQueue.indices || to !in songQueue.indices || from == to) return@locked
+        if (from !in songQueue.indices || to !in songQueue.indices || from == to || from == currentIndex) return@locked
+        if (radio != null && from > currentIndex && to <= currentIndex) return@locked
         cancelCrossfade()
         val item = songQueue.removeAt(from)
         songQueue.add(to, item)
         currentIndex = when (currentIndex) {
-            from -> to
             in (minOf(from, to)..maxOf(from, to)) -> if (from < to) currentIndex - 1 else currentIndex + 1
             else -> currentIndex
         }
@@ -1647,7 +1650,7 @@ class DesktopPlayerConnection(
             return@locked
         }
         songQueue.removeAt(index)
-        manualQueueIds.remove(removed.id)
+        manualQueueEntries.remove(removed)
         originalQueue?.indexOf(removed)?.takeIf { it >= 0 }?.let { at ->
             originalQueue = originalQueue!!.toMutableList().apply { removeAt(at) }
             ages = ages.toMutableList().apply { if (at < size) removeAt(at) }
@@ -1673,7 +1676,7 @@ class DesktopPlayerConnection(
 
     fun clearQueue() = djIndexGate.locked {
         cancelCrossfade()
-        manualQueueIds.clear()
+        manualQueueEntries.clear()
         val cur = currentIndex
         if (cur in songQueue.indices) {
             val curSong = songQueue[cur]
@@ -1725,7 +1728,8 @@ class DesktopPlayerConnection(
         val current = songQueue[currentIndex]
         val played = songQueue.take(currentIndex + 1)
         val pending = songQueue.drop(currentIndex + 1)
-        val (manual, rest) = pending.partition { it.id in manualQueueIds }
+        val manual = pending.takeWhile { it in manualQueueEntries }
+        val rest = pending.drop(manual.size)
         val (listed, extra) = rest.partition { it.id !in autoIds }
         val next = if (on) {
             if (originalQueue == null) { originalQueue = songQueue.toList(); ages = List(songQueue.size) { null } }
@@ -2014,7 +2018,7 @@ class DesktopPlayerConnection(
         val activeDj = dj
         if (activeDj != null) {
             val split = (currentIndex + 1).coerceIn(0, songQueue.size)
-            val djUpcoming = songQueue.drop(split).count { it.id !in manualQueueIds }
+            val djUpcoming = songQueue.drop(split).count { it !in manualQueueEntries }
             if (djUpcoming >= DJ_NEXT_UP_COUNT) {
                 retuneDjTempo()
                 return
@@ -2089,14 +2093,31 @@ class DesktopPlayerConnection(
         job.start()
     }
 
-    fun prepareTransfer(songs: List<SongItem>, index: Int, positionMs: Long, shuffled: Boolean, manualIds: Set<String> = emptySet()) = djIndexGate.locked {
+    fun radioSeed(): String? = djIndexGate.locked { radio?.seed }
+
+    fun prepareTransfer(
+        songs: List<SongItem>,
+        index: Int,
+        positionMs: Long,
+        shuffled: Boolean,
+        manualIndices: Set<Int> = emptySet(),
+        radioSeed: String? = null,
+    ) = djIndexGate.locked {
         engine.pause()
         _shuffle.value = shuffled
         stopAutoplay(); currentListId = null
         clearDjSession()
-        manualQueueIds.addAll(manualIds)
-        stopRadio(); originalQueue = songs.toList(); ages = List(songs.size) { null }; songQueue = songs.toMutableList(); currentIndex = index.coerceIn(songs.indices)
-        syncQueueFlow(); startCurrentTrack(false, positionMs)
+        stopRadio()
+        radio = radioSeed?.let(::newRadio)
+        originalQueue = songs.toList()
+        ages = List(songs.size) { null }
+        currentIndex = index.coerceIn(songs.indices)
+        songQueue = songs.mapIndexed { i, song ->
+            if (i in manualIndices) song.copy().also { manualQueueEntries += it } else song
+        }.toMutableList()
+        syncQueueFlow()
+        startCurrentTrack(false, positionMs)
+        topUpRadio()
     }
 
     private fun startCurrentTrack(playWhenReady: Boolean = true, initialPositionMs: Long = 0L) {
@@ -2332,10 +2353,15 @@ class DesktopPlayerConnection(
         radio?.let { session ->
             val trim = session.trim(songQueue, currentIndex)
             if (trim.from > 0 || trim.until < songQueue.size) {
-                songQueue.take(trim.from).forEach { manualQueueIds.remove(it.id) }
                 songQueue = songQueue.subList(trim.from, trim.until).toMutableList()
                 currentIndex -= trim.from
             }
+        }
+        if (manualQueueEntries.isNotEmpty()) {
+            val queue = radio?.withDeferred(songQueue) ?: songQueue
+            val block = queue.drop(currentIndex + 1).takeWhile { it in manualQueueEntries }
+            manualQueueEntries.clear()
+            manualQueueEntries.addAll(block)
         }
         _queue.value = songQueue.mapIndexed { idx, s ->
             QueueEntry(
@@ -2345,7 +2371,7 @@ class DesktopPlayerConnection(
                 artist = s.artists.joinToString { it.name },
                 artwork = s.thumbnail,
                 artistId = s.artists.firstOrNull()?.id,
-                manual = s.id in manualQueueIds,
+                manual = s in manualQueueEntries,
             )
         }
         _previousEntry.value = if (currentIndex > 0) _queue.value.getOrNull(currentIndex - 1) else null

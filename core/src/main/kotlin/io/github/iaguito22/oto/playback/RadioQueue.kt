@@ -6,7 +6,7 @@ data class RadioTrackKey(val id: String, val song: String)
 
 /** Ventana de reproducción de una radio explícita. Conserva las páginas pendientes y recuerda todo lo que sonó. */
 class RadioQueue<T>(
-    seed: String,
+    val seed: String,
     private val keyOf: (T) -> RadioTrackKey,
     private val fromSong: (SongItem) -> T,
     private val open: (String) -> Autoplay.Source = { Radio(it).asSource() },
@@ -39,7 +39,12 @@ class RadioQueue<T>(
         }
         remember(queue[current])
         for (i in 0 until from) remember(queue[i])
-        for (i in queue.lastIndex downTo until) deferred.addFirst(queue[i])
+        if (until < queue.size) {
+            val overflow = queue.subList(until, queue.size).distinctBy { keyOf(it).id }
+            val ids = overflow.mapTo(HashSet()) { keyOf(it).id }
+            deferred.removeAll { keyOf(it).id in ids }
+            overflow.asReversed().forEach(deferred::addFirst)
+        }
         return Trim(from, until)
     }
 

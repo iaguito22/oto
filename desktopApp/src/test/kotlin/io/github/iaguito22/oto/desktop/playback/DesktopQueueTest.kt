@@ -50,10 +50,21 @@ class DesktopQueueTest {
     }
 
     @Test fun transferKeepsTheManualBlockAtItsDestination() = withPlayer { player ->
-        player.prepareTransfer(listOf(song("a"), song("b"), song("c")), 0, 0, false, manualIds = setOf("b"))
+        player.prepareTransfer(listOf(song("a"), song("b"), song("c")), 0, 0, false, manualIndices = setOf(1))
         player.enqueue(song("d"))
         assertEquals(listOf("a", "b", "d", "c"), player.queue.value.map { it.id })
         assertEquals(listOf("b", "d"), player.queue.value.filter { it.manual }.map { it.id })
+    }
+
+    @Test fun transferRestoresRadioFromItsSeed() = withPlayer { player ->
+        player.prepareTransfer(listOf(song("a"), song("b")), 0, 0, false, radioSeed = "seed")
+        assertEquals("seed", player.radioSeed())
+        player.prepareTransfer((0..65).map { song("s$it") }, 15, 0, false, radioSeed = "seed")
+        player.move(15, 44)
+        assertEquals(15, player.state.value.index)
+        assertEquals((0..65).map { "s$it" }, player.queue.value.map { it.id })
+        player.prepareTransfer(listOf(song("c"), song("d")), 0, 0, false)
+        assertNull(player.radioSeed())
     }
 
     @Test fun removingCurrentAdvancesAndRemovingLastClearsPlayback() = withPlayer { player ->
@@ -70,13 +81,24 @@ class DesktopQueueTest {
         assertFalse(player.state.value.playing)
     }
 
+    @Test fun playedManualEntryDoesNotMarkAnotherCopy() = withPlayer { player ->
+        player.prepareTransfer(listOf(song("a"), song("b"), song("c"), song("b")), 0, 0, false, manualIndices = setOf(1))
+        assertEquals(listOf(1), player.queue.value.filter { it.manual }.map { it.index })
+        player.skipTo(1)
+        assertTrue(player.queue.value.none { it.manual })
+        player.enqueue(song("d"))
+        assertEquals(listOf("a", "b", "d", "c", "b"), player.queue.value.map { it.id })
+        player.skipTo(0)
+        assertTrue(player.queue.value.none { it.manual })
+    }
+
     @Test fun movingCurrentAndRemovingPreviousKeepPositionConsistent() = withPlayer { player ->
         player.prepareTransfer(listOf(song("a"), song("b"), song("c")), 1, 0, false)
         player.move(1, 2)
-        assertEquals(2, player.state.value.index)
-        assertEquals("c", player.previousEntry.value?.id)
-        player.remove(0)
         assertEquals(1, player.state.value.index)
+        assertEquals("c", player.queue.value[player.state.value.index + 1].id)
+        player.remove(0)
+        assertEquals(0, player.state.value.index)
         player.clearQueue()
         player.setShuffle(true); player.setShuffle(false)
         assertEquals(listOf("b"), player.queue.value.map { it.id })

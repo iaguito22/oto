@@ -89,7 +89,6 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     private val _shuffle = MutableStateFlow(true)
     private val _shownShuffle = MutableStateFlow(true)
     override val shuffle: StateFlow<Boolean> = _shownShuffle.asStateFlow()
-    val localShuffle: StateFlow<Boolean> = _shuffle.asStateFlow()
 
     private val _loopMode = MutableStateFlow(LoopMode.Off)
     private val _shownLoop = MutableStateFlow(LoopMode.Off)
@@ -226,16 +225,16 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         _loopMode.value = LoopMode.Off
         it.repeatMode = Player.REPEAT_MODE_OFF
         it.setMediaItem(song.toMediaItem())
-        start(it)
+        start(it, radioSeed = song.id)
     }
 
     /** Arranca lo recién puesto; con el ordenador al mando, se queda aquí en pausa y suena allí. */
-    private fun start(c: MediaController) {
+    private fun start(c: MediaController, radioSeed: String?) {
         val m = mirror
         if (m == null) { c.prepare(); c.play(); return }
         c.playWhenReady = false
         val id = c.currentMediaItem?.mediaId ?: return
-        m.handOff(transferState(c, playing = true))
+        m.handOff(transferState(c, playing = true, radioSeed = radioSeed))
         // Se ve ya la nueva, preparándose, sin esperar a que el ordenador conteste.
         pendingId = id
         pendingUntil = android.os.SystemClock.elapsedRealtime() + 12_000
@@ -247,16 +246,36 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     }
 
     /** Lo que hay aquí, en el formato del canal local (ver LinkedPlayback «transfer»). */
-    fun transferState(p: Player, playing: Boolean): JSONObject = JSONObject()
-        .put("id", p.currentMediaItem?.mediaId).put("index", p.currentMediaItemIndex).put("position", p.currentPosition.coerceAtLeast(0))
-        .put("playing", playing).put("shuffle", _shuffle.value).put("loop", _loopMode.value != LoopMode.Off)
-        .put("queue", JSONArray((0 until p.mediaItemCount).map { i ->
-            val item = p.getMediaItemAt(i)
-            val m = item.mediaMetadata
-            JSONObject().put("id", item.mediaId).put("title", m.title?.toString().orEmpty()).put("manual", item.isManual)
-                .put("artist", m.artist?.toString().orEmpty()).put("artwork", m.artworkUri?.toString())
-                .put("artistId", m.extras?.getStringArray(ARTIST_IDS)?.firstOrNull()?.ifEmpty { null })
-        }))
+    private fun transferState(p: Player, playing: Boolean, radioSeed: String?): JSONObject {
+        val order = p.queueOrder()
+        val current = order.indexOf(p.currentMediaItemIndex)
+        val manual = publishedManualIndices(p, order, current)
+        return JSONObject()
+            .put("id", p.currentMediaItem?.mediaId).put("index", current).put("position", p.currentPosition.coerceAtLeast(0))
+            .put("playing", playing).put("shuffle", localShuffleEnabled()).put("loop", _loopMode.value != LoopMode.Off)
+            .put("radioSeed", radioSeed)
+            .put("queue", JSONArray(order.map { i ->
+                val item = p.getMediaItemAt(i)
+                val m = item.mediaMetadata
+                JSONObject().put("id", item.mediaId).put("title", m.title?.toString().orEmpty()).put("manual", i in manual)
+                    .put("artist", m.artist?.toString().orEmpty()).put("artwork", m.artworkUri?.toString())
+                    .put("artistId", m.extras?.getStringArray(ARTIST_IDS)?.firstOrNull()?.ifEmpty { null })
+            }))
+    }
+
+    internal fun localRadioSeed(): String? = controller?.sessionExtras?.getString(SESSION_RADIO_SEED)
+    internal fun localShuffleEnabled(): Boolean = controller?.shuffleModeEnabled == true || _shuffle.value
+
+    private fun publishedManualIndices(p: Player, order: List<Int>, current: Int): Set<Int> {
+        val extras = (p as? MediaController)?.sessionExtras
+        val indices = extras?.getIntArray(SESSION_MANUAL_QUEUE)
+        if (indices?.isEmpty() == true) return emptySet()
+        if (indices?.getOrNull(0) == p.currentMediaItemIndex && indices.getOrNull(1) == order.size) {
+            val marked = indices.drop(2).toHashSet()
+            return order.drop(current + 1).takeWhile { it in marked }.toSet()
+        }
+        return pendingManualIndices(p, order, current)
+    }
 
     private var remoteQueue: Pair<JSONArray, List<QueueEntry>>? = null
 
@@ -270,8 +289,20 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         val array = state.optJSONArray("queue")
         // La cola del ordenador llega una vez y se reutiliza mientras no cambie (ver StateOutbox).
         val all = remoteQueue?.takeIf { it.first === array }?.second
-            ?: (0 until (array?.length() ?: 0)).map { i -> array!!.getJSONObject(i).let { QueueEntry(i, it.text("id"), it.text("title"), it.text("artist"), it.text("artwork").ifBlank { null }, artistId = it.text("artistId").ifBlank { null }) } }
-                .also { remoteQueue = array?.let { a -> a to it } }
+            ?: array?.let { entries ->
+                List(entries.length()) { i ->
+                    val entry = entries.getJSONObject(i)
+                    QueueEntry(
+                        index = i,
+                        id = entry.text("id"),
+                        title = entry.text("title"),
+                        artist = entry.text("artist"),
+                        artwork = entry.text("artwork").ifBlank { null },
+                        artistId = entry.text("artistId").ifBlank { null },
+                        manual = entry.optBoolean("manual"),
+                    )
+                }.also { remoteQueue = entries to it }
+            }.orEmpty()
         val index = state.optInt("index").coerceAtLeast(0)
         val loop = state.optBoolean("loop")
         val artist = state.text("artist")
@@ -337,13 +368,23 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
     }
 
     /** Recibe una sesión sin sonar hasta colocar la posición y confirmar la transferencia. */
-    fun prepareTransfer(songs: List<SongItem>, index: Int, positionMs: Long, shuffled: Boolean, manualIds: Set<String> = emptySet()) = withController { c ->
+    fun prepareTransfer(
+        songs: List<SongItem>,
+        index: Int,
+        positionMs: Long,
+        shuffled: Boolean,
+        manualIndices: Set<Int> = emptySet(),
+        radioSeed: String? = null,
+    ) = withController { c ->
         shuffling?.cancel(); currentListId = null
         _shuffle.value = shuffled
-        val items = songs.map { song ->
-            val item = song.toMediaItem().buildUpon().setRequestMetadata(MediaItem.RequestMetadata.Builder()
-                .setExtras(Bundle().apply { putBoolean("oto_exact_transfer", true) }).build()).build()
-            if (song.id in manualIds) item.markManual() else item
+        val request = MediaItem.RequestMetadata.Builder().setExtras(Bundle().apply {
+            putBoolean("oto_exact_transfer", true)
+            putString(SESSION_RADIO_SEED, radioSeed)
+        }).build()
+        val items = songs.mapIndexed { i, song ->
+            val item = song.toMediaItem().let { if (i in manualIndices) it.markManual() else it }
+            if (i == 0) item.buildUpon().setRequestMetadata(request).build() else item
         }
         original = items; ages = List(items.size) { null }
         c.playWhenReady = false
@@ -392,7 +433,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         c.shuffleModeEnabled = false
         c.repeatMode = repeatModeOf(_loopMode.value)
         c.setMediaItems(items, start, 0)
-        start(c)
+        start(c, radioSeed = items.singleOrNull()?.mediaId)
     }
 
     /**
@@ -411,16 +452,23 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         }
         if (listId != null && listId != currentListId) return
         _shuffle.value = on
-        val items = original ?: return
         shuffling?.cancel()
         withController { c ->
-            c.shuffleModeEnabled = false
+            if (c.shuffleModeEnabled) {
+                c.shuffleModeEnabled = on
+                return@withController
+            }
+            val items = original ?: return@withController
             val current = c.currentMediaItem ?: return@withController
             val others = items.indices.filter { i -> items[i].mediaId != current.mediaId }
             fun applyOrder(controller: MediaController, ids: List<String>) {
                 val start = controller.currentMediaItemIndex + 1
-                val pending = (start until controller.mediaItemCount).map(controller::getMediaItemAt)
-                val (manual, rest) = pending.partition { it.isManual }
+                if (controller.shuffleModeEnabled) return
+                val order = controller.queueOrder()
+                val manualIndices = publishedManualIndices(controller, order, start - 1)
+                val end = start + manualIndices.size
+                val manual = (start until end).map(controller::getMediaItemAt).map { if (it.isManual) it else it.markManual() }
+                val rest = (end until controller.mediaItemCount).map(controller::getMediaItemAt).map { if (it.isManual) it.clearManual() else it }
                 val (listed, extra) = rest.partition { !it.isAuto }
                 val rank = ids.withIndex().associate { (index, id) -> id to index }
                 controller.replaceMediaItems(start, controller.mediaItemCount,
@@ -644,12 +692,32 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
 
     /** Mueve [from] justo detrás de [after] (o de la que suena, si es null), o justo delante de [before]. */
     override fun place(from: Int, after: Int?, before: Int?) {
-        fun target(current: Int) = when {
-            before != null -> if (from < before) before - 1 else before
-            else -> (after ?: current).let { a -> if (from < a) a else a + 1 }
+        fun target(source: Int, current: Int, after: Int?, before: Int?) = when {
+            before != null -> if (source < before) before - 1 else before
+            else -> (after ?: current).let { a -> if (source < a) a else a + 1 }
         }
-        if (mirror != null) return move(from, target(remoteIndex))
-        withController { val to = target(it.currentMediaItemIndex); if (from != to) it.moveMediaItem(from, to) }
+        if (mirror != null) return move(from, target(from, remoteIndex, after, before))
+        withController { c ->
+            val order = c.queueOrder()
+            val source = order.indexOf(from)
+            if (source < 0) return@withController
+            val to = target(source, order.indexOf(c.currentMediaItemIndex), after?.let(order::indexOf), before?.let(order::indexOf))
+            moveInQueue(c, source, to)
+        }
+    }
+
+    internal fun moveInQueue(from: Int, to: Int) = withController { moveInQueue(it, from, to) }
+
+    private fun moveInQueue(c: MediaController, from: Int, to: Int) {
+        if (from !in 0 until c.mediaItemCount || to !in 0 until c.mediaItemCount || from == to) return
+        if (c.shuffleModeEnabled) {
+            c.sendCustomCommand(MOVE_SHUFFLED_CMD, Bundle().apply {
+                putInt("from", from)
+                putInt("to", to)
+            })
+        } else {
+            c.moveMediaItem(from, to)
+        }
     }
 
     /** Quita una de la cola, también de la lista que se rebaraja al tocar el aleatorio (si no, volvería). */
@@ -705,16 +773,23 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
         controller?.let(action) ?: run { pending += action; connect() }
     }
 
+    private var lastPublishedManual = intArrayOf()
+
     private val controllerListener = object : MediaController.Listener {
         override fun onExtrasChanged(controller: MediaController, extras: Bundle) {
             applyDjSessionExtras(extras)
+            val manual = extras.getIntArray(SESSION_MANUAL_QUEUE) ?: intArrayOf()
+            if (!manual.contentEquals(lastPublishedManual)) {
+                lastPublishedManual = manual
+                publishQueue(controller)
+            }
         }
     }
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             publish(player)
-            if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_REPEAT_MODE_CHANGED)) publishQueue(player)
+            if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_REPEAT_MODE_CHANGED, Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)) publishQueue(player)
         }
     }
 
@@ -768,15 +843,18 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
 
     private fun publishQueue(p: Player) {
         // En bucle, detrás de la última vuelve la primera.
-        val wrap = if (p.repeatMode == Player.REPEAT_MODE_ALL) (0 until p.currentMediaItemIndex) else IntRange.EMPTY
-        val all = (0 until p.mediaItemCount).map { entry(p, it) }
+        val order = p.queueOrder()
+        val current = order.indexOf(p.currentMediaItemIndex)
+        val manual = publishedManualIndices(p, order, current)
+        val all = order.map { entry(p, it, it in manual) }
         _sessionQueue.value = all
-        localQueue = ((p.currentMediaItemIndex + 1 until p.mediaItemCount) + wrap).mapNotNull { all.getOrNull(it) }
-        localPrevious = all.getOrNull(p.currentMediaItemIndex - 1)
+        val wrap = if (p.repeatMode == Player.REPEAT_MODE_ALL && current > 0) all.take(current) else emptyList()
+        localQueue = all.drop(current + 1) + wrap
+        localPrevious = all.getOrNull(current - 1)
         if (mirror == null) { _queue.value = localQueue; _previous.value = localPrevious }
     }
 
-    private fun entry(p: Player, i: Int): QueueEntry {
+    private fun entry(p: Player, i: Int, manual: Boolean): QueueEntry {
         val item = p.getMediaItemAt(i)
         return QueueEntry(
             index = i,
@@ -786,7 +864,7 @@ class PlayerConnection(private val context: Context, private val prefs: Prefs, p
             artwork = item.mediaMetadata.artworkUri?.toString(),
             auto = item.isAuto,
             artistId = item.mediaMetadata.extras?.getStringArray(ARTIST_IDS)?.firstOrNull()?.ifEmpty { null },
-            manual = item.isManual,
+            manual = manual,
         )
     }
 }

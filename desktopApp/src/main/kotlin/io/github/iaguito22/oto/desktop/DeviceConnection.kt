@@ -39,6 +39,7 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
                 .put("playing", player.wantsPlayback()).put("buffering", s.buffering).put("duration", s.durationMs).put("position", player.position())
                 .put("volume",player.volume.value).put("index", s.index).put("shuffle", player.shuffle.value).put("loop", player.loop.value)
                 .put("queue", queueJson(player.queue.value))
+                .put("radioSeed", player.radioSeed())
                 .put("sourceKind", player.source.value?.kind).put("sourceTitle", player.source.value?.title)
         }
         override fun dj() = player.playDj {}
@@ -61,7 +62,7 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
         override fun replace(state: JSONObject) {
             val a = state.getJSONArray("queue")
             val songs = (0 until a.length()).map { i -> a.getJSONObject(i).let { Heard(it.getString("id"), it.getString("title"), it.getString("artist"), it.optString("artwork").takeUnless { s -> s.isBlank() || s == "null" }, it.optString("artistId").takeUnless { s -> s.isBlank() || s == "null" }).toSong() } }
-            player.prepareTransfer(songs, state.optInt("index").coerceIn(songs.indices), state.optLong("position"), state.optBoolean("shuffle"), a.manualQueueIds())
+            player.prepareTransfer(songs, state.optInt("index").coerceIn(songs.indices), state.optLong("position"), state.optBoolean("shuffle"), a.manualQueueIndices(), state.transferredRadioSeed())
         }
     }
     private val syncIssueMutable = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)

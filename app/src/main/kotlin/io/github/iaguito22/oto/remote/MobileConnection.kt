@@ -29,10 +29,12 @@ class MobileConnection(private val app: OtoApp) {
             val s = player.localState.value
             val audio=app.getSystemService(AudioManager::class.java)
             val position = player.here { player.position() }
+            val queue = player.sessionQueue.value
             return JSONObject().put("name", "Oto móvil").put("id", s.id).put("title", s.title).put("artist", s.artist).put("artwork", s.artwork).put("artistId", s.artists.firstOrNull()?.second)
                 .put("playing", s.playing).put("buffering", s.buffering).put("duration", s.durationMs).put("position", position)
-                .put("volume",audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()/audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)).put("index", s.index).put("shuffle", player.localShuffle.value).put("loop", player.localLoopMode.value != LoopMode.Off)
-                .put("queue", queueJson(player.sessionQueue.value))
+                .put("volume",audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()/audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)).put("index", queue.indexOfFirst { it.index == s.index }).put("shuffle", player.localShuffleEnabled()).put("loop", player.localLoopMode.value != LoopMode.Off)
+                .put("queue", queueJson(queue))
+                .put("radioSeed", player.localRadioSeed())
                 .put("sourceKind", player.localSource.value?.kind).put("sourceTitle", player.localSource.value?.title)
         }
         override suspend fun like() { val s = player.localState.value; s.id?.let { app.prefs.toggleLike(Heard(it,s.title,s.artist,s.artwork,s.artists.firstOrNull()?.second)) } }
@@ -42,9 +44,15 @@ class MobileConnection(private val app: OtoApp) {
         override fun seek(ms: Long) = player.here { player.seekTo(ms) }
         override fun shuffle(on: Boolean) = player.here { player.setShuffle(on) }
         override fun loop(on: Boolean) = player.here { player.setLoop(if(on) LoopMode.All else LoopMode.Off) }
-        override fun skip(index: Int) = player.here { player.skipTo(index) }
-        override fun move(from: Int, to: Int) = player.here { player.move(from,to) }
-        override fun remove(index: Int) = player.here { player.remove(index) }
+        override fun skip(index: Int) {
+            val entry = player.sessionQueue.value.getOrNull(index) ?: return
+            player.here { player.skipTo(entry.index) }
+        }
+        override fun move(from: Int, to: Int) = player.moveInQueue(from, to)
+        override fun remove(index: Int) {
+            val entry = player.sessionQueue.value.getOrNull(index) ?: return
+            player.here { player.remove(entry.index) }
+        }
         override fun dj() = player.here { player.playDj {} }
         override fun addToQueue(song: JSONObject, next: Boolean) {
             val track=Heard(song.getString("id"),song.getString("title"),song.optString("artist"),song.optString("artwork").takeUnless { it.isBlank() || it=="null" },song.optString("artistId").takeUnless { it.isBlank() || it=="null" }).toSong()
@@ -58,7 +66,7 @@ class MobileConnection(private val app: OtoApp) {
         override fun replace(state: JSONObject) {
             val a = state.getJSONArray("queue")
             val songs = (0 until a.length()).map { i -> a.getJSONObject(i).let { Heard(it.getString("id"),it.getString("title"),it.getString("artist"),it.optString("artwork").takeUnless { s -> s.isBlank() || s=="null" },it.optString("artistId").takeUnless { s -> s.isBlank() || s=="null" }).toSong() } }
-            player.prepareTransfer(songs, state.optInt("index").coerceIn(songs.indices), state.optLong("position"), state.optBoolean("shuffle"), a.manualQueueIds())
+            player.prepareTransfer(songs, state.optInt("index").coerceIn(songs.indices), state.optLong("position"), state.optBoolean("shuffle"), a.manualQueueIndices(), state.transferredRadioSeed())
         }
     }
     private val followingMutable = kotlinx.coroutines.flow.MutableStateFlow<RemoteNow?>(null)

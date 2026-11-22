@@ -14,9 +14,7 @@ fun <T> manualQueueEdit(
     val removals = queue.indices.reversed().filter { it != current && idOf(queue[it]) == id }
     val newCurrent = current - removals.count { it < current }
     if (queue.getOrNull(current)?.let(idOf) == id) return ManualQueueEdit(removals, newCurrent, null)
-    val manualEnd = if (next) current else queue.indices.lastOrNull { i ->
-        i > current && idOf(queue[i]) != id && isManual(queue[i])
-    } ?: current
+    val manualEnd = if (next) current else current + queue.drop(current + 1).takeWhile(isManual).size
     val insertion = manualEnd + 1 - removals.count { it <= manualEnd }
     return ManualQueueEdit(removals, newCurrent, insertion)
 }

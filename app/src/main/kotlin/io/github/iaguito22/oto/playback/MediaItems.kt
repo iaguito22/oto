@@ -2,7 +2,10 @@ package io.github.iaguito22.oto.playback
 
 import android.os.Bundle
 import androidx.core.net.toUri
+import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.MediaMetadata
 import com.metrolist.innertube.models.SongItem
 import io.github.iaguito22.oto.Heard
@@ -62,6 +65,41 @@ fun MediaItem.markManual(): MediaItem {
         putBoolean(MANUAL, true)
     }
     return buildUpon().setMediaMetadata(mediaMetadata.buildUpon().setExtras(extras).build()).build()
+}
+
+fun MediaItem.clearManual(): MediaItem {
+    val extras = Bundle(mediaMetadata.extras).apply { remove(MANUAL) }
+    return buildUpon().setMediaMetadata(mediaMetadata.buildUpon().setExtras(extras).build()).build()
+}
+
+/** Índices de la Timeline recorridos como los reproducir? el jugador, sin repetir la lista. */
+@OptIn(UnstableApi::class)
+internal fun Player.queueOrder(shuffled: Boolean = shuffleModeEnabled): List<Int> {
+    if (!shuffled) return (0 until mediaItemCount).toList()
+    val timeline = currentTimeline
+    return buildList {
+        var index = timeline.getFirstWindowIndex(true)
+        while (index >= 0) {
+            add(index)
+            index = timeline.getNextWindowIndex(index, Player.REPEAT_MODE_OFF, true)
+        }
+    }
+}
+
+internal fun pendingManualIndices(player: Player, order: List<Int>, current: Int): Set<Int> =
+    if (current < 0) emptySet() else order.drop(current + 1).takeWhile { player.getMediaItemAt(it).isManual }.toSet()
+
+/** Reconstruye los índices tras quitar entradas físicas y añadir las nuevas al final de la Timeline. */
+internal fun shuffledQueueAfterEdit(order: List<Int>, removed: BooleanArray, insertion: Int, added: Int): IntArray {
+    var size = 0
+    val remainingIndices = IntArray(order.size) { if (removed[it]) -1 else size++ }
+    val shuffled = ArrayList<Int>(size + added)
+    for (index in order) {
+        val remaining = remainingIndices[index]
+        if (remaining >= 0) shuffled.add(remaining)
+    }
+    if (added > 0) shuffled.addAll(insertion, (size until size + added).toList())
+    return shuffled.toIntArray()
 }
 
 val MediaItem.isManual get() = mediaMetadata.extras?.getBoolean(MANUAL) == true

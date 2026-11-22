@@ -36,6 +36,7 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.MediaCodecAudioRenderer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.ShuffleOrder
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.session.CommandButton
@@ -138,6 +139,8 @@ class PlaybackService : MediaLibraryService() {
 
     private var radio: RadioQueue<MediaItem>? = null
     private var radioJob: Job? = null
+    private var queueMaintenanceJob: Job? = null
+    private var manualQueueState = intArrayOf()
     // Lo que suena es una lista (un álbum, una tuya…) y no la radio de una canción ni el DJ.
     private var list = false
     private var preserveTransferredQueue = false
@@ -933,8 +936,7 @@ class PlaybackService : MediaLibraryService() {
     /** Mantiene la radio explícita y la reproducción automática con sus propios límites. */
     private fun topUpRadio() {
         radio?.let { session ->
-            trimRadio(session)
-            if (radioJob?.isActive != true && session.needsRefill(player.mediaItemCount, player.currentMediaItemIndex)) {
+            if (radioJob?.isActive != true) {
                 radioJob = scope.launch(Dispatchers.Main) { refillRadio(session) }
             }
             return
@@ -966,34 +968,127 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    private fun mediaQueue() = List(player.mediaItemCount, player::getMediaItemAt)
+    /** Edita por posición de reproducción y conserva el orden aleatorio de las entradas supervivientes. */
+    private fun editQueue(order: List<Int>, removals: List<Int>, insertion: Int, added: List<MediaItem> = emptyList()) {
+        if (removals.isEmpty() && added.isEmpty()) return
+        val removed = BooleanArray(order.size)
+        removals.forEach { removed[order[it]] = true }
+        // Retira rangos físicos en orden descendente para que los índices anteriores sigan siendo válidos.
+        var end = removed.size
+        while (end > 0) {
+            if (!removed[end - 1]) {
+                end--
+                continue
+            }
+            var start = end - 1
+            while (start > 0 && removed[start - 1]) start--
+            player.removeMediaItems(start, end)
+            end = start
+        }
+        if (!player.shuffleModeEnabled) {
+            if (added.isNotEmpty()) player.addMediaItems(insertion, added)
+            return
+        }
 
-    private fun trimRadio(session: RadioQueue<MediaItem>) {
-        val trim = session.trim(mediaQueue(), player.currentMediaItemIndex)
-        if (trim.until < player.mediaItemCount) player.removeMediaItems(trim.until, player.mediaItemCount)
-        if (trim.from > 0) player.removeMediaItems(0, trim.from)
+        if (added.isNotEmpty()) player.addMediaItems(added)
+        setShuffleQueueOrder(shuffledQueueAfterEdit(order, removed, insertion, added.size))
     }
 
+    private fun setShuffleQueueOrder(order: IntArray) {
+        player.setShuffleOrder(ShuffleOrder.DefaultShuffleOrder(order, kotlin.random.Random.nextLong()))
+    }
+
+    private fun keepQueueOnShuffleChange(shuffled: Boolean) {
+        val current = player.currentMediaItemIndex
+        val previous = player.queueOrder(!shuffled)
+        val position = previous.indexOf(current)
+        if (position < 0) return
+        val manual = pendingManualIndices(player, previous, position)
+        if (shuffled) {
+            if (manual.isEmpty() && radio == null) return
+            val order = player.queueOrder().filterNot { it in manual }.toMutableList()
+            if (radio != null) {
+                // El aleatorio solo afecta a los pendientes de una radio que ya está sonando.
+                val kept = previous.take(position + 1)
+                val upcoming = order.filter { it > current }
+                setShuffleQueueOrder((kept + manual + upcoming).toIntArray())
+            } else {
+                order.addAll(order.indexOf(current) + 1, manual)
+                setShuffleQueueOrder(order.toIntArray())
+            }
+            return
+        }
+
+        if (manual.isEmpty() && radio == null) return
+        val physical = player.queueOrder().toMutableList()
+        val entries = if (radio != null) previous else manual
+        // Con radio, lo pendiente puede estar antes de la actual en la Timeline física.
+        // Al salir del aleatorio se materializa la ventana que se venía reproduciendo.
+        var anchor = if (radio != null) null else current
+        for (entry in entries) {
+            val from = physical.indexOf(entry)
+            val after = anchor?.let(physical::indexOf) ?: -1
+            val to = if (from < after) after else after + 1
+            if (from != to) {
+                player.moveMediaItem(from, to)
+                physical.add(to, physical.removeAt(from))
+            }
+            anchor = entry
+        }
+    }
+
+    private fun maintainQueue() {
+        if (queueMaintenanceJob?.isActive == true) return
+        queueMaintenanceJob = scope.launch(Dispatchers.Main) {
+            val order = player.queueOrder()
+            val current = order.indexOf(player.currentMediaItemIndex)
+            val pending = pendingManualIndices(player, order, current)
+            for (index in order) {
+                val item = player.getMediaItemAt(index)
+                if (item.isManual && index !in pending) player.replaceMediaItem(index, item.clearManual())
+            }
+            // Media3 compara la presencia de metadata.extras, pero no su contenido.
+            // El controlador recibe también los índices vigentes al borrar una marca por metadatos.
+            val state = if (pending.isEmpty()) intArrayOf() else intArrayOf(player.currentMediaItemIndex, order.size, *pending.toIntArray())
+            if (!manualQueueState.contentEquals(state)) {
+                manualQueueState = state
+                publishDjSessionExtras()
+            }
+            if (radio != null) topUpRadio()
+        }
+    }
+
+    /** Un solo trabajo modifica la ventana en el hilo principal. En IO solo se consulta la fuente. */
     private suspend fun refillRadio(session: RadioQueue<MediaItem>) {
         var pagesRequested = 0
-        while (radio === session && session.needsRefill(player.mediaItemCount, player.currentMediaItemIndex)) {
+        while (radio === session) {
+            val order = player.queueOrder()
+            val current = order.indexOf(player.currentMediaItemIndex)
+            if (current < 0) return
+            val queue = order.map(player::getMediaItemAt)
+            val trim = session.trim(queue, current)
+            val removed = (0 until trim.from) + (trim.until until queue.size)
+            editQueue(order, removed, 0)
+            val kept = queue.subList(trim.from, trim.until)
+            val index = current - trim.from
+            if (!session.needsRefill(kept.size, index)) return
             val recentSongs = recent.mapTo(HashSet()) { it.removePrefix("~") }
-            val fresh = session.take(mediaQueue(), player.currentMediaItemIndex, recentSongs)
+            val fresh = session.take(kept, index, recentSongs)
             if (fresh.isNotEmpty()) {
                 val resume = player.playbackState == Player.STATE_ENDED && player.playWhenReady && player.repeatMode == Player.REPEAT_MODE_OFF
-                player.addMediaItems(fresh)
+                editQueue(player.queueOrder(), emptyList(), kept.size, fresh)
                 if (resume && player.hasNextMediaItem()) {
                     player.seekToNextMediaItem()
                     player.prepare()
                 }
                 Timber.d("radio: +%d", fresh.size)
             }
-            if (!session.needsRefill(player.mediaItemCount, player.currentMediaItemIndex)) return
+            if (!session.needsRefill(kept.size + fresh.size, index)) return
             if (pagesRequested == RADIO_PAGES) {
                 delay(RADIO_RETRY_MS)
                 pagesRequested = 0
             }
-            val seeds = mediaQueue().asReversed().map { it.mediaId }
+            val seeds = (kept + fresh).asReversed().map { it.mediaId }
             val page = withContext(Dispatchers.IO) { session.fetch(seeds) }
             if (radio !== session) return
             pagesRequested++
@@ -1003,8 +1098,9 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun insertManually(song: MediaItem, next: Boolean) {
-        val current = player.currentMediaItemIndex
-        val queued = mediaQueue()
+        val order = player.queueOrder()
+        val current = order.indexOf(player.currentMediaItemIndex)
+        val queued = order.map(player::getMediaItemAt)
         if (current !in queued.indices) return
         val session = radio
         val items = session?.withDeferred(queued) ?: queued
@@ -1013,18 +1109,17 @@ class PlaybackService : MediaLibraryService() {
         val existing = edit.removals.lastOrNull()?.let(items::get)
         val item = (existing ?: song.withPlaybackUri()).markManual()
         if (session == null) {
-            edit.removals.forEach { player.removeMediaItem(it) }
-            edit.insertion?.let { player.addMediaItem(it, item) }
+            editQueue(order, edit.removals, edit.insertion ?: 0, if (edit.insertion == null) emptyList() else listOf(item))
             return
         }
         val edited = items.toMutableList()
         edit.removals.forEach { edited.removeAt(it) }
         edit.insertion?.let { edited.add(it, item) }
         val trim = session.trimEditedQueue(edited, edit.current)
-        edit.removals.filter { it < current }.forEach { player.removeMediaItem(it) }
+        editQueue(order, edit.removals.filter { it < current }, 0)
         val upcoming = edited.subList(edit.current + 1, trim.until)
         replaceUpcomingItems(upcoming)
-        if (trim.from > 0) player.removeMediaItems(0, trim.from)
+        if (trim.from > 0) editQueue(player.queueOrder(), (0 until trim.from).toList(), 0)
     }
 
     // --- DJ ---
@@ -1771,18 +1866,19 @@ class PlaybackService : MediaLibraryService() {
             djTracks[p.track.id] = p.track
             prefetchDjLyrics(p.track)
         }
-        val base = player.currentMediaItemIndex + 1
-        if (base < 0) return
-        val existing = (base until player.mediaItemCount).map(player::getMediaItemAt)
-        val manual = existing.filter { it.isManual }
+        val order = player.queueOrder()
+        val current = order.indexOf(player.currentMediaItemIndex)
+        if (current < 0) return
+        val manual = order.drop(current + 1).map(player::getMediaItemAt).takeWhile { it.isManual }
         val manualIds = manual.mapTo(HashSet()) { it.mediaId }
         val upcoming = manual + picks.filter { it.track.id !in manualIds }.map { it.track.toDjItem(d) }
         replaceUpcomingItems(upcoming)
     }
 
     private fun replaceUpcomingItems(upcoming: List<MediaItem>) {
-        val base = player.currentMediaItemIndex + 1
-        val existing = (base until player.mediaItemCount).map(player::getMediaItemAt)
+        val order = player.queueOrder()
+        val base = order.indexOf(player.currentMediaItemIndex) + 1
+        val existing = order.drop(base).map(player::getMediaItemAt)
         var common = 0
         val limit = min(existing.size, upcoming.size)
         while (common < limit && existing[common].mediaId == upcoming[common].mediaId && existing[common].isManual == upcoming[common].isManual) {
@@ -1790,7 +1886,11 @@ class PlaybackService : MediaLibraryService() {
         }
         // Si ya coincide exactamente con los ítems en cola (p. ej. índice+1 intacto), no tocamos la precarga de ExoPlayer.
         if (common == upcoming.size && existing.size == upcoming.size) return
-        player.replaceMediaItems(base + common, player.mediaItemCount, upcoming.drop(common))
+        if (player.shuffleModeEnabled) {
+            editQueue(order, (base + common until order.size).toList(), base + common, upcoming.drop(common))
+        } else {
+            player.replaceMediaItems(base + common, player.mediaItemCount, upcoming.drop(common))
+        }
     }
 
     private var lastShownMix: String? = null
@@ -1822,6 +1922,8 @@ class PlaybackService : MediaLibraryService() {
         // que el fundido la mira; solo el estilo de su plan.
         val resolvedStyle = mix?.style
         val extras = Bundle().apply {
+            putString(SESSION_RADIO_SEED, radio?.seed)
+            putIntArray(SESSION_MANUAL_QUEUE, manualQueueState)
             val tanda = if (d != null && current != null && current.isDjItem) {
                 d.tandaOf(current.mediaId) ?: current.mediaMetadata.extras?.getString(DJ_TANDA)
             } else null
@@ -1985,7 +2087,7 @@ class PlaybackService : MediaLibraryService() {
                 adhdMonitorJob?.cancel()
             }
             publishDjSessionExtras()
-            topUpRadio()
+            maintainQueue()
             autoplay()
             prefetch()
             historyCounted = false
@@ -2023,6 +2125,8 @@ class PlaybackService : MediaLibraryService() {
         }
 
         override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+            keepQueueOnShuffleChange(shuffleModeEnabled)
+            maintainQueue()
             prefetch()
             publishDjSessionExtras()
         }
@@ -2033,9 +2137,7 @@ class PlaybackService : MediaLibraryService() {
             publishLevels()
             prefetch()
             publishDjSessionExtras()
-            if (radio != null && reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
-                scope.launch(Dispatchers.Main) { if (radio != null) topUpRadio() }
-            }
+            if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) maintainQueue()
         }
 
         override fun onPlaybackStateChanged(state: Int) {
@@ -2138,6 +2240,7 @@ class PlaybackService : MediaLibraryService() {
                         .add(DJ_VETO_CMD)
                         .add(DJ_START_FROM_CMD)
                         .add(MANUAL_QUEUE_CMD)
+                        .add(MOVE_SHUFFLED_CMD)
                         .build(),
                 )
                 .build()
@@ -2157,6 +2260,21 @@ class PlaybackService : MediaLibraryService() {
                         insertManually(item, args.getBoolean(EXTRA_QUEUE_NEXT))
                         Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                     }
+                }
+                MOVE_SHUFFLED_CMD.customAction -> {
+                    val order = player.queueOrder().toMutableList()
+                    val from = args.getInt("from", -1)
+                    val to = args.getInt("to", -1)
+                    val current = order.indexOf(player.currentMediaItemIndex)
+                    if (!player.shuffleModeEnabled || from !in order.indices || to !in order.indices || from == current) {
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                    }
+                    if (radio != null && from > current && to <= current) {
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                    }
+                    order.add(to, order.removeAt(from))
+                    setShuffleQueueOrder(order.toIntArray())
+                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
                 DJ.customAction -> {
                     val requestedMode = args.getString(EXTRA_DJ_MODE)?.let { name -> DjMode.entries.firstOrNull { it.name == name } }
@@ -2236,8 +2354,15 @@ class PlaybackService : MediaLibraryService() {
             startIndex: Int,
             startPositionMs: Long,
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            if (mediaItems.firstOrNull()?.requestMetadata?.extras?.getBoolean("oto_exact_transfer") == true) {
-                stopDj(); stopRadio(); list = true; preserveTransferredQueue = true
+            val request = mediaItems.firstOrNull()?.requestMetadata?.extras
+            if (request?.getBoolean("oto_exact_transfer") == true) {
+                stopDj()
+                stopRadio()
+                player.shuffleModeEnabled = false
+                val seed = request.getString(SESSION_RADIO_SEED)
+                if (seed != null) startRadio(seed)
+                list = seed == null
+                preserveTransferredQueue = true
                 return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(mediaItems.map { it.withPlaybackUri() },startIndex,startPositionMs))
             }
             preserveTransferredQueue = false
@@ -2368,6 +2493,9 @@ const val EXTRA_DJ_GENRE = "genre"
 /** En los extras de cada canción del DJ: la tanda que pinchaba al ponerla (ver [io.github.iaguito22.oto.dj.Dj.tanda]). */
 const val DJ_TANDA = "oto_dj_tanda"
 const val DJ_REASON = "oto_dj_reason"
+internal val MOVE_SHUFFLED_CMD = SessionCommand("io.github.iaguito22.oto.MOVE_SHUFFLED", Bundle.EMPTY)
+internal const val SESSION_MANUAL_QUEUE = "oto_session_manual_queue"
+internal const val SESSION_RADIO_SEED = "oto_session_radio_seed"
 const val SESSION_DJ_TANDA = "oto_session_dj_tanda"
 const val SESSION_DJ_FULL_ONCE = "oto_session_dj_full_once"
 const val SESSION_DJ_NEXT_UP = "oto_session_dj_next_up"
