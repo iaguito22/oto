@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Devices
+import androidx.compose.material.icons.rounded.SystemUpdateAlt
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -42,6 +43,7 @@ import io.github.iaguito22.oto.desktop.playback.DesktopPlayerConnection
 import io.github.iaguito22.oto.desktop.supportsDesktopShortcut
 import io.github.iaguito22.oto.desktop.isWindowsDesktop
 import io.github.iaguito22.oto.desktop.DesktopGraphics
+import io.github.iaguito22.oto.desktop.desktopVersion
 import io.github.iaguito22.oto.importer.ImportState
 import io.github.iaguito22.oto.playback.Tier
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +60,7 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
     val quality by prefs.quality.collectAsState(initial=QualityMode.Auto)
     val saver by prefs.dataSaver.collectAsState(initial=false)
     val ramSaver by prefs.ramSaver.collectAsState(initial=false)
+    val checkUpdates by prefs.checkUpdates.collectAsState(initial=true)
     // Como en el móvil: aleatorio y bucle de Ajustes son los de las listas nuevas; cada lista recuerda los suyos.
     val shuffle by prefs.shuffle.collectAsState(initial=true)
     val loop by prefs.loop.collectAsState(initial=false)
@@ -74,6 +77,7 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
         item {SettingsLink(MobileIcons.accountCircle,"Cuenta de YouTube Music",session?.let { listOfNotNull(it.name.ifEmpty { null },it.email?.ifEmpty { null }).joinToString(" · ").ifEmpty { "Has entrado" } } ?: "Sin cuenta: recomendaciones de visitante",accent,onAccount)}
         item {SettingsLink(MobileIcons.playlistAdd,"Importar de Spotify",when(importState){is ImportState.Running->"Importando ${importState.done} de ${importState.total}";is ImportState.Done->"Importación terminada";else->"Tus listas y tus Me gusta"},accent,onImport)}
         item {SettingsLink(Icons.Rounded.Devices,"Dispositivos","Conectar con Oto móvil en la red local",accent,onDevices)}
+        item {SettingsToggle(Icons.Rounded.SystemUpdateAlt,"Buscar actualizaciones","Avisa cuando hay una versión nueva de Oto.",checkUpdates,accent){scope.launch{prefs.setCheckUpdates(!checkUpdates)}}}
         item {
             SettingFrame(MobileIcons.highQuality,accent) {
                 Row(verticalAlignment=Alignment.CenterVertically) {
@@ -124,8 +128,7 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
         item {SettingFrame(MobileIcons.settings,accent){Text("Atajos de teclado",style=OtoType.rowTitle);Text(if(ShellMode.startedSingle) "Ctrl + K: buscar · Ctrl + L: letra · Ctrl + ← / →: canción anterior o siguiente · Ctrl + ↑ / ↓: volumen · Ctrl + Mayús + M: mini reproductor · Ctrl + B: guardar"
             else "Espacio: reproducir o pausar · Ctrl + ← / →: canción anterior o siguiente · Ctrl + ↑ / ↓: volumen · Ctrl + Mayús + M: cambiar reproductor · Ctrl + B: guardar",style=OtoType.rowSub,color=Color.White.copy(alpha=.5f))}}
         item {
-            // jpackage pone la versión del instalador; al ejecutar desde Gradle no la hay.
-            Text("Oto${System.getProperty("jpackage.app-version")?.let { " $it" }.orEmpty()} · GPL-3.0\nCon InnerTubeX y partes de Metrolist.\nLetras de lyricsplus, NetEase, LRCLIB y YouTube Music.\ngithub.com/iaguito22/oto",
+            Text("Oto $desktopVersion · GPL-3.0\nCon InnerTubeX y partes de Metrolist.\nLetras de lyricsplus, NetEase, LRCLIB y YouTube Music.\ngithub.com/iaguito22/oto",
                 Modifier.padding(16.dp,24.dp),style=OtoType.rowSub,color=Color.White.copy(alpha=.3f))
         }
     }

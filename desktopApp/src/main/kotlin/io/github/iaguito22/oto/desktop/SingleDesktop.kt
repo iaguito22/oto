@@ -739,10 +739,9 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                             }
                             drawLayer(workspaceLayer)
                         }, verticalArrangement = Arrangement.spacedBy(Gap)) {
-                            // Los grupos de los lados miden lo mismo y el hueco de Dispositivos se repite a la izquierda:
-                            // así el buscador queda centrado en la ventana.
+                            // Ambos extremos reservan el mismo ancho para mantener centrado el buscador.
                             if (!mini) Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.width(96.dp)) { Pill {
+                                Box(Modifier.width(116.dp)) { Pill {
                                     TopButton(MobileIcons.settings, "Ajustes") { goSection(4) }
                                     val letter = (session?.name?.firstOrNull() ?: 'O').uppercaseChar().toString()
                                     val profileSource = remember(LocalHoverEpoch.current) { MutableInteractionSource() }
@@ -754,6 +753,7 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                                         if (session == null) Icon(Icons.Rounded.PersonOutline, "Cuenta", Modifier.size(18.dp), tint = Color.White.copy(.8f))
                                         else Text(letter, style = OtoType.rowTitle, color = Color.White)
                                     }
+                                    DesktopUpdateButton(accent, size = 32.dp)
                                 } }
                                 SingleDragArea(Modifier.weight(1f).fillMaxHeight(), customFrame, nativeFrame, caption, 0, ::maximize)
                                 SingleDragArea(Modifier.width(54.dp).fillMaxHeight(), customFrame, nativeFrame, caption, 2, ::maximize)
@@ -793,7 +793,7 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                                     TopButton(Icons.Rounded.Devices, "Dispositivos", tint = if (mirrored != null || remote != null) accent else null, onClick = ::openDevices)
                                 }
                                 SingleDragArea(Modifier.weight(1f).fillMaxHeight(), customFrame, nativeFrame, caption, 1, ::maximize)
-                                Box(Modifier.width(96.dp).offset(y = (-3).dp), contentAlignment = Alignment.CenterEnd) {
+                                Box(Modifier.width(116.dp).offset(y = (-3).dp), contentAlignment = Alignment.CenterEnd) {
                                     if (customFrame) SingleWindowControls(accent, maximized(), null,
                                         minimize = { state.isMinimized = true }, maximize = ::maximize,
                                         close = { window.dispatchEvent(WindowEvent(window, WindowEvent.WINDOW_CLOSING)) })
@@ -1485,16 +1485,20 @@ private fun Dock(modifier: Modifier, mini: Boolean, customFrame: Boolean, worksp
         // y solo aparecen con el puntero (o el foco) dentro del dock: nunca tapan los controles.
         if (mini) {
             val extras by animateFloatAsState(if (hovered || dockFocused) 1f else 0f, tween(160), label = "extrasMini")
-            Column(Modifier.align(Alignment.CenterEnd).padding(end = 4.dp).fillMaxHeight().width(24.dp).padding(top = 1.dp, bottom = 5.dp)
-                .graphicsLayer { alpha = extras; translationX = (1f - extras) * 6f },
-                verticalArrangement = Arrangement.SpaceEvenly, horizontalAlignment = Alignment.CenterHorizontally) {
-                if (extras > 0f) {
-                    WindowGlyph(Icons.Rounded.OpenInFull, "Abrir Oto", true, accent, currentMini, 18.dp)
-                    WindowGlyph(if (pinned) Icons.Rounded.PushPin else Icons.Outlined.PushPin, if (pinned) "Dejar de fijar encima" else "Fijar encima de todo",
-                        true, accent, onPin, 18.dp, tint = if (pinned) accent else null)
-                    if (customFrame) {
-                        WindowGlyph(Icons.Rounded.Remove, "Minimizar", true, accent, onMinimize, 18.dp)
-                        WindowGlyph(Icons.Rounded.Close, "Cerrar", true, Color(0xFFFF737B), onClose, 18.dp)
+            val glyphSize = if (LocalDesktopUpdate.current?.release != null && customFrame) 14.dp else 18.dp
+            Column(Modifier.align(Alignment.CenterEnd).padding(end = 4.dp).fillMaxHeight().width(24.dp).padding(top = 1.dp, bottom = 5.dp),
+                horizontalAlignment = Alignment.CenterHorizontally) {
+                DesktopUpdateButton(accent, 18.dp)
+                Column(Modifier.weight(1f).graphicsLayer { alpha = extras; translationX = (1f - extras) * 6f },
+                    verticalArrangement = Arrangement.SpaceEvenly, horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (extras > 0f) {
+                        WindowGlyph(Icons.Rounded.OpenInFull, "Abrir Oto", true, accent, currentMini, glyphSize)
+                        WindowGlyph(if (pinned) Icons.Rounded.PushPin else Icons.Outlined.PushPin, if (pinned) "Dejar de fijar encima" else "Fijar encima de todo",
+                            true, accent, onPin, glyphSize, tint = if (pinned) accent else null)
+                        if (customFrame) {
+                            WindowGlyph(Icons.Rounded.Remove, "Minimizar", true, accent, onMinimize, glyphSize)
+                            WindowGlyph(Icons.Rounded.Close, "Cerrar", true, Color(0xFFFF737B), onClose, glyphSize)
+                        }
                     }
                 }
             }

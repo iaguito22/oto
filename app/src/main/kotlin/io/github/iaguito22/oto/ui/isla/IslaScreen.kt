@@ -107,6 +107,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -175,6 +176,8 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
     val density = LocalDensity.current
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
+    val updates = rememberAndroidUpdates(app.prefs)
+    var updateBannerHeight by remember { mutableIntStateOf(0) }
     val drop = remember { DropState() }
     val sheet = rememberSheetState()
     val tutorial = remember { TutorialState() }
@@ -286,7 +289,7 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
         Backdrop(np.artwork ?: pc?.artwork)
         CompositionLocalProvider(LocalCovered provides { sheet.isOpen && sheet.morph.value >= 0.98f }) { Stage(
             np, connection, drop, lyrics, openSource, openArtist, saved, like, save, burst, { flash = it },
-            Modifier.padding(top = REMOTE_BANNER_SPACE * bannerSpace.coerceAtLeast(0f)) /* el rebote pasa de 0 */.graphicsLayer {
+            Modifier.padding(top = REMOTE_BANNER_SPACE * bannerSpace.coerceAtLeast(0f) + with(density) { updateBannerHeight.toDp() }).graphicsLayer {
                 // Lo de detrás se aleja y se desenfoca mientras la hoja crece: hace de cristal sin capturar la pantalla.
                 val m = sheet.morph.value.coerceIn(0f, 1.2f)
                 alpha = 1f - 0.92f * teaching
@@ -301,6 +304,14 @@ private fun Isla(np: NowPlaying, connection: PlayerConnection, app: OtoApp) {
                 alpha = 1f - (sheet.morph.value / 0.3f).coerceIn(0f, 1f)
             },
         )
+        if (updates != null) {
+            Box(Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                .padding(start = 16.dp, end = 16.dp, top = 8.dp + REMOTE_BANNER_SPACE * bannerSpace.coerceAtLeast(0f))) {
+                Box(Modifier.onSizeChanged { updateBannerHeight = it.height }) {
+                    AndroidUpdateBanner(updates, visible = !tutorial.active && !sheet.isOpen)
+                }
+            }
+        }
         Drop(
             state = drop,
             playing = np.playing,

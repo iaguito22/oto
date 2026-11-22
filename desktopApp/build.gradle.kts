@@ -73,6 +73,11 @@ compose.desktop {
             )
             packageName = "Oto"
             packageVersion = "2.2.0"
+            val installedVersion = checkNotNull(packageVersion)
+            tasks.processResources {
+                inputs.property("otoVersion", installedVersion)
+                filesMatching("oto-version.properties") { expand("version" to installedVersion) }
+            }
             description = "Oto — Tu música, a tu manera"
             vendor = "iaguito22"
             modules("java.instrument", "java.management", "jdk.management","java.naming", "java.prefs", "java.sql", "jdk.unsupported", "jdk.httpserver", "java.desktop", "java.net.http")

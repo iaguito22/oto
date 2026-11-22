@@ -1505,6 +1505,13 @@ private fun Settings(connection: PlayerConnection, onBack: () -> Unit, onTutoria
             )
             SettingRow(R.drawable.ic_playlist_add, "Importar de Spotify", importSummary(state), onImport)
             SettingRow(R.drawable.ic_account_circle, "Dispositivos", "Conectar con Oto Desktop en la red local") { app.startActivity(android.content.Intent(app, io.github.iaguito22.oto.remote.DevicesActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            if (io.github.iaguito22.oto.ui.isla.supportsAndroidUpdates) {
+                val checkUpdates by app.prefs.checkUpdates.collectAsStateWithLifecycle(initialValue = true)
+                val scope = rememberCoroutineScope()
+                ToggleRow(R.drawable.ic_download, "Buscar actualizaciones", "Avisa cuando hay una versión nueva de Oto.", checkUpdates) {
+                    scope.launch { app.prefs.setCheckUpdates(!checkUpdates) }
+                }
+            }
             AudioSettings(app.prefs)
             SmartMixRow(app.prefs)
             CrossfadeRow(app.prefs)
