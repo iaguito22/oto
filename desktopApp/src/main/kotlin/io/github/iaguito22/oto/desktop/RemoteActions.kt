@@ -23,6 +23,7 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
+import io.github.iaguito22.oto.desktop.ui.VolumePercentage
 import io.github.iaguito22.oto.remote.LocalLink
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -95,7 +96,7 @@ internal fun RemoteActions(link: LocalLink, queueInitiallyExpanded: Boolean = fa
             var volume by remember { mutableStateOf<Float?>(null) }
             val level = volume ?: remote.optDouble("volume", .5).toFloat().coerceIn(0f, 1f)
             Box(Modifier.weight(1f)) { RemoteSlider(level, { volume = it }, { volume?.let { v -> send("volume") { it.put("value", v) } }; volume = null }, "Volumen del dispositivo") }
-            Text("${(level * 100).toInt()} %", Modifier.width(42.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .5f))
+            VolumePercentage(level, Modifier.width(42.dp))
             if (hasSong) RemoteIcon(Icons.Rounded.FavoriteBorder, "Alternar Me gusta", !pending) { send("like") }
         }
         var expanded by remember(queueInitiallyExpanded) { mutableStateOf(queueInitiallyExpanded) }

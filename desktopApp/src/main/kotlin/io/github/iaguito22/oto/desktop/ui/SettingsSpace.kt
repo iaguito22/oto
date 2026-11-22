@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.SystemUpdateAlt
 import androidx.compose.material.icons.rounded.Tune
@@ -44,6 +45,7 @@ import io.github.iaguito22.oto.desktop.supportsDesktopShortcut
 import io.github.iaguito22.oto.desktop.isWindowsDesktop
 import io.github.iaguito22.oto.desktop.DesktopGraphics
 import io.github.iaguito22.oto.desktop.desktopVersion
+import io.github.iaguito22.oto.desktop.DesktopPreferences
 import io.github.iaguito22.oto.importer.ImportState
 import io.github.iaguito22.oto.playback.Tier
 import kotlinx.coroutines.Dispatchers
@@ -118,6 +120,13 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
         item {SettingsToggle(MobileIcons.repeat,"Repetir la lista",if(loop) "Al acabar una lista nueva, vuelve a empezar." else "Al acabar una lista nueva, siguen canciones parecidas.",loop,accent){scope.launch{prefs.setLoop(!loop)}}}
         item {SettingsToggle(MobileIcons.graphicEq,"Carátula al ritmo","La carátula late un poco con los graves de lo que suena. Usa CPU y GPU mientras suena.",beat,accent){scope.launch{prefs.setCoverBeat(!beat)}}}
         item {SettingsToggle(MobileIcons.timer,"Tiempo que falta",if(remaining) "A la derecha de la barra, lo que falta (-1:23)." else "A la derecha de la barra, lo que dura (3:45).",remaining,accent){scope.launch{prefs.setShowRemaining(!remaining)}}}
+        item {
+            val show = DesktopPreferences.showVolumePercentage
+            SettingsToggle(Icons.AutoMirrored.Rounded.VolumeUp, "Mostrar porcentaje del volumen",
+                "Muestra el nivel junto a la barra de volumen.", show, accent) {
+                DesktopPreferences.updateVolumePercentage(!show)
+            }
+        }
         item {SettingsToggle(MobileIcons.translate,"Romanización","La letra en japonés, coreano o chino lleva debajo cómo se lee. También manteniendo pulsada la letra.",romanize,accent){scope.launch{prefs.setRomanize(!romanize)}}}
         item {SettingsToggle(MobileIcons.libraryMusic,"Fondo con la carátula","La carátula de lo que suena, de fondo. Usa GPU al dibujarlo y algo de CPU y RAM al cambiar de canción.",artworkBackground,accent){onArtworkBackground(!artworkBackground)}}
         if(artworkBackground) item {SettingFrame(MobileIcons.libraryMusic,accent) { Text("Intensidad del fondo · ${(backdropOpacity*100).toInt()} %",style=OtoType.rowTitle); Slider(backdropOpacity,onBackdropOpacity,colors=SliderDefaults.colors(thumbColor=accent,activeTrackColor=accent)) }}

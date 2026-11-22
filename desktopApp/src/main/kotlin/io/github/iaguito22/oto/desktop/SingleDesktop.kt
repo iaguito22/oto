@@ -862,7 +862,7 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                                         // Se cierra con el botón del dock, Ctrl+L o Esc. Solo quedan − / + discretos arriba.
                                         val sizeHover = remember(hoverEpoch) { MutableInteractionSource() }
                                         val sizeHovered by sizeHover.collectIsHoveredAsState()
-                                        BoxWithConstraints(Modifier.fillMaxSize().background(Color(0x400F0F11)).background(Brush.verticalGradient(listOf(accent.copy(.18f), accent.copy(.04f))))
+                                        BoxWithConstraints(Modifier.fillMaxSize()
                                             .focusRequester(lyricFocus).focusable()
                                             .pointerInput(Unit) { detectTapGestures { } }) {
                                             val side = (maxWidth * .1f).coerceIn(24.dp, 120.dp)
@@ -1445,7 +1445,10 @@ private fun Dock(modifier: Modifier, mini: Boolean, customFrame: Boolean, worksp
                 if (now.id != null) SaveButton(saved, accent, onSave)
                 DockButton(if (shownVolume <= 0f) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
                     if (volume <= 0f) "Activar sonido" else "Silenciar", dim, onClick = onMute)
-                if (showMiniVolumeSlider) DockSlider(shownVolume, Modifier.width(64.dp), "Volumen", preview, accent = accent, onCommit = onVolume)
+                if (showMiniVolumeSlider) {
+                    DockSlider(shownVolume, Modifier.width(64.dp), "Volumen", preview, accent = accent, onCommit = onVolume)
+                    VolumePercentage(shownVolume, Modifier.padding(start = 4.dp).width(40.dp))
+                }
             }
         } else Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 8.dp).height(60.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.width(side), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1474,7 +1477,10 @@ private fun Dock(modifier: Modifier, mini: Boolean, customFrame: Boolean, worksp
                 val shownVolume = volumePreview.value ?: volume
                 DockButton(when { shownVolume <= 0f -> Icons.Rounded.VolumeOff; shownVolume < .5f -> Icons.Rounded.VolumeDown; else -> Icons.Rounded.VolumeUp },
                     if (volume <= 0f) "Activar sonido" else "Silenciar", dim, onClick = onMute)
-                if (showVolumeSlider) DockSlider(shownVolume, Modifier.widthIn(min = 56.dp, max = 96.dp).weight(1f, fill = false), "Volumen", volumePreview, accent = accent, onCommit = onVolume)
+                if (showVolumeSlider) {
+                    DockSlider(shownVolume, Modifier.widthIn(min = 56.dp, max = 96.dp).weight(1f, fill = false), "Volumen", volumePreview, accent = accent, onCommit = onVolume)
+                    VolumePercentage(shownVolume, Modifier.width(40.dp))
+                }
                 if (!mini) DockButton(Icons.Rounded.PictureInPictureAlt, "Mini reproductor (Ctrl+Mayús+M)", dim, onClick = onMini)
             }
         }

@@ -26,12 +26,12 @@ import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import io.github.iaguito22.oto.desktop.ui.FineSlider
 import io.github.iaguito22.oto.desktop.ui.LibraryArt
 import io.github.iaguito22.oto.desktop.ui.MobileIcons
 import io.github.iaguito22.oto.desktop.ui.OtoType
+import io.github.iaguito22.oto.desktop.ui.VolumePercentage
 import java.awt.EventQueue
 import java.awt.MouseInfo
 import java.awt.SystemTray
@@ -131,7 +131,7 @@ internal fun OtoTray(toggle: () -> Unit, player: () -> Unit, library: () -> Unit
                         Icon(when { volume <= 0f -> Icons.AutoMirrored.Rounded.VolumeOff; volume < .5f -> Icons.AutoMirrored.Rounded.VolumeDown; else -> Icons.AutoMirrored.Rounded.VolumeUp },
                             "Volumen",Modifier.size(16.dp).clickable(interactionSource=null,indication=null) { setVolume(if(volume > 0f) 0f else .5f) },tint=Color.White.copy(alpha=.65f))
                         FineSlider(volume,setVolume,Modifier.weight(1f),label="Volumen")
-                        Text("${(volume*100).toInt()}",Modifier.width(24.dp),style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),textAlign=TextAlign.End)
+                        VolumePercentage(volume, Modifier.width(42.dp))
                     }
                     @Composable fun Entry(icon:ImageVector,label:String,action:()->Unit) {
                         val interaction=remember { MutableInteractionSource() }
