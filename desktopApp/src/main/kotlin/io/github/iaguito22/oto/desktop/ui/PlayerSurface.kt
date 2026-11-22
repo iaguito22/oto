@@ -89,8 +89,9 @@ internal fun FineSlider(value:Float, onChange:(Float)->Unit, modifier:Modifier=M
 }
 
 @Composable
-internal fun VolumePercentage(volume: Float, modifier: Modifier = Modifier) {
-    if (DesktopPreferences.showVolumePercentage) {
+/** [always]: donde el porcentaje ya se veía antes del ajuste (bandeja, menús, control remoto) se sigue viendo siempre. */
+internal fun VolumePercentage(volume: Float, modifier: Modifier = Modifier, always: Boolean = false) {
+    if (always || DesktopPreferences.showVolumePercentage) {
         Text(
             "${round(volume * 100).toInt()} %",
             modifier,

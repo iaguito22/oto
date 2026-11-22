@@ -131,7 +131,7 @@ internal fun OtoTray(toggle: () -> Unit, player: () -> Unit, library: () -> Unit
                         Icon(when { volume <= 0f -> Icons.AutoMirrored.Rounded.VolumeOff; volume < .5f -> Icons.AutoMirrored.Rounded.VolumeDown; else -> Icons.AutoMirrored.Rounded.VolumeUp },
                             "Volumen",Modifier.size(16.dp).clickable(interactionSource=null,indication=null) { setVolume(if(volume > 0f) 0f else .5f) },tint=Color.White.copy(alpha=.65f))
                         FineSlider(volume,setVolume,Modifier.weight(1f),label="Volumen")
-                        VolumePercentage(volume, Modifier.width(42.dp))
+                        VolumePercentage(volume, Modifier.width(42.dp), always = true)
                     }
                     @Composable fun Entry(icon:ImageVector,label:String,action:()->Unit) {
                         val interaction=remember { MutableInteractionSource() }

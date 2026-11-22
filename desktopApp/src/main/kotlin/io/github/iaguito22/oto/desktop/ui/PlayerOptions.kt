@@ -83,7 +83,7 @@ internal fun optionsPosition(parent: Rectangle?, area: Rectangle, width:Int=270,
                 Column {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Volumen", style = OtoType.rowSub, color = Color.White.copy(alpha = .5f))
-                        VolumePercentage(volume)
+                        VolumePercentage(volume, always = true)
                     }
                     FineSlider(volume,setVolume,label="Volumen")
                 }

@@ -96,7 +96,7 @@ internal fun RemoteActions(link: LocalLink, queueInitiallyExpanded: Boolean = fa
             var volume by remember { mutableStateOf<Float?>(null) }
             val level = volume ?: remote.optDouble("volume", .5).toFloat().coerceIn(0f, 1f)
             Box(Modifier.weight(1f)) { RemoteSlider(level, { volume = it }, { volume?.let { v -> send("volume") { it.put("value", v) } }; volume = null }, "Volumen del dispositivo") }
-            VolumePercentage(level, Modifier.width(42.dp))
+            VolumePercentage(level, Modifier.width(42.dp), always = true)
             if (hasSong) RemoteIcon(Icons.Rounded.FavoriteBorder, "Alternar Me gusta", !pending) { send("like") }
         }
         var expanded by remember(queueInitiallyExpanded) { mutableStateOf(queueInitiallyExpanded) }

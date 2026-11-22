@@ -405,7 +405,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                     Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically) {
                         Icon(Icons.AutoMirrored.Rounded.VolumeUp,"Volumen",Modifier.size(18.dp),tint=Color.White.copy(alpha=.55f))
                         Spacer(Modifier.weight(1f))
-                        VolumePercentage(volume)
+                        VolumePercentage(volume, always = true)
                     }
                     }
                 } else Box {
@@ -414,7 +414,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                         Column(Modifier.padding(horizontal=16.dp,vertical=8.dp)) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Volumen", style = OtoType.rowSub)
-                                VolumePercentage(volume)
+                                VolumePercentage(volume, always = true)
                             }
                             FineSlider(volume, player::setVolume, label = "Volumen")
                         }
