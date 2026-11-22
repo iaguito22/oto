@@ -1,7 +1,10 @@
 package io.github.iaguito22.oto.desktop.ui
 
 import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.DragGestureDetector
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import sh.calvin.reorderable.rememberScroller
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 
 import androidx.compose.animation.AnimatedVisibility
@@ -29,6 +32,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -121,6 +126,9 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -134,6 +142,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalDensity
 import com.metrolist.innertube.models.AlbumItem
 import com.metrolist.innertube.models.ArtistItem
 import com.metrolist.innertube.models.PlaylistItem
@@ -167,6 +176,7 @@ import io.github.iaguito22.oto.ui.menu.Filter
 import io.github.iaguito22.oto.ui.menu.MenuController
 import io.github.iaguito22.oto.ui.menu.Page
 import io.github.iaguito22.oto.desktop.ui.MobileIcons
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.awt.FileDialog
 import java.awt.Frame
@@ -4223,18 +4233,76 @@ internal fun QueuePane(
     bottomInset: Dp = 0.dp,
     onSkipDjTanda: (() -> Unit)? = null,
     onArtist: ((String, String?) -> Unit)? = null,
+    listState: LazyListState = rememberLazyListState(),
+    panelHeader: (@Composable () -> Unit)? = null,
 ) {
     val nextUpIds = remember(djActive, djNextUp) {
         if (djActive) djNextUp.mapTo(HashSet()) { it.track.id } else emptySet()
     }
-    val curIdx = currentIndex ?: queue.indexOfFirst { it.id == currentMediaId }.takeIf { it >= 0 }
-    val visibleQueue = remember(queue, curIdx, currentMediaId, djActive, nextUpIds, refined) {
-        if (!djActive || nextUpIds.isEmpty()) queue.mapIndexedNotNull { idx, entry -> if (refined && curIdx != null && idx <= curIdx) null else idx to entry }
-        else queue.mapIndexedNotNull { idx, entry ->
-            if (refined && curIdx != null && idx <= curIdx) null else if (idx > (curIdx ?: -1) && entry.id in nextUpIds && entry.id != currentMediaId) null else idx to entry
+    val curIdx = currentIndex ?: queue.firstOrNull { it.id == currentMediaId }?.index
+    val compactDj = refined && djActive
+    val keyedQueue = remember(queue) {
+        val occurrences = mutableMapOf<String, Int>()
+        queue.map { entry ->
+            val occurrence = occurrences.getOrDefault(entry.id, 0)
+            occurrences[entry.id] = occurrence + 1
+            QueueRowItem("queue:${entry.id}#$occurrence", entry)
         }
     }
-    val compactDj = refined && djActive
+    val visibleQueue = remember(keyedQueue, curIdx, currentMediaId, nextUpIds, compactDj) {
+        keyedQueue.filter { (_, entry) ->
+            val pastOrCurrent = entry.index <= (curIdx ?: -1)
+            if (pastOrCurrent) !compactDj else entry.id !in nextUpIds || entry.id == currentMediaId
+        }
+    }
+    val reorder = remember(keyedQueue, visibleQueue) { QueueReorder(visibleQueue) }
+    val currentReorder by rememberUpdatedState(reorder)
+    val commitMove by rememberUpdatedState(onMove)
+    val density = LocalDensity.current
+    val scroller = rememberScroller(listState, pixelPerSecond = with(density) { 85.dp.toPx() })
+    val reorderState = rememberReorderableLazyListState(
+        listState,
+        scrollThresholdPadding = PaddingValues(bottom = bottomInset),
+        scrollThreshold = 52.dp,
+        scroller = scroller,
+    ) { from, to -> currentReorder.move(from.key, to.key) }
+    val dragging = reorderState.isAnyItemDragging
+    var settlingRows by remember { mutableStateOf(false) }
+    LaunchedEffect(dragging) {
+        if (dragging) {
+            settlingRows = true
+        } else if (settlingRows) {
+            delay(220)
+            settlingRows = false
+        }
+    }
+    val userScroll = remember(listState) { QueueUserScroll() }
+    val activeKey = if (panelHeader == null) null else visibleQueue.firstOrNull {
+        it.entry.index == curIdx && it.entry.id == currentMediaId
+    }?.key
+    LaunchedEffect(activeKey, listState) {
+        if (activeKey == null || dragging || userScroll.isRecent() || listState.isScrollInProgress) {
+            return@LaunchedEffect
+        }
+        val layout = listState.layoutInfo
+        val viewportEnd = layout.viewportEndOffset - with(density) { bottomInset.roundToPx() }
+        val row = layout.visibleItemsInfo.firstOrNull { it.key == activeKey }
+        if (row != null) {
+            val delta = when {
+                row.offset < layout.viewportStartOffset -> row.offset - layout.viewportStartOffset
+                row.offset + row.size > viewportEnd -> row.offset + row.size - viewportEnd
+                else -> 0
+            }
+            if (delta != 0) listState.animateScrollBy(delta.toFloat(), tween(230))
+        } else {
+            val position = reorder.rows.indexOfFirst { it.key == activeKey }
+            // En el panel, la carátula y la cabecera de cola preceden a las canciones.
+            val index = position + 2
+            val offset = if (index <= listState.firstVisibleItemIndex) 0
+                else -(viewportEnd - with(density) { 70.dp.roundToPx() }).coerceAtLeast(0)
+            if (position >= 0) listState.animateScrollToItem(index, scrollOffset = offset)
+        }
+    }
     val canPlayFull = compactDj && djMode == DjMode.Adhd && onPlayDjFullOnce != null
     @Composable fun QueueOptions() {
         if (!refined || (queue.size <= 1 && !canPlayFull)) return
@@ -4247,14 +4315,14 @@ internal fun QueuePane(
                 if (canPlayFull) DropdownMenuItem(
                     text = { Text(if (djFullOnce) "Esta suena entera" else "Oír esta entera") },
                     enabled = !djFullOnce,
-                    onClick = { options = false; onPlayDjFullOnce?.invoke() },
+                    onClick = { options = false; onPlayDjFullOnce() },
                 )
                 if (queue.size > 1) DropdownMenuItem(text = { Text("Vaciar cola") },
                     onClick = { options = false; onClearQueue() })
             }
         }
     }
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(if (compactDj) 8.dp else 14.dp)) {
+    val header: @Composable () -> Unit = {
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -4265,7 +4333,7 @@ internal fun QueuePane(
                 Column(if (refined) Modifier.weight(1f) else Modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            text = if (djActive) "Cola del DJ" else if (refined) "A continuación" else "Cola de reproducción",
+                            text = if (djActive) "Cola del DJ" else "Cola de reproducción",
                             style = if (refined) OtoType.rowTitle else OtoType.section,
                             color = Color.White,
                         )
@@ -4361,108 +4429,130 @@ internal fun QueuePane(
                 }
             }
         }
-        if (visibleQueue.isEmpty() && (!djActive || djNextUp.isEmpty())) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(
-                        imageVector = MobileIcons.queueMusic,
-                        contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.30f),
-                        modifier = Modifier.size(38.dp),
-                    )
-                    Text(
-                        text = if (refined) "Sin siguientes" else "La cola está vacía",
-                        style = OtoType.rowTitle,
-                        color = Color.White.copy(alpha = 0.82f),
-                    )
-                    Text(
-                        text = if (refined) "Añade canciones para seguir escuchando." else "Pon algo a sonar y aquí verás lo que viene después.",
-                        style = OtoType.rowSub,
-                        color = Color.White.copy(alpha = 0.62f),
-                    )
+    }
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(if (compactDj) 8.dp else 14.dp)) {
+        if (panelHeader == null) header()
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth().nestedScroll(userScroll),
+            state = listState,
+            contentPadding = PaddingValues(top = if (refined) 0.dp else 16.dp, bottom = 12.dp + bottomInset),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (panelHeader != null) {
+                item(key = "now_playing") { panelHeader() }
+                item(key = "queue_header") {
+                    Box(Modifier.fillMaxWidth().padding(start = 18.dp, end = 14.dp, bottom = 8.dp)) { header() }
                 }
             }
-        } else {
-            val listState = rememberLazyListState()
-            val reorderState = rememberReorderableLazyListState(listState) { from, to ->
-                val fromIdx = visibleQueue.getOrNull(from.index)?.first ?: return@rememberReorderableLazyListState
-                val toIdx = visibleQueue.getOrNull(to.index)?.first ?: return@rememberReorderableLazyListState
-                onMove(fromIdx, toIdx)
+            val rowPadding = if (panelHeader != null) Modifier.padding(start = 18.dp, end = 14.dp) else Modifier
+            if (visibleQueue.isEmpty() && (!djActive || djNextUp.isEmpty())) item(key = "empty_queue") {
+                val emptySpace = if (panelHeader == null) Modifier.fillParentMaxHeight() else Modifier.height(180.dp)
+                Box(emptySpace.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            imageVector = MobileIcons.queueMusic,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.30f),
+                            modifier = Modifier.size(38.dp),
+                        )
+                        Text(
+                            text = if (refined) "Sin siguientes" else "La cola está vacía",
+                            style = OtoType.rowTitle,
+                            color = Color.White.copy(alpha = 0.82f),
+                        )
+                        Text(
+                            text = if (refined) "Añade canciones para seguir escuchando." else "Pon algo a sonar y aquí verás lo que viene después.",
+                            style = OtoType.rowSub,
+                            color = Color.White.copy(alpha = 0.62f),
+                        )
+                    }
+                }
             }
-            val occurrences = mutableMapOf<String,Int>()
-            val keyedQueue = visibleQueue.map { (origIdx, entry) ->
-                val n = occurrences.getOrDefault(entry.id, 0)
-                occurrences[entry.id] = n + 1
-                Triple("${entry.id}#$n", origIdx, entry)
-            }
-            LazyColumn(Modifier.weight(1f), state=listState, contentPadding=PaddingValues(top=if(refined)0.dp else 16.dp,bottom=12.dp+bottomInset), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                itemsIndexed(keyedQueue, key = { _, item -> item.first }) { _, item ->
-                    val (key, origIdx, entry) = item
-                    ReorderableItem(reorderState, key) { dragging ->
-                        Column {
-                            QueueRowDesktop(
-                                refined = refined,
-                                index = origIdx + 1,
-                                title = entry.title,
-                                subtitle = entry.artist,
-                                onArtist = onArtist?.let { open -> { open(entry.artist, entry.artistId) } },
-                                artwork = entry.artwork,
-                                isCurrent = if (currentIndex != null) origIdx == currentIndex else entry.id == currentMediaId,
-                                accent = palette.primary,
-                                dragModifier = Modifier.draggableHandle(),
-                                isDragging = dragging,
-                                onClick = { onSkipTo(origIdx) },
-                                onRemove = { onRemove(origIdx) },
-                            )
-                            if (nextMix != null && curIdx != null && origIdx == curIdx + 1 && nextMix.nextId == entry.id) {
-                                MixBadgeDesktop(nextMix, palette.primary, Modifier.padding(start = 52.dp, top = 2.dp, bottom = 4.dp))
-                            }
+            items(reorder.rows, key = { it.key }) { (key, entry) ->
+                val origIdx = entry.index
+                // El aviso de mezcla también cambia el alto de una fila. Solo animamos
+                // las posiciones como parte del gesto de reordenar.
+                val placement = if (dragging || settlingRows) {
+                    Modifier.animateItem(fadeInSpec = null, placementSpec = tween(200), fadeOutSpec = null)
+                } else Modifier
+                ReorderableItem(reorderState, key, animateItemModifier = placement) { dragging ->
+                    val releaseDetector = remember(key) {
+                        DragGestureDetector { start, end, cancel, drag ->
+                            detectDragGestures(start, {
+                                currentReorder.release(key)?.let { (from, to) -> commitMove(from, to) }
+                                end()
+                            }, cancel, drag)
+                        }
+                    }
+                    Column(rowPadding) {
+                        QueueRowDesktop(
+                            refined = refined,
+                            index = origIdx + 1,
+                            title = entry.title,
+                            subtitle = entry.artist,
+                            onArtist = onArtist?.let { open -> { open(entry.artist, entry.artistId) } },
+                            artwork = entry.artwork,
+                            isCurrent = if (currentIndex != null) origIdx == currentIndex else entry.id == currentMediaId,
+                            accent = palette.primary,
+                            dragModifier = if (visibleQueue.size < 2) null else Modifier.draggableHandle(
+                                onDragStarted = { currentReorder.start(key) },
+                                onDragStopped = { currentReorder.cancel(key) },
+                                dragGestureDetector = releaseDetector,
+                            ),
+                            isDragging = dragging,
+                            onClick = { onSkipTo(origIdx) },
+                            onRemove = { onRemove(origIdx) },
+                        )
+                        if (nextMix != null && curIdx != null && origIdx == curIdx + 1 && nextMix.nextId == entry.id) {
+                            MixBadgeDesktop(nextMix, palette.primary, Modifier.padding(start = 52.dp, top = 2.dp, bottom = 4.dp))
                         }
                     }
                 }
-                if (djActive && djNextUp.isNotEmpty()) {
-                    if (!compactDj) item(key = "dj_nextup_header") {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp, start = 4.dp, end = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Icon(MobileIcons.graphicEq, null, tint = palette.primary, modifier = Modifier.size(15.dp))
+            }
+            if (djActive && djNextUp.isNotEmpty()) {
+                if (!compactDj) item(key = "dj_nextup_header") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().then(rowPadding).padding(top = 14.dp, bottom = 6.dp, start = 4.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(MobileIcons.graphicEq, null, tint = palette.primary, modifier = Modifier.size(15.dp))
+                        Text(
+                            text = "SIGUIENTES DEL DJ",
+                            style = OtoType.label.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
+                            color = Color.White.copy(alpha = 0.72f),
+                        )
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .height(1.dp)
+                                .background(Color.White.copy(alpha = 0.12f)),
+                        )
+                        djMoodPillLabel(djTanda).takeIf { it != "Otro ambiente" }?.let { tandaLabel ->
                             Text(
-                                text = "SIGUIENTES DEL DJ",
-                                style = OtoType.label.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
-                                color = Color.White.copy(alpha = 0.72f),
+                                text = tandaLabel,
+                                style = OtoType.label.copy(fontSize = 11.sp),
+                                color = palette.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .widthIn(max = 220.dp)
+                                    .clip(CircleShape)
+                                    .background(palette.primary.copy(alpha = 0.14f))
+                                    .border(1.dp, palette.primary.copy(alpha = 0.32f), CircleShape)
+                                    .padding(horizontal = 9.dp, vertical = 3.dp),
                             )
-                            Box(
-                                Modifier
-                                    .weight(1f)
-                                    .height(1.dp)
-                                    .background(Color.White.copy(alpha = 0.12f)),
-                            )
-                            djMoodPillLabel(djTanda).takeIf { it != "Otro ambiente" }?.let { tandaLabel ->
-                                Text(
-                                    text = tandaLabel,
-                                    style = OtoType.label.copy(fontSize = 11.sp),
-                                    color = palette.primary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier
-                                        .widthIn(max = 220.dp)
-                                        .clip(CircleShape)
-                                        .background(palette.primary.copy(alpha = 0.14f))
-                                        .border(1.dp, palette.primary.copy(alpha = 0.32f), CircleShape)
-                                        .padding(horizontal = 9.dp, vertical = 3.dp),
-                                )
-                            }
                         }
                     }
-                    itemsIndexed(djNextUp, key = { i, info -> "dj_nextup:${info.track.id}:$i" }) { i, info ->
-                        val skipIdx = queue.withIndex().firstOrNull { (qIdx, e) ->
-                            qIdx > (curIdx ?: -1) && e.id == info.track.id
-                        }?.index
+                }
+                itemsIndexed(djNextUp, key = { i, info -> "dj_nextup:${info.track.id}:$i" }) { i, info ->
+                    val skipIdx = queue.withIndex().firstOrNull { (qIdx, e) ->
+                        qIdx > (curIdx ?: -1) && e.id == info.track.id
+                    }?.index
+                    Box(rowPadding) {
                         DjNextUpRowDesktop(
                             offset = i + 1,
                             info = info,
@@ -4478,6 +4568,17 @@ internal fun QueuePane(
             }
         }
     }
+}
+
+private class QueueUserScroll : NestedScrollConnection {
+    private var lastInput: Long? = null
+
+    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+        if (source == NestedScrollSource.UserInput && available.y != 0f) lastInput = System.nanoTime()
+        return Offset.Zero
+    }
+
+    fun isRecent(): Boolean = lastInput?.let { System.nanoTime() - it < 250_000_000L } == true
 }
 
 /**
@@ -4634,22 +4735,24 @@ private fun QueueRowDesktop(
     artwork: String? = null,
     isCurrent: Boolean,
     accent: Color,
-    dragModifier: Modifier,
+    dragModifier: Modifier?,
     isDragging: Boolean,
     onClick: () -> Unit,
     onRemove: () -> Unit,
     onArtist: (() -> Unit)? = null,
 ) {
-    var thumbBmp by remember(artwork) { mutableStateOf<ImageBitmap?>(null) }
+    val thumbSize = if (refined) 44.dp else 36.dp
+    val thumbPixels = artworkSize(with(LocalDensity.current) { thumbSize.roundToPx() })
+    var thumbBmp by remember(artwork, thumbPixels) { mutableStateOf(ArtworkLoader.cached(artwork, thumbPixels)) }
     val interaction = remember { MutableInteractionSource() }
     val isHovered by interaction.collectIsHoveredAsState()
     var focused by remember { mutableStateOf(false) }
     val hoverAmount by animateFloatAsState(if(isHovered || focused)1f else 0f,tween(160),label="queueHover")
     val dragAmount by animateFloatAsState(if(isDragging)1f else 0f,tween(140),label="queueLift")
 
-    LaunchedEffect(artwork) {
-        if (!artwork.isNullOrBlank()) {
-            thumbBmp = ArtworkLoader.load(artwork).first
+    LaunchedEffect(artwork, thumbPixels) {
+        if (thumbBmp == null && !artwork.isNullOrBlank()) {
+            thumbBmp = ArtworkLoader.load(artwork, thumbPixels).first
         }
     }
 
@@ -4665,6 +4768,7 @@ private fun QueueRowDesktop(
                 scaleY = 1f + .015f * dragAmount
             }
             .clip(RoundedCornerShape(if(refined)16.dp else 12.dp))
+            .background(if (isDragging) Color(0xFF29292D) else Color.Transparent)
             .background(
                 if (isCurrent) Brush.horizontalGradient(
                     listOf(accent.copy(alpha = if(refined).15f else .32f), accent.copy(alpha = if(refined).05f else .14f)),
@@ -4704,7 +4808,7 @@ private fun QueueRowDesktop(
         }
         Box(
             modifier = Modifier
-                .size(if(refined)44.dp else 36.dp)
+                .size(thumbSize)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color.White.copy(alpha = 0.07f)),
             contentAlignment = Alignment.Center,
@@ -4745,9 +4849,9 @@ private fun QueueRowDesktop(
                 )
             }
         }
-        Row(Modifier.graphicsLayer { alpha = if(refined)hoverAmount else 1f },
+        Row(
             horizontalArrangement = Arrangement.spacedBy(0.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
+            if (dragModifier != null) Box(
                 modifier = Modifier
                     .size(28.dp)
                     .clip(CircleShape)
@@ -4757,14 +4861,15 @@ private fun QueueRowDesktop(
             ) {
                 Icon(
                     imageVector = Icons.Rounded.DragHandle,
-                    contentDescription = "Mover manteniendo",
-                    tint = if (isDragging) accent else Color.White.copy(alpha = 0.55f),
+                    contentDescription = "Arrastrar para mover",
+                    tint = if (isDragging) accent else Color.White.copy(alpha = .38f + .27f * hoverAmount),
                     modifier = Modifier.size(18.dp),
                 )
             }
             Box(
                 modifier = Modifier
                     .size(28.dp)
+                    .graphicsLayer { alpha = if (refined && !isDragging) hoverAmount else 1f }
                     .clip(CircleShape)
                     .trackLink(onRemove, "Quitar"),
                 contentAlignment = Alignment.Center,

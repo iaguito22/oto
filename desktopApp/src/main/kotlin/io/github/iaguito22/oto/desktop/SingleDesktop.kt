@@ -29,7 +29,9 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.window.WindowDraggableArea
@@ -926,18 +928,25 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                                     onToggle = {
                                         rightOpen = !rightShown
                                         saveRight()
-                                    }) {
+                                    }) { listState, nowPlayingHeader ->
                                     if (mirrored != null) {
-                                        Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 16.dp + FloatingScrollEnd)) {
-                                            RemoteActions(devices.link, queueInitiallyExpanded = true, showTransport = false,
-                                                onError = { message -> uiScope.launch { notices.showSnackbar(message) } })
+                                        LazyColumn(state = listState, modifier = Modifier.fillMaxSize(),
+                                            contentPadding = PaddingValues(bottom = 16.dp + FloatingScrollEnd)) {
+                                            item { nowPlayingHeader() }
+                                            item {
+                                                Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp)) {
+                                                    RemoteActions(devices.link, queueInitiallyExpanded = true, showTransport = false,
+                                                        onError = { message -> uiScope.launch { notices.showSnackbar(message) } })
+                                                }
+                                            }
                                         }
                                     } else QueuePane(queue, localNow.id, shuffle, loop, palette, { player.setShuffle(!shuffle) }, { player.cycleLoop() },
                                         player::move, player::remove, player::clearQueue, player::skipTo,
                                         currentIndex = localNow.index, loopMode = loopMode, djActive = djActive, djMode = djMode, djTanda = djTanda,
                                         djFullOnce = djFullOnce, djNextUp = djNextUp, onPlayDjFullOnce = player::playDjFullOnce,
                                         onVetoDjNextUp = player::vetoDjNextUp, nextMix = nextMix,
-                                        onToggleAdhd = { player.setDjMode(if (djMode == io.github.iaguito22.oto.dj.DjMode.Adhd) io.github.iaguito22.oto.dj.DjMode.Normal else io.github.iaguito22.oto.dj.DjMode.Adhd) }, refined = true, bottomInset = 16.dp + FloatingScrollEnd, onSkipDjTanda = player::skipDjTanda, onArtist = ::openArtist)
+                                        onToggleAdhd = { player.setDjMode(if (djMode == io.github.iaguito22.oto.dj.DjMode.Adhd) io.github.iaguito22.oto.dj.DjMode.Normal else io.github.iaguito22.oto.dj.DjMode.Adhd) }, refined = true, bottomInset = 16.dp + FloatingScrollEnd, onSkipDjTanda = player::skipDjTanda, onArtist = ::openArtist,
+                                        listState = listState, panelHeader = nowPlayingHeader)
                                 }
                             }
                         }
@@ -1078,25 +1087,27 @@ private fun NowPlayingPanel(modifier: Modifier, wide: Boolean, accent: Color, no
     context: String?, pulsing: Boolean, coverBeat: Boolean, player: DesktopPlayerConnection,
     quality: String?, mixing: Boolean, mixStyle: String?,
     onSource: (() -> Unit)?, onTrack: () -> Unit, onArtist: (String, String?) -> Unit,
-    onToggle: () -> Unit, queue: @Composable () -> Unit) {
-    val pulse = rememberCoverPulse(pulsing && wide, coverBeat, player::beat)
-    Column(modifier.island()) {
+    onToggle: () -> Unit, queue: @Composable (LazyListState, @Composable () -> Unit) -> Unit) {
+    BoxWithConstraints(modifier.island()) {
         if (!wide) {
             Box(Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.TopCenter) {
                 TopButton(Icons.Rounded.FirstPage, "Desplegar Ahora suena", onClick = onToggle)
             }
-            return@Column
+            return@BoxWithConstraints
         }
-        Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 10.dp, end = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-            TopButton(Icons.Rounded.LastPage, "Plegar Ahora suena", onClick = onToggle)
-            Text(context?.takeIf { it.isNotBlank() && now.id != null }.orEmpty(), style = OtoType.rowTitle.copy(fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
-                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).trackLink(onSource).padding(start = 4.dp))
-        }
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val coverSize = minOf(maxWidth - 36.dp, (maxHeight - 132.dp).coerceAtLeast(92.dp))
-                .coerceAtLeast(0.dp)
-            val showDetails = maxHeight >= 285.dp
-            Column(Modifier.fillMaxSize()) {
+        val listState = rememberLazyListState()
+        val scope = rememberCoroutineScope()
+        val scrolled by remember { derivedStateOf { listState.canScrollBackward } }
+        val coverSize = minOf(maxWidth - 36.dp, (maxHeight - 180.dp).coerceAtLeast(92.dp)).coerceAtLeast(0.dp)
+        val showDetails = maxHeight >= 333.dp
+        queue(listState) {
+            val pulse = rememberCoverPulse(pulsing, coverBeat, player::beat)
+            Column(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 10.dp, end = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TopButton(Icons.Rounded.LastPage, "Plegar Ahora suena", onClick = onToggle)
+                    Text(context?.takeIf { it.isNotBlank() && now.id != null }.orEmpty(), style = OtoType.rowTitle.copy(fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).trackLink(onSource).padding(start = 4.dp))
+                }
                 if (now.id != null) {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                         Box(Modifier.size(coverSize).graphicsLayer {
@@ -1128,7 +1139,15 @@ private fun NowPlayingPanel(modifier: Modifier, wide: Boolean, accent: Color, no
                         }
                     }
                 }
-                Box(Modifier.weight(1f).fillMaxWidth().padding(start = 18.dp, end = 14.dp)) { queue() }
+            }
+        }
+        Reveal(scrolled, Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = FloatingScrollEnd + 8.dp),
+            enter = fadeIn(tween(160)) + slideInVertically(spring(.8f, 420f)) { it / 2 },
+            exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { it / 2 }) {
+            Box(Modifier.clip(CircleShape).background(Color(0xF2262629)).border(1.dp, Border, CircleShape)) {
+                TopButton(Icons.Rounded.ArrowUpward, "Volver arriba") {
+                    scope.launch { listState.animateScrollToItem(0) }
+                }
             }
         }
     }
