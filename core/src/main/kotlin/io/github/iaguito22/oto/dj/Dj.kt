@@ -54,6 +54,7 @@ data class DjTempoSwap(
         val why = when (verdict.fit) {
             DjTempoMatch.TempoFit.NoKick -> "sin bombo al pulso"
             DjTempoMatch.TempoFit.NoPulse -> "sin pulso claro"
+            DjTempoMatch.TempoFit.KeyClash -> "tonos que chocan"
             else -> "estira ${pct(verdict.stretchPct)} %"
         }
         val next = replacement?.let { r ->
@@ -756,7 +757,11 @@ class Dj(
                 tempoOf(prev.candidate.track.id),
                 tempoOf(cur.candidate.track.id),
                 maxStretchPct = incomingStretchLimit(cur),
-            )
+            ).let { v ->
+                if (v.fit != DjTempoMatch.TempoFit.Fits) return@let v
+                fastMixBlock(prev.candidate.track.id, cur.candidate.track.id) { cur.adhdSegment?.startMs ?: 0L }
+                    ?.let { v.copy(fit = it) } ?: v
+            }
             when {
                 verdict.fit == DjTempoMatch.TempoFit.Fits -> {
                     if (slot != null && slot.attempts > 0 && slot.notedFit !== cur) {
@@ -830,7 +835,35 @@ class Dj(
     private fun entryOf(track: Track): Long {
         if (mode != DjMode.Adhd || track.id in fullTrackIds) return 0L
         upcoming.firstOrNull { it.candidate.track.id == track.id }?.let { return it.adhdSegment?.startMs ?: 0L }
-        return track.adhdSegment(mood = mood, audio = analysisCache?.get(track.id))?.startMs ?: 0L
+        val audio = analysisCache?.get(track.id)
+        // Se pide para cada candidata al elegir: el trozo solo cambia con el ánimo o con un análisis nuevo.
+        val memoKey = "${track.id}|${mood.name}|${audio?.analyzedAt ?: 0L}|${audio?.analyzedMs ?: 0L}"
+        entryMemo[memoKey]?.let { return it }
+        if (entryMemo.size > 4_000) entryMemo.clear()
+        return (track.adhdSegment(mood = mood, audio = audio)?.startMs ?: 0L).also { entryMemo[memoKey] = it }
+    }
+    private val entryMemo = HashMap<String, Long>()
+
+    /**
+     * DJ rápido: lo que, aparte del tempo, cierra el cuadre en el puente y ya se sabe al elegir: tonos que chocan
+     * (armonía por debajo de [DjTempoMatch.MIN_BEAT_MATCH_HARMONY]) o sin bombo al pulso donde entra [curId] (los
+     * [ENTRY_KICK_WINDOW_MS] desde [entry]). Medido con las canciones de Iago (23/11): elegir solo por tempo
+     * cuadraba el 25 % de las mezclas y con esto el 47 %. null: nada en contra, o sin medir (no se castiga lo que no se
+     * sabe). En el DJ normal no se mira: mezcla cada 3–4 minutos y elegir así le quitaría variedad.
+     */
+    private fun fastMixBlock(prevId: String, curId: String, entry: () -> Long): DjTempoMatch.TempoFit? {
+        if (mode != DjMode.Adhd) return null
+        val b = analysisCache?.get(curId) ?: return null
+        if (DjHarmonic.harmonicCompatibility(analysisCache.get(prevId), b) < DjTempoMatch.MIN_BEAT_MATCH_HARMONY) {
+            return DjTempoMatch.TempoFit.KeyClash
+        }
+        if (b.bars.isEmpty()) return null
+        val entryMs = entry()
+        val until = entryMs + ENTRY_KICK_WINDOW_MS
+        val window = b.bars.filter { it.endMs > entryMs && it.startMs < until }
+        // Compases medidos hasta el final de la ventana y con bombo medido (los análisis viejos dan -1).
+        if (window.isEmpty() || b.bars.none { it.endMs >= until } || window.any { it.kickOnBeat < 0.0 }) return null
+        return if (DjTempoMatch.kickOnBeat(window, entryMs, until) < DjTempoMatch.MIN_KICK_ON_BEAT) DjTempoMatch.TempoFit.NoKick else null
     }
 
     private fun stretchLimitOf(trackId: String, fromMs: Long): Double {
@@ -1548,7 +1581,12 @@ class Dj(
             b.kickKnown && a.kickKnown -> 1.1
             else -> 1.0
         }
+        // DJ rápido: con el tempo dentro, que tampoco lo cierren el tono o la falta de bombo donde entra. Si lo
+        // cierran, cuenta como un tempo lejos (por debajo de una sin medir, que aún puede encajar).
+        val fastBlocked = stretch <= DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT &&
+            fastMixBlock(prev.track.id, track.id) { entryOf(track) } != null
         val gain = when {
+            fastBlocked -> -0.35
             stretch <= 4.0 -> 1.35
             stretch <= DjTempoMatch.MAX_STRETCH_PCT -> 0.95
             // Solo se cuadra si entra sin voz (mismo criterio que la revisión de la cola: si no, la elige y luego la cambia).
@@ -2323,6 +2361,9 @@ class Dj(
 
         /** Cambios por tempo como mucho por hueco de la cola; luego vuelve la original. */
         const val MAX_TEMPO_SWAPS = 3
+
+        /** DJ rápido: cuánto de la entrante, desde donde empieza a sonar, tiene que llevar bombo para cuadrarla. */
+        const val ENTRY_KICK_WINDOW_MS = 8_000L
 
         /** Cambios por tempo como mucho mientras suena una canción (entre todos los huecos). */
         const val MAX_TEMPO_SWAPS_PER_SONG = 4

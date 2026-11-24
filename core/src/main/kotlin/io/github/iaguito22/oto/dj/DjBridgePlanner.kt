@@ -441,7 +441,7 @@ object DjBridgePlanner {
             stretchPct > DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT -> "tempo lejos"
             zoneTimbreShock -> "choque de timbre"
             avgDrumA < 0.16 || avgDrumB < 0.16 -> "poca batería (A %.2f B %.2f)".format(avgDrumA, avgDrumB)
-            harmonic < 0.45 -> "armonía %.2f".format(harmonic)
+            harmonic < DjTempoMatch.MIN_BEAT_MATCH_HARMONY -> "armonía %.2f".format(harmonic)
             else -> null
         }
         val beatGateOpen = beatGate == null
@@ -481,7 +481,7 @@ object DjBridgePlanner {
 
                 // A. `BeatMatchLongMix`
                 if (beatGateOpen && pairTimbreShock) rejTimbre++
-                if (beatReliable && stretchPct <= DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT && !zoneTimbreShock && !pairTimbreShock && avgDrumA >= 0.16 && avgDrumB >= 0.16 && harmonic >= 0.45) {
+                if (beatReliable && stretchPct <= DjTempoMatch.MAX_STRETCH_INSTRUMENTAL_PCT && !zoneTimbreShock && !pairTimbreShock && avgDrumA >= 0.16 && avgDrumB >= 0.16 && harmonic >= DjTempoMatch.MIN_BEAT_MATCH_HARMONY) {
                     val barsCount = if (autoLength) {
                         if (tandaChanged) 4 else if (bpmRel.relDiffPct <= 3.5 && harmonic >= 0.72) 6 else 4
                     } else 0

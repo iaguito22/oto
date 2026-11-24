@@ -589,4 +589,81 @@ class DjTempoQueueTest {
         assertEquals(0.6, noPulse, 1e-9)
         assertEquals(0.78, unknown, 1e-9)
     }
+
+    /** Canción entera con compases de 200 s, tono [camelot] seguro y bombo según dónde cae cada compás. */
+    private fun wholeSong(id: String, bpm: Double, camelot: String = "8A", kickAt: (Long) -> Double = { 0.6 }): AudioMetrics {
+        val beat = 60_000.0 / bpm
+        val bars = (0 until (200_000.0 / (4 * beat)).toInt()).map { i ->
+            val s = (i * 4 * beat).toLong()
+            BarFeature(startMs = s, endMs = (s + 4 * beat).toLong(), kickOnBeat = kickAt(s))
+        }
+        return metrics(id, bpm).copy(camelot = camelot, keyConfidence = 0.9, bars = bars)
+    }
+
+    /**
+     * Prueba de Iago del 23/11 («pila de fundidos normales en DJ rápido») y simulación con sus 477 canciones analizadas:
+     * eligiendo solo por tempo cuadraba el 25 % de las mezclas; casi todo lo demás lo cerraban el tono (armonía < 0,45)
+     * y la falta de bombo donde entra la siguiente. Con las tres cosas, el 47 %. En DJ rápido la revisión de la cola
+     * aparta también esas.
+     */
+    @Test
+    fun inFastModeAKeyClashIsSwappedLikeAFarTempo() = runBlocking {
+        for (mode in listOf(DjMode.Normal, DjMode.Adhd)) {
+            val cache = AudioAnalysisCache(file = null)
+            val dj = Dj(Profile(lists(), emptyList(), emptyList(), emptyList(), now, utc), noCatalog, Memory(null), this, Random(5), mode = mode, analysisCache = cache)
+            assertNotNull(dj.start())
+            val (first, second, third) = dj.prepareNextUp(3).map { it.track }
+            cache.put(wholeSong(first.id, 100.0))
+            cache.put(wholeSong(second.id, 100.0, camelot = "8A"))
+            cache.put(wholeSong(third.id, 101.0, camelot = "2B"))
+            val swap = dj.retuneUpcomingTempo(3)
+            if (mode == DjMode.Normal) {
+                assertNull("el DJ normal no cambia por tono", swap)
+            } else {
+                assertNotNull(swap)
+                assertEquals(third.id, swap!!.removed.id)
+                assertEquals(DjTempoMatch.TempoFit.KeyClash, swap.verdict.fit)
+                assertTrue(swap.describe(), swap.describe().contains("tono"))
+            }
+        }
+    }
+
+    @Test
+    fun inFastModeASongWithoutKickWhereItEntersIsSwapped() = runBlocking {
+        val cache = AudioAnalysisCache(file = null)
+        val dj = Dj(Profile(lists(), emptyList(), emptyList(), emptyList(), now, utc), noCatalog, Memory(null), this, Random(5), mode = DjMode.Adhd, analysisCache = cache)
+        assertNotNull(dj.start())
+        val queue = dj.prepareNextUp(3)
+        val (first, second, third) = queue.map { it.track }
+        val entry = queue[2].adhdSegment?.startMs ?: 0L
+        cache.put(wholeSong(first.id, 100.0))
+        cache.put(wholeSong(second.id, 100.0))
+        // Bombo en casi toda la canción (la revisión por tempo la daba por buena), pero no donde entra.
+        cache.put(wholeSong(third.id, 100.0) { at -> if (at in (entry - 2_000L)..(entry + 10_000L)) 0.0 else 0.7 })
+        val swap = dj.retuneUpcomingTempo(3)
+        assertNotNull(swap)
+        assertEquals(third.id, swap!!.removed.id)
+        assertEquals(DjTempoMatch.TempoFit.NoKick, swap.verdict.fit)
+    }
+
+    @Test
+    fun inFastModeTheChoiceAlsoLooksAtKeyAndKickWhereItEnters() = runBlocking {
+        val cache = AudioAnalysisCache(file = null)
+        val dj = Dj(Profile(lists(), emptyList(), emptyList(), emptyList(), now, utc), noCatalog, Memory(null), this, Random(61), mode = DjMode.Adhd, analysisCache = cache)
+        val playing = dj.start()!!
+        cache.put(wholeSong(playing.id, 100.0, camelot = "8A"))
+        fun t(id: String) = Track(id, id, listOf("x"), listOf("x"), seconds = 200)
+        val good = dj.tempoFitOf(t("good").also { cache.put(wholeSong(it.id, 100.0, camelot = "9A")) })
+        val clash = dj.tempoFitOf(t("clash").also { cache.put(wholeSong(it.id, 100.0, camelot = "2B")) })
+        // Bombo en casi toda la canción, salvo donde empieza su trozo.
+        val quiet = t("quiet")
+        val entry = quiet.adhdSegment(audio = wholeSong(quiet.id, 100.0))?.startMs ?: 0L
+        val quietSong = wholeSong(quiet.id, 100.0) { at -> if (at in (entry - 2_000L)..(entry + 10_000L)) 0.0 else 0.7 }
+        assertEquals("el trozo no se mueve por el bombo", entry, quiet.adhdSegment(audio = quietSong)?.startMs ?: 0L)
+        cache.put(quietSong)
+        val quietEntry = dj.tempoFitOf(quiet)
+        val unknown = dj.tempoFitOf(t("unknown"))
+        assertTrue("tono que choca $clash < sin medir $unknown < buena $good", clash < unknown && unknown < good)
+        assertTrue("sin bombo al entrar $quietEntry < sin medir $unknown", quietEntry < unknown)
+    }
 }

@@ -10,6 +10,8 @@
 
 ## Por comprobar
 
+- Arreglos de la noche de pruebas del 23/11 (rama `fix/noche-23-11`, sin oír ni probar en la app): respaldo que se adelantaba al plan en DJ rápido, escucha real al mezclar, saltar canciones sin audio, análisis por adelantado de la cola del DJ y log con hora y etiqueta. Repetir una tanda (`scratchpad/noche-2026-11-23/ronda.ps1` y `analizar.py`) y comparar: salto de tempo del DJ (era 17–19 %), Camelot compatible (~32 %), `Legacy` en DJ rápido (16 de 48). Además (24/11, tras «pila de fundidos normales en DJ rápido»): el DJ rápido elige y cambia en la cola por tono y bombo a la entrada, no solo por tempo; contar cuántas mezclas del DJ rápido salen «a tempo» (simulación: 3 % al azar, 25 % solo por tempo, 47 % con las tres).
+
 - «Diles» → «Ram Pam Pam» (Android): causa sin confirmar; mirar `oto.mix` si vuelve.
 - CI `Tests` en Linux: aún no ha pasado entera (fallos de red de GitHub). La prueba de cancelación de descargas tiene márgenes de 30 s; ver si aguanta.
 - Escucha de las mezclas del DJ en general (el agente no oye). Confirmado por Iago el 19/11: «Faint» va a tiempo y no hay distorsión tras un cuadre de beats.

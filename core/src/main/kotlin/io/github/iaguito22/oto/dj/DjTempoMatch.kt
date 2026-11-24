@@ -26,6 +26,9 @@ object DjTempoMatch {
     /** Bombo en el pulso mínimo, de media en los compases del cruce y en las dos canciones, para cuadrar beats. */
     const val MIN_KICK_ON_BEAT = 0.35
 
+    /** Por debajo de esta armonía ([DjHarmonic.harmonicCompatibility]) el puente no cuadra beats: tonos que chocan. */
+    const val MIN_BEAT_MATCH_HARMONY = 0.45
+
     /** Velocidad mínima y máxima de B (coherente con [MAX_STRETCH_INSTRUMENTAL_PCT]). */
     const val MIN_RATIO = 1.0 - MAX_STRETCH_INSTRUMENTAL_PCT / 100.0
     const val MAX_RATIO = 1.0 + MAX_STRETCH_INSTRUMENTAL_PCT / 100.0
@@ -327,6 +330,8 @@ object DjTempoMatch {
         NoKick,
         /** La entrante, analizada entera, no tiene pulso claro. */
         NoPulse,
+        /** DJ rápido: los tonos chocan (armonía por debajo de [MIN_BEAT_MATCH_HARMONY]) y el puente no cuadraría. */
+        KeyClash,
         /** La saliente no se puede cuadrar con nada (sin pulso claro o sin bombo): cambiar la entrante no ayuda. */
         NotApplicable,
         /** Falta análisis de alguna (o lo analizado aún no basta para juzgar): se espera. */
@@ -341,7 +346,8 @@ object DjTempoMatch {
         val stretchPct: Double = 0.0,
     ) {
         /** Seguro que no se puede cuadrar por culpa de la entrante (otra sí podría). */
-        val incomingBlocks: Boolean get() = fit == TempoFit.TempoFar || fit == TempoFit.NoKick || fit == TempoFit.NoPulse
+        val incomingBlocks: Boolean get() = fit == TempoFit.TempoFar || fit == TempoFit.NoKick || fit == TempoFit.NoPulse ||
+            fit == TempoFit.KeyClash
     }
 
     /**

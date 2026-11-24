@@ -186,6 +186,10 @@ class DesktopPlayerConnection(
     // Cada marca pertenece a una entrada concreta, aunque la lista repita la canción.
     private val manualQueueEntries = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<SongItem, Boolean>())
     @Volatile private var resolvingTrack = false
+    /** Canciones que YouTube no deja oír en esta sesión: no se preparan para mezclar y, al llegar, se saltan. */
+    private val unplayable: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    /** Canciones seguidas sin audio al empezar: con varias, es YouTube (bloqueo, sin red) y se para con aviso. */
+    @Volatile private var resolveFailuresInARow = 0
     private var resolveJob: Job? = null
     private var lyricsJob: Job? = null
 
@@ -499,7 +503,9 @@ class DesktopPlayerConnection(
 
     private fun nextMixIndex(): Int = when {
         _loopMode.value == LoopMode.One -> -1
-        currentIndex + 1 in songQueue.indices -> currentIndex + 1
+        // Se salta lo que ya se sabe sin audio: la mezcla va a la primera que sí suena.
+        currentIndex + 1 in songQueue.indices -> if (unplayable.isEmpty()) currentIndex + 1
+            else UnplayableTracks.nextPlayable(songQueue.map { it.id }, currentIndex, unplayable)
         _loopMode.value == LoopMode.All && songQueue.size > 1 -> 0
         else -> -1
     }
@@ -764,6 +770,11 @@ class DesktopPlayerConnection(
             throw cancelled
         } catch (error: Exception) {
             Timber.w(error, "No se pudo preparar la siguiente canción para el fundido")
+            if (UnplayableTracks.isUnplayable(error)) {
+                // No se reintenta cada 5 s (cada intento es una petición a YouTube): se apunta y la mezcla va a la de después.
+                unplayable += next.id
+                Timber.tag("oto.mix").i("«%s» (%s) no está disponible: la mezcla irá a la siguiente", next.title, next.id)
+            }
         } finally {
             if (preparationGeneration.get() == generation) {
                 if (!succeeded && preparedNext?.deck !== deck) {
@@ -790,7 +801,10 @@ class DesktopPlayerConnection(
         val plan = action.plan
         val startMs = plan?.incomingStartMs ?: next.adhdSegment?.startMs ?: 0L
         if (startMs != deck.state.value.positionMs) deck.seekTo(startMs)
-        if (simple) Timber.tag("oto.mix").i("Fundido de respaldo: %s → %s (%d ms)", next.currentId, next.next.id, length)
+        if (simple) Timber.tag("oto.mix").i(
+            "Fundido de respaldo: %s → %s (%d ms) a %d ms: %s", next.currentId, next.next.id, length,
+            old.state.value.positionMs, DesktopTransitionPlanner.fallbackReason(next.plan, old.state.value.positionMs),
+        )
         val prevAdhd = if (dj?.mode == DjMode.Adhd && fullOnceTrackId != next.currentId) _adhdSegment.value else null
         val useEchoOut = plan?.style == DjTransitionStyle.EchoOutFilterSweep || plan?.style == DjTransitionStyle.LoopRollOut
         // B al tempo de A en el cuadre de beats y en el filtro con eco a tempo (el plan solo pone ratio ≠ 1 si hay bombo
@@ -847,7 +861,8 @@ class DesktopPlayerConnection(
                     resolvedTanda = activeDj.tandaOf(song.id) ?: resolvedTanda
                     resolvedTanda?.let { djTandas[song.id] = it }
                 }
-                recordPlayProgress(completed = true)
+                // Lo oído de la saliente: hasta la mitad de la mezcla que empieza ahora (no la canción entera).
+                recordPlayProgress(completed = false, mixOut = old.state.value.positionMs to length)
                 setOutgoing(old); outgoingGain = oldGain; fadeOut = 1f; fadeIn = 0f
                 preparedNext = null; preparation = null; preparingKey = null
                 currentIndex = nextIndex
@@ -1302,13 +1317,88 @@ class DesktopPlayerConnection(
         vetoDjNextUp(id)
     }
 
+    private var scoutJob: Job? = null
+    @Volatile private var scoutTrackId: String? = null
+    @Volatile private var scoutsForTrack = 0
+
+    /**
+     * Analiza por adelantado una canción de la cola del DJ ([DjScout]): sin su tempo, tono y volumen el DJ elegía a
+     * ciegas y la revisión por tempo no podía cambiar nada (noche del 23/11). Una a la vez, pocas por canción que suena,
+     * nunca la siguiente (ya la prepara la mezcla) y nada mientras YouTube esté fallando. Al acabar, revisa la cola, que
+     * vuelve a llamar aquí: así se van analizando también las que entren por un cambio.
+     */
+    private fun scoutDjQueue() {
+        val activeDj = dj ?: return
+        if (scoutJob?.isActive == true || resolveFailuresInARow > 0 || !_state.value.playing) return
+        val currentId = _state.value.id ?: return
+        if (scoutTrackId != currentId) {
+            scoutTrackId = currentId
+            scoutsForTrack = 0
+        }
+        val skip = HashSet<String>(unplayable).apply {
+            add(currentId)
+            songQueue.getOrNull(nextMixIndex())?.id?.let(::add)
+            preparingKey?.second?.let(::add)
+        }
+        val target = DjScout.pick(
+            upcoming = activeDj.nextUp().map { it.track.id },
+            skip = skip,
+            known = { analysisCache.get(it) != null || analysisCache.tempoProfile(it) != null },
+            local = { downloads.localFile(it) != null },
+            networkBudgetLeft = DjScout.SCOUTS_PER_TRACK - scoutsForTrack,
+        ) ?: return
+        scoutJob = scope.launch(Dispatchers.IO) {
+            val local = downloads.localFile(target)
+            val temp = if (local == null) File(OtoDirs.cacheDir, "dj-scout/$target.audio") else null
+            try {
+                val file = local ?: run {
+                    scoutsForTrack++
+                    // Calidad baja: para medir tempo, tono y volumen basta, y son menos MB.
+                    val stream = InnerTubeXPlayer.resolve(target, Tier.Low).getOrElse { err ->
+                        if (UnplayableTracks.isUnplayable(err)) {
+                            unplayable += target
+                            Timber.tag("oto.mix").i("DJ: %s no está disponible: la mezcla la saltará", target)
+                        }
+                        return@launch
+                    }
+                    temp!!.delete()
+                    downloadChunked(stream.url, stream.headers, stream.contentLength, temp)
+                    temp
+                }
+                val metrics = analyzeFile(file, target) ?: return@launch
+                Timber.tag("oto.mix").i(
+                    "DJ: analizada por adelantado %s (%.0f BPM, %s, %.1f LUFS)",
+                    target, metrics.bpm ?: 0.0, metrics.camelot.ifEmpty { "tono ?" }, metrics.integratedLufs,
+                )
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Timber.w(error, "DJ: no se pudo analizar por adelantado %s", target)
+            } finally {
+                temp?.delete()
+            }
+            if (dj === activeDj) retuneDjTempo()
+        }
+    }
+
+    /** Analiza [file] entero (tempo, tono, volumen, secciones) y lo guarda en la caché del DJ. */
+    private suspend fun analyzeFile(file: File, trackId: String): io.github.iaguito22.oto.dj.AudioMetrics? =
+        withContext(Dispatchers.IO) {
+            analysisCache.get(trackId)?.let { return@withContext it }
+            val session = AudioAnalyzer.Session(trackId, 48_000, 1)
+            DesktopBeat.analyze(file = file, cancelled = { !isActive }, onChunk = { samples, count -> session.feedSamples(samples, count) })
+            if (!isActive) return@withContext null
+            session.finish().also { analysisCache.put(it, persist = true) }
+        }
+
     /**
      * Cambia una canción de la cola del DJ (nunca la siguiente) que no se podrá cuadrar con la de antes por tempo o
-     * bombo ([Dj.retuneUpcomingTempo]). En el PC la cola no se precarga: solo cuenta lo ya analizado (índice de tempo),
-     * así que se prueban seguidos los cambios que se puedan juzgar ya.
+     * bombo ([Dj.retuneUpcomingTempo]). En el PC la cola no se precarga: cuenta lo ya analizado (índice de tempo) y lo que
+     * [scoutDjQueue] analiza por adelantado, así que se prueban seguidos los cambios que se puedan juzgar ya.
      */
     private fun retuneDjTempo() {
         val activeDj = dj ?: return
+        scoutDjQueue()
         // Trabajo propio (no el del relleno, que lo llama al acabar): el mutex del DJ ya los pone en fila. La petición
         // queda pendiente hasta que una vuelta la atienda.
         djTempoPending.set(true)
@@ -2200,6 +2290,7 @@ class DesktopPlayerConnection(
                 currentLoudnessGain = 1f
                 engine.setGain(volumeGain())
                 resolvingTrack = false
+                resolveFailuresInARow = 0
                 engine.loadLocalFile(
                     file = local,
                     durationMs = durGuess,
@@ -2221,6 +2312,7 @@ class DesktopPlayerConnection(
                 currentLoudnessGain = gain
                 engine.setGain(gain * volumeGain())
                 resolvingTrack = false
+                resolveFailuresInARow = 0
                 engine.loadAndPlay(
                     cacheKey = tier.key(song.id),
                     streamUrl = stream.url,
@@ -2236,7 +2328,21 @@ class DesktopPlayerConnection(
             }.onFailure { err ->
                 resolvingTrack = false
                 Timber.e(err, "No se pudo resolver stream para ${song.id}")
-                _state.value = _state.value.copy(playing = false, buffering = false, error = err.message)
+                val songUnplayable = UnplayableTracks.isUnplayable(err)
+                if (songUnplayable) unplayable += song.id
+                val failures = ++resolveFailuresInARow
+                val hasNext = currentIndex + 1 < songQueue.size || dj != null
+                if (songUnplayable && songQueue.getOrNull(currentIndex)?.id == song.id && UnplayableTracks.shouldSkip(failures, hasNext)) {
+                    // Antes se quedaba aquí parado (10 min la noche del 23/11). No se apunta como escucha ni como salto:
+                    // no la pasaste tú.
+                    Timber.tag("oto.mix").i("«%s» (%s) no está disponible: se salta (%d seguidas)", song.title, song.id, failures)
+                    advanceToNext(playWhenReady)
+                } else {
+                    val message = if (songUnplayable && failures > UnplayableTracks.MAX_SKIPS_IN_A_ROW) {
+                        "YouTube no da audio ahora mismo ($failures canciones seguidas). Pulsa para reintentar."
+                    } else err.message
+                    _state.value = _state.value.copy(playing = false, buffering = false, error = message)
+                }
             }
         }
     }
@@ -2315,12 +2421,15 @@ class DesktopPlayerConnection(
         }
     }
 
-    private fun recordPlayProgress(completed: Boolean) {
+    /** [mixOut]: la saliente deja paso con una mezcla (posición donde empieza, largo): cuenta hasta su mitad. */
+    private fun recordPlayProgress(completed: Boolean, mixOut: Pair<Long, Long>? = null) {
         val cur = _state.value
         val id = cur.id ?: return
         val dur = cur.durationMs
         val seg = _adhdSegment.value
-        val listenedMs = DesktopTransitionPlanner.listenedDurationMs(
+        val listenedMs = if (mixOut != null) {
+            DesktopTransitionPlanner.mixOutListenedMs(mixOut.first, mixOut.second, dur, seg, currentTrackStartOffsetMs)
+        } else DesktopTransitionPlanner.listenedDurationMs(
             completed = completed,
             positionMs = _positionMs.value,
             durationMs = dur,

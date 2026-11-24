@@ -90,6 +90,12 @@ internal object DesktopTransitionPlanner {
         // Cualquier mezcla ya planificada (plan del DJ, trozo del DJ rápido o fundido configurado) va primero.
         if (planned is TransitionAction.StartCrossfade) return planned
         if (positionMs < window.startMs) return planned
+        // Un plan que mezcla y aún no ha llegado a su momento manda: en DJ rápido puede empezar hasta 6 s después del
+        // final del trozo (para caer en frase) y el respaldo, que abre 3 s antes de ese final, se le adelantaba
+        // (16 de 48 mezclas la noche del 23/11). Pasado su momento sin poder empezar, el respaldo vuelve a valer.
+        if (plan != null && plan.fadeDurationMs > 0L && plan.bridgeSpec?.style != DjBridgeStyle.OutroTail &&
+            positionMs < plan.outgoingFadeStartMs
+        ) return planned
         val remaining = window.endMs - positionMs
         return if (remaining >= 100L) TransitionAction.StartCrossfade(remaining, fallback = true) else planned
     }
@@ -146,5 +152,29 @@ internal object DesktopTransitionPlanner {
         }
         val base = adhdSegment?.startMs ?: startOffsetMs
         return (positionMs - base).coerceAtLeast(0L)
+    }
+
+    /** Por qué una mezcla sale como fundido de respaldo (para el registro). */
+    fun fallbackReason(plan: DjTransitionPlan?, positionMs: Long): String = when {
+        plan == null -> "sin plan (la siguiente aún se preparaba)"
+        plan.fadeDurationMs <= 0L || plan.bridgeSpec?.style == DjBridgeStyle.OutroTail -> "el plan no mezcla: ${plan.reason}"
+        positionMs >= plan.outgoingFadeStartMs -> "el plan no pudo empezar a ${plan.outgoingFadeStartMs / 1000} s"
+        else -> "el plan empezaba a ${plan.outgoingFadeStartMs / 1000} s"
+    }
+
+    /**
+     * Lo oído de la saliente cuando empieza una mezcla en [mixStartMs] de [mixLengthMs]: hasta la mitad del cruce (ahí
+     * ya manda la entrante), desde donde empezó a sonar. Antes se apuntaba la canción (o el trozo) entera aunque la
+     * mezcla saliera mucho antes; el móvil ya apuntaba la posición al cambiar.
+     */
+    fun mixOutListenedMs(
+        mixStartMs: Long,
+        mixLengthMs: Long,
+        durationMs: Long,
+        adhdSegment: AdhdSegment?,
+        startOffsetMs: Long,
+    ): Long {
+        val until = (mixStartMs + mixLengthMs.coerceAtLeast(0L) / 2).let { if (durationMs > 0L) it.coerceAtMost(durationMs) else it }
+        return listenedDurationMs(completed = false, positionMs = until, durationMs = durationMs, adhdSegment = adhdSegment, startOffsetMs = startOffsetMs)
     }
 }

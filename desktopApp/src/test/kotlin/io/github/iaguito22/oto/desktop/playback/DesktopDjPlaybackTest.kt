@@ -166,6 +166,77 @@ class DesktopDjPlaybackTest {
         assertEquals(60_000L, fullClip)
     }
 
+    /**
+     * Noche del 23/11: en DJ rápido 16 de 48 mezclas salieron como fundido de respaldo de ~3 s. El plan puede mezclar
+     * hasta 6 s después del final del trozo (para empezar en frase), pero el respaldo abría su ventana 3 s ANTES de ese
+     * final y se adelantaba a un plan que aún iba a sonar.
+     */
+    @Test
+    fun fallbackWaitsForAPlannedMixThatStartsAfterTheSegmentEnd() {
+        val plan = DjTransitionPlan(DjTransitionStyle.EchoOutFilterSweep, 6_800L, outgoingFadeStartMs = 107_000L, incomingStartMs = 30_000L)
+        val window = DjCrossfadeFallback.window(210_000L, sampleSegment.endMs, 6_000L, emptyList())!!
+        val at = window.startMs + 500L
+        val planned = DesktopTransitionPlanner.evaluate(
+            positionMs = at, durationMs = 210_000L, playing = true, buffering = false,
+            configuredFadeSeconds = 6, ramSaver = false, crossfadeSupported = true,
+            nextReady = true, adhdSegment = sampleSegment, plan = plan,
+        )
+        assertEquals(TransitionAction.None, planned)
+        assertEquals(TransitionAction.None, DesktopTransitionPlanner.withFallback(planned, window, at, true, plan))
+        // Llegado su momento, la mezcla planificada sale tal cual.
+        assertEquals(
+            TransitionAction.StartCrossfade(6_800L, plan),
+            DesktopTransitionPlanner.evaluate(
+                positionMs = 107_000L, durationMs = 210_000L, playing = true, buffering = false,
+                configuredFadeSeconds = 6, ramSaver = false, crossfadeSupported = true,
+                nextReady = true, adhdSegment = sampleSegment, plan = plan,
+            ),
+        )
+        // Si su momento pasa sin que pueda empezar (p. ej. un estribillo), el respaldo vuelve a valer.
+        val longWindow = DjCrossfadeFallback.Window(106_000L, 112_000L)
+        assertEquals(
+            TransitionAction.StartCrossfade(4_500L, fallback = true),
+            DesktopTransitionPlanner.withFallback(TransitionAction.None, longWindow, 107_500L, true, plan),
+        )
+    }
+
+    @Test
+    fun fallbackReasonSaysWhyThePlanDidNotMix() {
+        assertEquals("sin plan (la siguiente aún se preparaba)", DesktopTransitionPlanner.fallbackReason(null, 100_000L))
+        val noMix = DjTransitionPlan(DjTransitionStyle.SmoothEqualPower, 0L, outgoingFadeStartMs = 210_000L, incomingStartMs = 0L, reason = "Sin mezcla: estribillo")
+        assertEquals("el plan no mezcla: Sin mezcla: estribillo", DesktopTransitionPlanner.fallbackReason(noMix, 100_000L))
+        val late = DjTransitionPlan(DjTransitionStyle.SmoothEqualPower, 6_000L, outgoingFadeStartMs = 150_000L, incomingStartMs = 0L)
+        assertEquals("el plan no pudo empezar a 150 s", DesktopTransitionPlanner.fallbackReason(late, 152_000L))
+    }
+
+    /**
+     * Noche del 23/11: al empezar una mezcla se apuntaba la canción entera (25 min de más en 137 de DJ normal). Ahora
+     * cuenta hasta la mitad de la mezcla, como el móvil (que apunta donde estaba al cambiar).
+     */
+    @Test
+    fun mixOutCountsUntilMiddleOfTheMixNotTheWholeSong() {
+        // DJ normal: sale a 127,2 s de 179,6 con 8 s de mezcla.
+        assertEquals(
+            131_200L,
+            DesktopTransitionPlanner.mixOutListenedMs(127_200L, 8_000L, 179_600L, adhdSegment = null, startOffsetMs = 0L),
+        )
+        // Entró a mitad (plan del DJ): cuenta desde ahí.
+        assertEquals(
+            111_200L,
+            DesktopTransitionPlanner.mixOutListenedMs(127_200L, 8_000L, 179_600L, adhdSegment = null, startOffsetMs = 20_000L),
+        )
+        // DJ rápido: desde el principio del trozo, no el trozo entero.
+        assertEquals(
+            40_000L,
+            DesktopTransitionPlanner.mixOutListenedMs(82_000L, 6_000L, 210_000L, adhdSegment = sampleSegment, startOffsetMs = 45_000L),
+        )
+        // Nunca más que la canción.
+        assertEquals(
+            179_600L,
+            DesktopTransitionPlanner.mixOutListenedMs(178_000L, 8_000L, 179_600L, adhdSegment = null, startOffsetMs = 0L),
+        )
+    }
+
     @Test
     fun transitionPlanDrivesBeatSnappedCrossfadeStartAndEchoOut() {
         val plan = DjTransitionPlan(
