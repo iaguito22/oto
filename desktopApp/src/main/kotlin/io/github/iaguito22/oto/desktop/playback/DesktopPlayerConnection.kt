@@ -1925,7 +1925,12 @@ class DesktopPlayerConnection(
     override fun next() {
         cancelCrossfade()
         recordPlayProgress(completed = false)
-        advanceToNext()
+        // Con bucle, detrás de la última vuelve la primera, igual que cuando acaba sola (no se pone una radio).
+        val wrapped = djIndexGate.locked {
+            if (_loopMode.value == LoopMode.Off || dj != null || radio != null || songQueue.isEmpty() || currentIndex != songQueue.lastIndex) false
+            else { currentIndex = 0; syncQueueFlow(); startCurrentTrack(); true }
+        }
+        if (!wrapped) advanceToNext()
     }
 
     override fun previous() {

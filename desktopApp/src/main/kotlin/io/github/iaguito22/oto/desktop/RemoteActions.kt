@@ -101,16 +101,19 @@ internal fun RemoteActions(link: LocalLink, queueInitiallyExpanded: Boolean = fa
         }
         var expanded by remember(queueInitiallyExpanded) { mutableStateOf(queueInitiallyExpanded) }
         var shown by remember(id) { mutableIntStateOf(8) }
-        val count = queue?.length() ?: 0
+        val total = queue?.length() ?: 0
+        // Las posiciones son las del otro equipo: «skip», «move» y «remove» las usan tal cual.
+        val upcoming = remember(queue, current, remote.optBoolean("loop")) { remoteUpcoming(total, current, remote.optBoolean("loop")) }
+        val count = upcoming.size
         RemoteDisclosure("Cola", if(count==1) "1 canción" else "$count canciones", expanded, { expanded = !expanded })
         AnimatedVisibility(expanded) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (count == 0) Text("La próxima canción aparecerá aquí.", style = MaterialTheme.typography.bodySmall)
-                for (i in 0 until minOf(count, shown)) {
+                for ((row, i) in upcoming.take(shown).withIndex()) {
                     val song = queue!!.getJSONObject(i)
                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(if (i == current) accent.copy(alpha = .09f) else Color.Transparent), verticalAlignment = Alignment.CenterVertically) {
                         Row(Modifier.weight(1f).clickable(enabled = !pending) { send("skip") { it.put("index", i) } }.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(if (i == current) "•" else "${i + 1}", Modifier.width(20.dp), color = if (i == current) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = .35f), style = MaterialTheme.typography.labelSmall)
+                            Text(if (i == current) "•" else "${row + 1}", Modifier.width(20.dp), color = if (i == current) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = .35f), style = MaterialTheme.typography.labelSmall)
                             Column(Modifier.weight(1f)) {
                                 Text(song.optString("title"), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
                                 Text(song.optString("artist"), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .4f))
@@ -120,8 +123,9 @@ internal fun RemoteActions(link: LocalLink, queueInitiallyExpanded: Boolean = fa
                         Box {
                             RemoteIcon(Icons.Rounded.MoreHoriz, "Opciones de ${song.optString("title")}") { menu = true }
                             DropdownMenu(menu, { menu = false }, shape = RoundedCornerShape(20.dp)) {
-                                if (i > 0) DropdownMenuItem(text = { Text("Mover antes") }, enabled = !pending, onClick = { menu = false; send("move") { it.put("from", i).put("to", i - 1) } })
-                                if (i < count - 1) DropdownMenuItem(text = { Text("Mover después") }, enabled = !pending, onClick = { menu = false; send("move") { it.put("from", i).put("to", i + 1) } })
+                                // Solo dentro de lo que queda por sonar (sin pasar por delante de la que suena).
+                                if (row > 0 && i - 1 == upcoming[row - 1]) DropdownMenuItem(text = { Text("Mover antes") }, enabled = !pending, onClick = { menu = false; send("move") { it.put("from", i).put("to", i - 1) } })
+                                if (row < count - 1 && i + 1 == upcoming[row + 1]) DropdownMenuItem(text = { Text("Mover después") }, enabled = !pending, onClick = { menu = false; send("move") { it.put("from", i).put("to", i + 1) } })
                                 DropdownMenuItem(text = { Text("Quitar de la cola") }, enabled = !pending, onClick = { menu = false; send("remove") { it.put("index", i) } })
                             }
                         }
@@ -203,3 +207,11 @@ internal fun ContinueListening(song: String?, where: String, action: String, sen
 
 @Composable private fun RemoteArtwork(url: String?, modifier: Modifier) = io.github.iaguito22.oto.desktop.ui.LibraryArt(url, modifier)
 @Composable private fun RemoteSlider(value: Float, onValueChange: (Float)->Unit, onValueChangeFinished: ()->Unit, label: String) = io.github.iaguito22.oto.desktop.ui.FineSlider(value, onValueChange, label=label, onFinish=onValueChangeFinished)
+
+/** Las posiciones de la cola del otro equipo que se ven aquí, en orden. */
+internal fun remoteUpcoming(count: Int, current: Int, loop: Boolean): List<Int> = when {
+    // Sin saber cuál suena, se ve entera.
+    current !in 0 until count -> (0 until count).toList()
+    // Lo que viene detrás de la que suena (como la cola de aquí y la del móvil); en bucle, después vuelve la primera.
+    else -> (current + 1 until count).toList() + (if (loop) (0 until current).toList() else emptyList())
+}
