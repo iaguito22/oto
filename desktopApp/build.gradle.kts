@@ -72,7 +72,7 @@ compose.desktop {
                 TargetFormat.Exe,
             )
             packageName = "Oto"
-            packageVersion = "2.2.0"
+            packageVersion = "2.3.0"
             val installedVersion = checkNotNull(packageVersion)
             tasks.processResources {
                 inputs.property("otoVersion", installedVersion)

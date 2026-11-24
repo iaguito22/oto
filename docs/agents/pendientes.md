@@ -2,15 +2,16 @@
 
 Índice en `AGENTS.md`. Lo que queda por hacer, de más a menos urgente. Al arreglar algo, quitarlo de aquí en el mismo commit. Detalle histórico en `docs/historico/bitacora.md`.
 
-## Próxima release
+## Próxima release (2.3.0)
 
-- Será una versión nueva (2.2.1 o superior), no sustituir los archivos de la 2.2.0: quien ya la instaló no actualizaría.
-- Rehacer la captura del README (`docs/escritorio-una-ventana.png`) con un perfil de prueba: aún sale el «+» de «Crear lista» y se ven las listas reales de Iago.
-- Rebasar la rama `android12` sobre `main` antes de compilar la variante.
+- Versión subida a 2.3.0 (versionCode 17) en `main`. Notas en borrador: `C:\Users\iago\Documents\Codex\2026-11-24\release-2.3.0\notas-borrador.md`.
+- Rehacer la captura del README (`docs/escritorio-una-ventana.png`) con un perfil de prueba: aún sale el «+» de «Crear lista» y se ven las listas reales de Iago. Al publicar, poner 2.3.0 en los nombres de archivo del README.
+- Rebasar la rama `android12` sobre `main` antes de compilar la variante (con `merge-tree`, sin conflictos el 24/11).
+- Actualizador: la 2.3.0 es la primera que lo lleva, así que la 2.2.0 no avisará. En Windows no está probado de verdad lo que pasa tras descargar (cerrar Oto, abrir el MSI y volver a abrir Oto): no se puede sin tocar la instalación de Iago. Probarlo con la 2.3.1. Sí está comprobado con red: consulta, elección del archivo, descarga por la redirección de GitHub y SHA-256 (`OTO_UPDATE_LIVE=1`, `OtoUpdatesLiveTest`).
 
 ## Bugs (noche de pruebas 23/11)
 
-Evidencia en `scratchpad/noche-2026-11-23/resultados/` (fuera de Git). Arreglados en la rama `fix/noche-23-11` (sale de `integracion`, worktree `../oto-noche`), sin unir, sin oír y sin probar en la app:
+Evidencia en `scratchpad/noche-2026-11-23/resultados/` (fuera de Git). Arreglados y en `main` desde el 24/11 (`6caba97`), sin oír y sin probar en la app:
 
 - PC: al empezar una mezcla se apuntaba la canción entera (DJ normal: 25 min de más en 137). Ahora cuenta hasta la mitad del cruce.
 - PC: una pista no disponible paraba la reproducción (ronda 4: 10 min). Ahora se salta; con más de 3 seguidas se para con aviso.
@@ -22,10 +23,13 @@ No eran bugs: el DJ normal sale hasta 75 s antes del final porque así lo pidió
 
 ## Por comprobar
 
-- Arreglos de la noche de pruebas del 23/11 (rama `fix/noche-23-11`, sin oír ni probar en la app): respaldo que se adelantaba al plan en DJ rápido, escucha real al mezclar, saltar canciones sin audio, análisis por adelantado de la cola del DJ y log con hora y etiqueta. Repetir una tanda (`scratchpad/noche-2026-11-23/ronda.ps1` y `analizar.py`) y comparar: salto de tempo del DJ (era 17–19 %), Camelot compatible (~32 %), `Legacy` en DJ rápido (16 de 48). Además (24/11, tras «pila de fundidos normales en DJ rápido»): el DJ rápido elige y cambia en la cola por tono y bombo a la entrada, no solo por tempo; contar cuántas mezclas del DJ rápido salen «a tempo» (simulación: 3 % al azar, 25 % solo por tempo, 47 % con las tres).
+- Arreglos de la noche de pruebas del 23/11 (en `main`, sin oír ni probar en la app): respaldo que se adelantaba al plan en DJ rápido, escucha real al mezclar, saltar canciones sin audio, análisis por adelantado de la cola del DJ y log con hora y etiqueta. Repetir una tanda (`scratchpad/noche-2026-11-23/ronda.ps1` y `analizar.py`) y comparar: salto de tempo del DJ (era 17–19 %), Camelot compatible (~32 %), `Legacy` en DJ rápido (16 de 48). Además (24/11, tras «pila de fundidos normales en DJ rápido»): el DJ rápido elige y cambia en la cola por tono y bombo a la entrada, no solo por tempo; contar cuántas mezclas del DJ rápido salen «a tempo» (simulación: 3 % al azar, 25 % solo por tempo, 47 % con las tres).
 
 - «Diles» → «Ram Pam Pam» (Android): causa sin confirmar; mirar `oto.mix` si vuelve.
-- CI `Tests` en Linux: aún no ha pasado entera (fallos de red de GitHub). La prueba de cancelación de descargas tiene márgenes de 30 s; ver si aguanta.
+- PC: «el bucle no funciona» (se lo dijeron a Iago, 24/11). Con audio real (`DesktopLoopAudioTest`, `OTO_AUDIO_INTEGRATION=1`) funcionan repetir la lista y repetir la canción, con fundido y sin él, en una lista tuya. Falta saber cómo se reprodujo. Si fue una radio (desde una búsqueda), «Repetir la lista» no hace nada porque la radio no se acaba. También puede pasar desde el móvil o con el DJ.
+- Enlace: «las colas se sincronizan mal; si cambias, la cola vuelve a empezar» (24/11). Sin reproducir. Falta saber si pasa al llevar la música a otro equipo o al editar la cola desde el otro, y en qué sentido.
+- Luces: en el PC de Iago, `%APPDATA%\oto\laboratorio-visual` es un enlace (junction) a `scratchpad/laboratorio-visual` para que la fila salga en Extras. Si se mueve el laboratorio, rehacer el enlace.
+- Fondo vivo: espectro nuevo (graves con FFT de 8192 y menos barras por nota; agudos compensados 5,5 dB por octava). Probado con señales, sin verlo en pantalla con música.
 - Escucha de las mezclas del DJ en general (el agente no oye). Confirmado por Iago el 19/11: «Faint» va a tiempo y no hay distorsión tras un cuadre de beats.
 
 ## Mejoras
