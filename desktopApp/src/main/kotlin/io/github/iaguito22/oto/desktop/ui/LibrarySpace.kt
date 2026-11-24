@@ -238,7 +238,7 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
     LaunchedEffect(state.query, embeddedRecents) {
         if (embedded && (state.query.isNotBlank() || embeddedRecents)) {
             preferencesPages = emptyList()
-            if (state.query.isNotBlank()) { local=null; smartOpen=null }
+            if (state.query.isNotBlank()) { local=null; smartOpen=null; djOpen=false; recapOpen=false }
         }
     }
     LaunchedEffect(jump.version) { if(jump.version>0) { home("Tu música"); when { jump.item!=null -> menu.open(jump.item); jump.local==DOWNLOADS_ID -> home("Descargas"); jump.local?.startsWith(FOLDER_PREFIX)==true -> folder=jump.local.removePrefix(FOLDER_PREFIX); jump.local!=null -> local=jump.local; jump.artistId!=null -> menu.openArtist(jump.artistId,jump.artistName) } } }
@@ -271,7 +271,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                 section == "Tu música" -> 0
                 else -> -1
             }
-            onEmbeddedLocation(index, local.takeIf { preferencesPage == null })
+            // Una carpeta abierta también cuenta, para marcarla en el panel izquierdo.
+            onEmbeddedLocation(index, (local ?: folder?.let { FOLDER_PREFIX + it }).takeIf { preferencesPage == null })
         }
     }
     @Composable fun PreferencesContent(page: String) {
@@ -287,7 +288,8 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
             }, { home("Tu música") })
         }
     }
-    fun openItem(item:YTItem) {if(item is SongItem)player.play(item) else {local=null;menu.onQuery("");menu.open(item)}}
+    // El DJ, el resumen y «Hecho con lo tuyo» van por delante de las páginas: al abrir algo se cierran.
+    fun openItem(item:YTItem) {if(item is SongItem)player.play(item) else {local=null;djOpen=false;recapOpen=false;smartOpen=null;menu.onQuery("");menu.open(item)}}
     var collectionLoad by remember { mutableStateOf<Job?>(null) }
     fun playRemoteCollection(item: YTItem) {
         collectionLoad?.cancel()
@@ -682,18 +684,32 @@ internal fun LibrarySpace(player:DesktopPlayerConnection,prefs:Prefs,menu:MenuCo
                                         }
                                     }
                                 } else item(key="folder-actions",span={GridItemSpan(maxLineSpan)}) {
-                                    val folderShuffle=rememberListShuffle(player,FOLDER_PREFIX+inFolder)
-                                    Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                                        Text(folderCount(folderLists.size),style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),modifier=Modifier.padding(end=8.dp))
-                                        if(folderLists.any{it.songs.isNotEmpty()}) {
-                                            Button(onClick={playFolder(inFolder,folderLists)},colors=ButtonDefaults.buttonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))){Text("Reproducir",style=OtoType.rowTitle)}
-                                            HoverAction(MobileIcons.shuffle,if(folderShuffle)"Desactivar aleatorio" else "Activar aleatorio",onClick={player.setShuffle(!folderShuffle,FOLDER_PREFIX+inFolder)},tint=if(folderShuffle)palette.primary else Color.White.copy(alpha=.6f))
-                                        }
-                                        TextButton(onClick={filling=inFolder}){Icon(MobileIcons.add,null,Modifier.size(17.dp));Spacer(Modifier.width(6.dp));Text("Añadir o quitar listas")}
-                                        Box { var open by remember{mutableStateOf(false)}
-                                            HoverAction(MobileIcons.moreHoriz,"Opciones de la carpeta",onClick={open=true})
-                                            LibraryDropdownMenu(open,{open=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(230.dp)) {
-                                                folderMenu(inFolder).forEach { item -> DropdownMenuItem(text={Text(item.label,style=OtoType.rowSub)},onClick={open=false;item.onClick()}) }
+                                    val folderId=FOLDER_PREFIX+inFolder
+                                    val folderShuffle=rememberListShuffle(player,folderId)
+                                    val folderPlayback=localPlayback(folderId)
+                                    // Como la cabecera de una lista: reproducir y aleatorio a la izquierda, lo demás a la derecha.
+                                    BoxWithConstraints(Modifier.fillMaxWidth()) {
+                                        val roomy=maxWidth>=420.dp
+                                        Row(Modifier.fillMaxWidth().padding(vertical=4.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                                            if(folderLists.any{it.songs.isNotEmpty()} || folderPlayback!=CollectionPlayback.Start) {
+                                                FilledIconButton(onClick={if(!player.toggleCollection(localId=folderId))playFolder(inFolder,folderLists)},
+                                                    modifier=Modifier.size(48.dp).semantics { contentDescription=folderPlayback.label(inFolder) },
+                                                    colors=IconButtonDefaults.filledIconButtonColors(containerColor=palette.primary,contentColor=Color(0xFF101010))) {
+                                                    CollectionPlayIcon(folderPlayback==CollectionPlayback.Pause,28.dp,LocalContentColor.current)
+                                                }
+                                                HoverAction(MobileIcons.shuffle,if(folderShuffle)"Desactivar aleatorio" else "Activar aleatorio",onClick={player.setShuffle(!folderShuffle,folderId)},tint=if(folderShuffle)palette.primary else Color.White.copy(alpha=.6f))
+                                            }
+                                            Text(folderCount(folderLists.size).removePrefix("Carpeta · "),style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),maxLines=1)
+                                            Spacer(Modifier.weight(1f))
+                                            if(roomy) TextButton(onClick={filling=inFolder},contentPadding=PaddingValues(horizontal=10.dp)) {
+                                                Icon(MobileIcons.add,null,Modifier.size(17.dp));Spacer(Modifier.width(6.dp))
+                                                Text("Añadir o quitar listas",style=OtoType.rowSub,maxLines=1,softWrap=false)
+                                            } else HoverAction(MobileIcons.add,"Añadir o quitar listas",onClick={filling=inFolder})
+                                            Box { var open by remember{mutableStateOf(false)}
+                                                HoverAction(MobileIcons.moreHoriz,"Opciones de la carpeta",onClick={open=true})
+                                                LibraryDropdownMenu(open,{open=false},shape=RoundedCornerShape(18.dp),modifier=Modifier.width(230.dp)) {
+                                                    folderMenu(inFolder).forEach { item -> DropdownMenuItem(text={Text(item.label,style=OtoType.rowSub)},onClick={open=false;item.onClick()}) }
+                                                }
                                             }
                                         }
                                     }
@@ -1012,7 +1028,7 @@ private fun BoxScope.CollectionCardPlay(title: String, playback: CollectionPlayb
             .clickable(remember { MutableInteractionSource() }, null, enabled = visible, onClickLabel = playback.label(title),
                 role = androidx.compose.ui.semantics.Role.Button, onClick = onPlay),
         contentAlignment = Alignment.Center,
-    ) { CollectionPlayIcon(playing, 23.dp, Color(0xFF171A18)) }
+    ) { CollectionPlayIcon(playing, 23.dp, Color(0xFF171A18), hovered = hovered) }
 }
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable internal fun PlaylistContextMenu(items:List<ContextMenuItem>,content:@Composable ()->Unit) {

@@ -93,6 +93,17 @@ class MobileConnection(private val app: OtoApp) {
         if (follow && state != null) { player.showRemote(state, mirror); followingMutable.value = now }
         else { player.hideRemote(); followingMutable.value = null }
     }
+    // Solo suena un equipo: al empezar aquí se pausa el ordenador, y si empieza él se pausa esto (ver OneAtATime).
+    private val turn = OneAtATime()
+    private fun keepOnePlaying(state: JSONObject?) {
+        when (turn.update(player.localState.value.playing, state?.optBoolean("playing"))) {
+            OneAtATime.Action.PauseRemote -> app.scope.launch {
+                runCatching { link.command(JSONObject().put("action", "pause")) }.onFailure { timber.log.Timber.w(it, "No se pudo pausar el ordenador") }
+            }
+            OneAtATime.Action.PauseLocal -> player.setLocalPlaying(false)
+            OneAtATime.Action.None -> {}
+        }
+    }
     private val syncIssueMutable = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     val syncIssue = syncIssueMutable.asStateFlow()
     private val replica = LibraryReplica(app.prefs, java.io.File(app.filesDir, "library-replica.json"))
@@ -112,7 +123,7 @@ class MobileConnection(private val app: OtoApp) {
     init {
         // En el hilo de la interfaz, como todo lo del reproductor. Sonar aquí (auriculares, notificación, «Traer aquí») lo suelta.
         app.scope.launch(Dispatchers.Main) {
-            kotlinx.coroutines.flow.combine(link.remote, player.localState) { state, _ -> state }.collect { followRemote(it) }
+            kotlinx.coroutines.flow.combine(link.remote, player.localState) { state, _ -> state }.collect { followRemote(it); keepOnePlaying(it) }
         }
         app.scope.launch { link.remote.collect { state ->
             if(state!=null && state.optString("libraryHash")!=replica.digest()) runCatching { replica.merge(link.command(JSONObject().put("action","library"))) }

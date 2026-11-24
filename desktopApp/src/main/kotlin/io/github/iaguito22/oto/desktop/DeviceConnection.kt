@@ -109,6 +109,19 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
             } else { syncIssueMutable.value = null }
         }
     }
+    // Solo suena un equipo: al empezar aquí se pausa el móvil, y si empieza él se pausa esto (ver OneAtATime).
+    private val turn = OneAtATime()
+    private val oneAtATime = scope.launch(Dispatchers.Main) {
+        kotlinx.coroutines.flow.combine(player.state, link.remote) { _, remote -> remote }.collect { remote ->
+            when (turn.update(player.wantsPlayback(), remote?.optBoolean("playing"))) {
+                OneAtATime.Action.PauseRemote -> launch {
+                    runCatching { link.command(JSONObject().put("action", "pause")) }.onFailure { timber.log.Timber.w(it, "No se pudo pausar el móvil") }
+                }
+                OneAtATime.Action.PauseLocal -> player.setPlaying(false)
+                OneAtATime.Action.None -> {}
+            }
+        }
+    }
     val port = runCatching { link.listen(secret, kv.getLong("port", 48731).toInt()) }.getOrElse { link.listen(secret) }.also { kv.putLong("port", it.toLong()) }
     private val discovery = LocalDiscovery(scope).also { it.advertise(identity, port) }
     val host: String = runCatching { DatagramSocket().use { it.connect(InetAddress.getByName("8.8.8.8"), 53); it.localAddress.hostAddress } }.getOrDefault("127.0.0.1")
@@ -130,5 +143,5 @@ internal class DeviceConnection(val player: DesktopPlayerConnection, private val
         // Que el móvil pase a mostrar lo de aquí aunque esté en pausa (un móvil antiguo no lo entiende).
         runCatching { link.command(JSONObject().put("action", "follow")) }
     }
-    override fun close() { sync.cancel(); discovery.close(); link.close(); scope.cancel() }
+    override fun close() { sync.cancel(); oneAtATime.cancel(); discovery.close(); link.close(); scope.cancel() }
 }

@@ -241,6 +241,7 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
     val likedIds by prefs.likedIds.collectAsState(initial = emptySet())
     val likedList by prefs.likedList.collectAsState(initial = LocalPlaylist(LIKED_ID, "Me gusta", emptyList()))
     val playlists by prefs.playlists.collectAsState(initial = emptyList())
+    val folders by prefs.folders.collectAsState(initial = emptySet())
     val flipped by prefs.sortFlipped.collectAsState(initial = emptySet())
     val session by account.session.collectAsState()
     val menuState by menu.state.collectAsState()
@@ -346,6 +347,12 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
         // Igual que el botón de la vista de lista: con el orden invertido se reproduce la lista invertida.
         val shown = if (list.id in flipped) list.copy(songs = list.songs.reversed()) else list
         player.playLocal(shown, null, (list.id == LIKED_ID) != (list.id in flipped))
+    }
+    fun playFolder(name: String, inside: List<LocalPlaylist>) {
+        val id = FOLDER_PREFIX + name
+        if (player.toggleCollection(localId = id)) return
+        // Igual que la tarjeta de la carpeta en «Tu música».
+        player.playLocal(LocalPlaylist(id, name, inside.flatMap { it.songs }.distinctBy { it.id }), null, false)
     }
     val playingSource = if (mirrored != null) mirrored?.source else source
     val sourceLabel = playingSource?.let { if (it.kind == "Radio") "Radio de ${it.title}" else it.title }
@@ -674,7 +681,9 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
         // Fijar: el mini se queda encima de las demás ventanas; la ventana grande nunca.
         var miniPinned by remember { mutableStateOf(kv.getString("mini_pin") == "true") }
         LaunchedEffect(mini, miniPinned) { window.isAlwaysOnTop = mini && miniPinned }
-        TaskbarTransport(window, shown && nativeFrame, TaskbarPlayback(now.id != null, now.playing, ::previous, ::playPause, ::next))
+        val systemPlayback = TaskbarPlayback(now.id != null, now.playing, ::previous, ::playPause, ::next)
+        TaskbarTransport(window, shown && nativeFrame, systemPlayback)
+        WindowsMediaTransport(SystemMedia(now.id != null, now.playing, now.title, now.artist, now.artwork), systemPlayback)
         SmoothWheel.Driver(window)
         MaterialTheme(colorScheme = darkColorScheme(primary = accent, onPrimary = Color(0xFF101010), primaryContainer = Color(0xFF303630), secondary = accent, secondaryContainer = Color(0xFF303630), tertiary = accent, background = Color(0xFF0B0B0B), surface = Color(0xFF121212), surfaceVariant = Color(0xFF2A2A2A), surfaceTint = Color.Transparent, surfaceContainerLowest = Color(0xFF0E0E0E), surfaceContainerLow = Color(0xFF151515), surfaceContainer = Color(0xFF1A1A1A), surfaceContainerHigh = Color(0xFF202020), surfaceContainerHighest = Color(0xFF282828)), typography = OtoTypography) {
             val baseDensity = LocalDensity.current
@@ -828,7 +837,7 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
                             Row((if (mini) Modifier.height(0.dp) else Modifier.weight(1f)).fillMaxWidth().clipToBounds()
                                 .focusProperties { onEnter = { if (mini) cancelFocusChange() } }.focusGroup()) {
                                 SingleLibraryRail(animatedLib, accent, activeSection, activeLocal,
-                                    likedList, playlists, recentLists, djActive, ::goSection, ::openList, ::playList,
+                                    likedList, playlists, folders, recentLists, djActive, ::goSection, ::openList, ::playList, ::playFolder,
                                     playback = { collectionPlayback(source, localNow.id, localNow.playing, localId = it) },
                                     onToggle = {
                                         libraryWide = !libShown
@@ -1025,13 +1034,16 @@ private fun PanelHandle(accent: Color, label: String, start: () -> Dp, reversed:
 
 @Composable
 private fun SingleLibraryRail(width: Dp, accent: Color, activeSection: Int, activeLocal: String?,
-    likedList: LocalPlaylist, playlists: List<LocalPlaylist>, recentLists: List<String>, djActive: Boolean,
+    likedList: LocalPlaylist, playlists: List<LocalPlaylist>, folders: Set<String>, recentLists: List<String>, djActive: Boolean,
     onSection: (Int) -> Unit, onList: (String) -> Unit, onPlay: (LocalPlaylist) -> Unit,
+    onPlayFolder: (String, List<LocalPlaylist>) -> Unit,
     playback: (String) -> CollectionPlayback, onToggle: () -> Unit) {
-    // Primero las listas abiertas o reproducidas hace poco; el resto, en su orden.
-    val ordered = remember(playlists, recentLists) {
+    // Primero las listas abiertas o reproducidas hace poco; el resto, en su orden. Las listas de una carpeta van
+    // dentro de ella, y la carpeta ocupa el sitio de la más reciente; las carpetas vacías, al final.
+    val ordered = remember(playlists, folders, recentLists) {
         val ranks = recentLists.withIndex().associate { it.value to it.index }
-        playlists.sortedBy { ranks[it.id] ?: Int.MAX_VALUE }
+        val (empty, filled) = shelfOf(playlists.sortedBy { ranks[it.id] ?: Int.MAX_VALUE }, folders).partition { it.lists.isEmpty() }
+        filled + empty
     }
     val labelWidth = 180.dp
     val wide = width > labelWidth
@@ -1075,11 +1087,21 @@ private fun SingleLibraryRail(width: Dp, accent: Color, activeSection: Int, acti
                     if (likedList.songs.isNotEmpty() || likedPlayback != CollectionPlayback.Start) ({ onPlay(likedList) }) else null,
                     special = true, playback = likedPlayback) { onList(LIKED_ID) }
             }
-            items(ordered, key = { it.id }) { l ->
-                val listPlayback = playback(l.id)
-                LibraryRow(wide, null, MobileIcons.libraryMusic, l.name, "Lista · ${songCount(l.songs.size)}", activeLocal == l.id, accent,
-                    if (l.songs.isNotEmpty() || listPlayback != CollectionPlayback.Start) ({ onPlay(l) }) else null,
-                    mosaic = l.takeIf { it.songs.isNotEmpty() }, playback = listPlayback) { onList(l.id) }
+            items(ordered, key = { it.key }) { entry ->
+                val folder = entry.folder
+                if (folder != null) {
+                    val id = FOLDER_PREFIX + folder
+                    val folderPlayback = playback(id)
+                    LibraryRow(wide, null, MobileIcons.folder, folder, folderCount(entry.lists.size), activeLocal == id, accent,
+                        if (entry.lists.any { it.songs.isNotEmpty() } || folderPlayback != CollectionPlayback.Start) ({ onPlayFolder(folder, entry.lists) }) else null,
+                        folderLists = entry.lists, playback = folderPlayback) { onList(id) }
+                } else {
+                    val l = entry.lists.first()
+                    val listPlayback = playback(l.id)
+                    LibraryRow(wide, null, MobileIcons.libraryMusic, l.name, "Lista · ${songCount(l.songs.size)}", activeLocal == l.id, accent,
+                        if (l.songs.isNotEmpty() || listPlayback != CollectionPlayback.Start) ({ onPlay(l) }) else null,
+                        mosaic = l.takeIf { it.songs.isNotEmpty() }, playback = listPlayback) { onList(l.id) }
+                }
             }
         }
     }
@@ -1178,7 +1200,7 @@ private fun TopButton(icon: ImageVector, label: String, enabled: Boolean = true,
 
 @Composable
 private fun LibraryRow(wide: Boolean, artwork: String?, fallback: ImageVector, title: String, subtitle: String, active: Boolean, accent: Color,
-    onPlay: (() -> Unit)?, special: Boolean = false, mosaic: LocalPlaylist? = null,
+    onPlay: (() -> Unit)?, special: Boolean = false, mosaic: LocalPlaylist? = null, folderLists: List<LocalPlaylist>? = null,
     playback: CollectionPlayback = CollectionPlayback.Start, onClick: () -> Unit) {
     val source = remember(LocalHoverEpoch.current) { MutableInteractionSource() }
     val hovered by source.collectIsHoveredAsState()
@@ -1199,7 +1221,8 @@ private fun LibraryRow(wide: Boolean, artwork: String?, fallback: ImageVector, t
         Box(Modifier.size(48.dp).clip(RoundedCornerShape(if (special) 10.dp else 6.dp))
             .background(if (special) Brush.linearGradient(listOf(accent.copy(.75f), accent.copy(.25f))) else SolidColor(Color.White.copy(.07f))),
             contentAlignment = Alignment.Center) {
-            if (mosaic != null) PlaylistMosaic(mosaic, accent, Modifier.fillMaxSize(), radius = 0.dp)
+            if (folderLists != null) FolderArt(folderLists, Modifier.fillMaxSize())
+            else if (mosaic != null) PlaylistMosaic(mosaic, accent, Modifier.fillMaxSize(), radius = 0.dp)
             else if (artwork != null) LibraryArt(artwork, Modifier.fillMaxSize(), rounded = false)
             else Icon(fallback, null, Modifier.size(22.dp), tint = if (special) Color(0xFF111111) else if (active) accent else Color.White.copy(.7f))
             val controlsVisible = hovered || focused && keyboard || playback == CollectionPlayback.Pause
@@ -1208,7 +1231,7 @@ private fun LibraryRow(wide: Boolean, artwork: String?, fallback: ImageVector, t
                 .focusProperties { canFocus = false }
                 .pointerHoverIcon(PointerIcon.Hand).clickable(null, null, enabled = controlsVisible, onClickLabel = playback.label(title), role = androidx.compose.ui.semantics.Role.Button, onClick = onPlay),
                 contentAlignment = Alignment.Center) {
-                CollectionPlayIcon(playback == CollectionPlayback.Pause, 28.dp)
+                CollectionPlayIcon(playback == CollectionPlayback.Pause, 28.dp, hovered = hovered || focused && keyboard)
             }
         }
         if (wide) Column(Modifier.weight(1f)) {

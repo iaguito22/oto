@@ -322,6 +322,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         playing=nowPlaying.playing, hasSong=nowPlaying.id != null, previous=::skipPrevious, playPause=::playPause, next=::skipNext,
         volume=volume, setVolume=player::setVolume, title=nowPlaying.title, artist=nowPlaying.artist, artwork=nowPlaying.artwork)
     val taskbarPlayback = TaskbarPlayback(nowPlaying.id != null, nowPlaying.playing, ::skipPrevious, ::playPause, ::skipNext)
+    WindowsMediaTransport(SystemMedia(nowPlaying.id != null, nowPlaying.playing, nowPlaying.title, nowPlaying.artist, nowPlaying.artwork), taskbarPlayback)
     ModuleWindow("Reproductor", playerWindow, playerOpen && !windowsHidden, { closePrimary(DockId.Player) }, pinned && playerSolo, accent = palette.primary, dock=docking, dockId=DockId.Player, taskbarPlayback = taskbarPlayback,
         keys = ::shortcuts, typingShortcuts = typingShortcuts, onWindow = { playerFrame = it }, immersive = true, chrome = chrome,
         minimum = if(form == PlayerForm.Vertical) DpSize(96.dp,240.dp) else if(form == PlayerForm.Horizontal) DpSize(280.dp,108.dp) else DpSize(260.dp,370.dp),
