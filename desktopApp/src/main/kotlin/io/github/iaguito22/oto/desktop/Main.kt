@@ -63,6 +63,7 @@ fun main() {
     val downloads = DesktopDownloads(prefs, appScope)
     downloads.start()
     val player = DesktopPlayerConnection(prefs, plays, djCatalog, lyricsStore, downloads, appScope)
+    io.github.iaguito22.oto.desktop.playback.VisualsBridge.attach(player)
     val menu = MenuController(appScope)
 
     if (account.restore() == null) {

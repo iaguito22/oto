@@ -316,6 +316,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         shortcutIssue = access.issue
         onDispose { access.close() }
     }
+    io.github.iaguito22.oto.desktop.wallpaper.LiveWallpaperWindows(player, isLiked) { like() }   // fondo de escritorio vivo (Ajustes → Extras)
     OtoTray(toggle={showOrHide()}, player={windowsHidden=false; playerOpen=true}, library={windowsHidden=false; menuOpen=true},
         lyrics={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; lyricsOpen=true},
         queue={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; queueOpen=true}, quit=quit,

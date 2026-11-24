@@ -2,6 +2,7 @@ package io.github.iaguito22.oto.desktop.ui
 
 import io.github.iaguito22.oto.desktop.ShellMode
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -48,6 +49,8 @@ import io.github.iaguito22.oto.desktop.DesktopGraphics
 import io.github.iaguito22.oto.desktop.desktopVersion
 import io.github.iaguito22.oto.desktop.DesktopPreferences
 import io.github.iaguito22.oto.desktop.LocalDesktopShortcutCapture
+import io.github.iaguito22.oto.desktop.playback.VisualsBridge
+import io.github.iaguito22.oto.desktop.playback.VisualsOutput
 import io.github.iaguito22.oto.importer.ImportState
 import io.github.iaguito22.oto.playback.Tier
 import kotlinx.coroutines.Dispatchers
@@ -76,6 +79,11 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
     val crossfade by prefs.crossfade.collectAsState(initial = DEFAULT_CROSSFADE)
     val np by player.state.collectAsState()
     val nowId=np.id
+    var extras by remember { mutableStateOf(false) }
+    // Extras (beta): las luces del laboratorio y el fondo de escritorio vivo
+    // Las luces solo salen si este PC tiene el laboratorio, o si ya estaban encendidas (para poder apagarlas).
+    val lights = remember { VisualsBridge.labDir() != null || VisualsBridge.enabled }
+    if (extras) { ExtrasSpace(accent, onBack = { extras = false }) { if (lights) item { LightsExtrasSettings(accent) } }; return }
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(bottom=32.dp+LocalFloatingDockInset.current),verticalArrangement=Arrangement.spacedBy(2.dp)) {
         item { InterfaceSetting(accent, onQuit) }
         item {SettingsLink(MobileIcons.accountCircle,"Cuenta de YouTube Music",session?.let { listOfNotNull(it.name.ifEmpty { null },it.email?.ifEmpty { null }).joinToString(" · ").ifEmpty { "Has entrado" } } ?: "Sin cuenta: recomendaciones de visitante",accent,onAccount)}
@@ -134,6 +142,7 @@ internal fun SettingsSpace(prefs:Prefs,player:DesktopPlayerConnection,palette:Ar
         if(artworkBackground) item {SettingFrame(MobileIcons.libraryMusic,accent) { Text("Intensidad del fondo · ${(backdropOpacity*100).toInt()} %",style=OtoType.rowTitle); Slider(backdropOpacity,onBackdropOpacity,colors=SliderDefaults.colors(thumbColor=accent,activeTrackColor=accent)) }}
         item {SettingsToggle(MobileIcons.hardDrive,"Ahorro de RAM","Modo agresivo: casi sin caché de carátulas ni de dibujo, devuelve al sistema la memoria que no usa y, con las ventanas ocultas, suelta todo lo posible. No prepara la siguiente canción y quita el fundido. Las portadas y el cambio de canción pueden tardar un poco más.",ramSaver,accent){scope.launch{prefs.setRamSaver(!ramSaver)}}}
         if(isWindowsDesktop) item { DedicatedGpuSetting(accent) }
+        item { ExtrasLink(accent) { extras = true } }
         if(supportsDesktopShortcut) item { ShortcutSetting(shortcut,shortcutIssue,accent,onShortcut) }
         item { SpaceRow(nowId,accent) }
         item {SettingFrame(MobileIcons.settings,accent){Text("Atajos de teclado",style=OtoType.rowTitle);Text(if(ShellMode.startedSingle) "Ctrl + K: buscar · Ctrl + L: letra · Ctrl + ← / →: canción anterior o siguiente · Ctrl + ↑ / ↓: volumen · Ctrl + Mayús + M: mini reproductor · Ctrl + B: guardar"
@@ -218,14 +227,14 @@ private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).t
 }
 
 /** Un texto que cambia con un fundido, como las explicaciones del móvil. */
-@Composable private fun FadingText(text:String) {
+@Composable internal fun FadingText(text:String) {
     AnimatedContent(text,transitionSpec={ fadeIn(tween(150,delayMillis=40)) togetherWith fadeOut(tween(100)) },label="settingBody") {
         Text(it,style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),modifier=Modifier.padding(top=2.dp))
     }
 }
 
 /** El selector del móvil: un indicador que se desliza a la opción elegida. */
-@Composable private fun ChoiceSelector(options:List<String>,selected:Int,width:Dp,accent:Color,onSelect:(Int)->Unit) {
+@Composable internal fun ChoiceSelector(options:List<String>,selected:Int,width:Dp,accent:Color,onSelect:(Int)->Unit) {
     val at by animateFloatAsState(selected.toFloat(),Motion.toggle(),label="choice")
     Row(Modifier.height(36.dp).clip(CircleShape).background(Color.White.copy(alpha=.06f)).drawBehind {
         val w=size.width/options.size
@@ -243,7 +252,7 @@ private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).t
 }
 
 /** La marca del móvil: un aro vacío que se llena de acento con un pequeño rebote. */
-@Composable private fun Check(on:Boolean,accent:Color) {
+@Composable internal fun Check(on:Boolean,accent:Color) {
     val f by animateFloatAsState(if(on)1f else 0f,Motion.toggle(),label="check")
     Box(Modifier.size(26.dp).graphicsLayer { val s=1f+.12f*(f*(1f-f)*4f);scaleX=s;scaleY=s }.clip(CircleShape)
         .border(1.5.dp,lerp(Color.White.copy(alpha=.36f),accent,f.coerceIn(0f,1f)),CircleShape).background(accent.copy(alpha=f.coerceIn(0f,1f))),contentAlignment=Alignment.Center) {
@@ -252,7 +261,7 @@ private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).t
 }
 
 /** El icono de un ajuste: en una pastilla redonda del color de lo que suena. */
-@Composable private fun SettingIcon(icon:ImageVector,accent:Color) {
+@Composable internal fun SettingIcon(icon:ImageVector,accent:Color) {
     Box(Modifier.size(40.dp).clip(CircleShape).background(accent.copy(alpha=.16f)),contentAlignment=Alignment.Center) {
         Icon(icon,null,Modifier.size(22.dp),tint=accent)
     }
@@ -294,13 +303,13 @@ private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).t
     }
 }
 
-@Composable private fun SettingFrame(icon:ImageVector,accent:Color,content:@Composable ColumnScope.()->Unit) {
+@Composable internal fun SettingFrame(icon:ImageVector,accent:Color,content:@Composable ColumnScope.()->Unit) {
     Row(Modifier.fillMaxWidth().cascadeIn().padding(horizontal=12.dp,vertical=12.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),verticalAlignment=Alignment.Top) {
         SettingIcon(icon,accent);Column(Modifier.weight(1f).padding(top=2.dp),verticalArrangement=Arrangement.spacedBy(4.dp),content=content)
     }
 }
 
-@Composable private fun HoverRow(onClick:()->Unit,content:@Composable RowScope.()->Unit) {
+@Composable internal fun HoverRow(onClick:()->Unit,content:@Composable RowScope.()->Unit) {
     val interaction=remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val highlight by animateFloatAsState(if(hovered).055f else 0f,tween(180),label="settingsHover")
@@ -308,9 +317,49 @@ private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).t
         verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp),content=content)
 }
 
-@Composable private fun SettingsLink(icon:ImageVector,title:String,subtitle:String,accent:Color,onClick:()->Unit) {
+@Composable internal fun SettingsLink(icon:ImageVector,title:String,subtitle:String,accent:Color,onClick:()->Unit) {
     HoverRow(onClick) {
         SettingIcon(icon,accent);Column(Modifier.weight(1f)){Text(title,style=OtoType.rowTitle);Text(subtitle,style=OtoType.rowSub,color=Color.White.copy(alpha=.5f),maxLines=2,overflow=TextOverflow.Ellipsis)};Icon(MobileIcons.chevronRight,null,Modifier.size(18.dp),tint=Color.White.copy(alpha=.4f))
+    }
+}
+
+/**
+ * Luces (Extras, beta): el laboratorio de luces sigue lo que suena; con «Salida» se elige si las luces se ven en el
+ * navegador, van a QLC+ o las dos cosas. Apagado por defecto; se apaga al instante.
+ */
+@Composable internal fun LightsExtrasSettings(accent:Color) {
+    var on by remember { mutableStateOf(VisualsBridge.enabled) }
+    var output by remember { mutableStateOf(VisualsBridge.output) }
+    val issue = if (on) VisualsBridge.issue else null
+    val subtitle = issue ?: if (on) "El laboratorio de luces sigue lo que suena en Oto (127.0.0.1:${VisualsBridge.PORT}). Solo lo ven programas y páginas de este PC."
+        else "Deja que el laboratorio de luces siga la canción que suena: le pasa qué suena, por dónde va y su audio. Solo dentro de este PC."
+    Column {
+        SettingsToggle(MobileIcons.graphicEq,"Luces y visuales externos",subtitle,on,accent) {
+            on = !on
+            VisualsBridge.enabled = on
+        }
+        AnimatedVisibility(on) {
+            SettingFrame(Icons.Rounded.Devices,accent) {
+                Row(verticalAlignment=Alignment.CenterVertically) {
+                    Text("Salida de las luces",style=OtoType.rowTitle,modifier=Modifier.weight(1f))
+                    ChoiceSelector(VisualsOutput.entries.map { it.label },VisualsOutput.entries.indexOf(output),92.dp,accent) {
+                        output = VisualsOutput.entries[it]; VisualsBridge.output = output
+                    }
+                }
+                FadingText(when (output) {
+                    VisualsOutput.Navegador -> "Las luces se ven en el laboratorio, en el navegador."
+                    VisualsOutput.Qlc -> "Las luces van a QLC+ (y de ahí a tus focos). Hace falta tener abierto el puente (martinan_qlc.bat)."
+                    VisualsOutput.Ambos -> "Las luces se ven en el navegador y además van a QLC+."
+                })
+                var labIssue by remember { mutableStateOf<String?>(null) }
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp),modifier=Modifier.padding(top=6.dp)) {
+                    Box(Modifier.clip(CircleShape).background(accent.copy(alpha=.22f)).clickable { labIssue = VisualsBridge.openLab() }.padding(horizontal=16.dp,vertical=8.dp)) {
+                        Text("Abrir el escenario en el navegador",style=OtoType.rowTitle.copy(fontSize=OtoType.rowSub.fontSize*1.05f),color=Color.White)
+                    }
+                    labIssue?.let { Text(it,style=OtoType.rowSub,color=Color.White.copy(alpha=.6f)) }
+                }
+            }
+        }
     }
 }
 
@@ -328,7 +377,7 @@ private fun formatSize(n:Long)=if(n>=1L shl 30) "%.1f GB".format(n/(1L shl 30).t
     }
 }
 
-@Composable private fun SettingsToggle(icon:ImageVector,title:String,subtitle:String,on:Boolean,accent:Color,onClick:()->Unit) {
+@Composable internal fun SettingsToggle(icon:ImageVector,title:String,subtitle:String,on:Boolean,accent:Color,onClick:()->Unit) {
     HoverRow(onClick) {
         SettingIcon(icon,accent);Column(Modifier.weight(1f)){Text(title,style=OtoType.rowTitle);FadingText(subtitle)};Check(on,accent)
     }

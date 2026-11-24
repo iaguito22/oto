@@ -516,6 +516,9 @@ fun ApplicationScope.SingleDesktop(player: DesktopPlayerConnection, prefs: Prefs
         shortcutIssue = access.issue
         onDispose { access.close() }
     }
+    io.github.iaguito22.oto.desktop.wallpaper.LiveWallpaperWindows(player, isLiked) { on ->   // fondo de escritorio vivo (Ajustes → Extras)
+        now.id?.let { id -> uiScope.launch { prefs.setLiked(Heard(id, now.title, now.artist, now.artwork, now.artists.firstOrNull()?.second), on) }; if (on) player.reportDjReaction(id, io.github.iaguito22.oto.dj.DjReaction.Like) }
+    }
     OtoTray(toggle = { toggleShown() }, player = { show() }, library = { show(); goSection(0) },
         lyrics = { show(); expandMini(); devicesOpen = false; saving = null; lyricsOpen = true },
         queue = {

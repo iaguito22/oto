@@ -239,6 +239,9 @@ class DesktopPlayerConnection(
         get() = requireNotNull(activeDeck.value)
         set(value) { activeDeck.value = value }
 
+    /** El audio ya descargado de lo que suena ahora (para el puente de visuales); null mientras se descarga. */
+    fun currentAudioFile(): File? = activeDeck.value?.takeIf { it.state.value.bufferedFraction >= 1f }?.cachedAudioFile()
+
     private fun createDeck(cacheName: String): DesktopAudioEngine {
         lateinit var deck: DesktopAudioEngine
         deck = DesktopAudioEngine(

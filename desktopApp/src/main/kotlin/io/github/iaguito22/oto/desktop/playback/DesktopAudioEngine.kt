@@ -505,6 +505,7 @@ class DesktopAudioEngine(
         var process: Process? = null
         try {
             currentLine = line
+            AudioTap.attach(line) { line.longFramePosition }
             val proc = ProcessBuilder(ffmpegPcmCommand(DesktopTools.require("ffmpeg"), file, offsetMs))
                 .redirectError(ProcessBuilder.Redirect.DISCARD).start()
             process = proc
@@ -524,6 +525,7 @@ class DesktopAudioEngine(
                     microFadeRemaining = (microFadeRemaining - len / 4).coerceAtLeast(0)
                 }
                 bandFilter.processPcm16(pcm, len, mixBands, gainLinear, inputScale = 1f / PCM_DECODE_GAIN)
+                AudioTap.write(line, pcm, len)   // fondo vivo: no hace nada si está apagado
                 line.write(pcm, 0, len)
                 emittedFrames += len / 4
                 decoded = true
@@ -578,6 +580,7 @@ class DesktopAudioEngine(
         } finally {
             if (currentProcess === process) currentProcess = null
             if (currentLine === line) currentLine = null
+            AudioTap.detach(line)
             runCatching { process?.destroyForcibly() }
             runCatching { line.stop(); line.close() }
         }

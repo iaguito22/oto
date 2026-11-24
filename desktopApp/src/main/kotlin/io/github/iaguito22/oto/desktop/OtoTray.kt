@@ -49,7 +49,9 @@ internal fun OtoTray(toggle: () -> Unit, player: () -> Unit, library: () -> Unit
     volume: Float, setVolume: (Float) -> Unit, title: String = "", artist: String = "", artwork: String? = null) {
     var menuOpen by remember { mutableStateOf(false) }
     // Con canción, el menú lleva arriba su tarjeta: la altura debe saberse al colocarlo.
-    val menuHeight = if (hasSong && title.isNotBlank()) 385 else 329
+    val wallpaperOn by io.github.iaguito22.oto.desktop.wallpaper.WallpaperStore.enabled.collectAsState()
+    val wallpaperRow = if (io.github.iaguito22.oto.desktop.wallpaper.wallpaperSupported) 35 else 0
+    val menuHeight = (if (hasSong && title.isNotBlank()) 385 else 329) + wallpaperRow
     val currentHeight by rememberUpdatedState(menuHeight)
     var trayIcon by remember { mutableStateOf<TrayIcon?>(null) }
     LaunchedEffect(trayIcon, hasSong, title, artist) {
@@ -145,6 +147,9 @@ internal fun OtoTray(toggle: () -> Unit, player: () -> Unit, library: () -> Unit
                     Entry(MobileIcons.libraryMusic,"Tu música",library)
                     Entry(MobileIcons.lyrics,"Letra",lyrics)
                     Entry(MobileIcons.queueMusic,"Cola",queue)
+                    // fondo de escritorio vivo (Ajustes → Extras): encender y apagar desde aquí
+                    if (io.github.iaguito22.oto.desktop.wallpaper.wallpaperSupported)
+                        Entry(MobileIcons.graphicEq, if (wallpaperOn) "Quitar fondo vivo" else "Poner fondo vivo") { io.github.iaguito22.oto.desktop.wallpaper.WallpaperStore.setEnabled(!wallpaperOn) }
                     HorizontalDivider(Modifier.padding(vertical=4.dp),color=Color.White.copy(alpha=.08f))
                     Entry(MobileIcons.close,"Salir de Oto",quit)
                 }
