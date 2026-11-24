@@ -62,10 +62,10 @@ class InstrumentsTest {
         val names = listOf("kick", "snare", "hat", "bass", "voice", "energy", "build", "drop", "slow")
         val out = names.associateWith { FloatArray(frames) }; val times = FloatArray(frames)
         for (f in 0 until frames) {
-            val end = (f + 1) * hop
-            for (i in s.samples.indices) { val k = end - s.samples.size + i; s.samples[i] = if (k < 0) 0f else sig[k] }
+            val end = (f + 1) * hop + Spectrum.AHEAD   // como el fondo: lee el audio adelantado
+            for (i in s.samples.indices) { val k = end - s.samples.size + i; s.samples[i] = if (k < 0 || k >= sig.size) 0f else sig[k] }
             s.update(true, 1f / fps, .5f)
-            times[f] = end.toFloat() / sr
+            times[f] = ((f + 1) * hop).toFloat() / sr
             out.getValue("kick")[f] = s.kick; out.getValue("snare")[f] = s.snare; out.getValue("hat")[f] = s.hat
             out.getValue("bass")[f] = s.bass; out.getValue("voice")[f] = s.voice; out.getValue("energy")[f] = s.energy
             out.getValue("build")[f] = s.build; out.getValue("drop")[f] = s.drop; out.getValue("slow")[f] = s.slow

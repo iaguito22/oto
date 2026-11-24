@@ -66,6 +66,39 @@ class WallpaperTest {
         assertTrue(s.cur.all { it < .02f })
     }
 
+    /** Una nota de bajo enciende pocas barras, y dos notas distintas (La1 y Mi2) se ven en sitios distintos. */
+    @Test fun unaNotaDeBajoEnciendePocasBarras() {
+        fun settle(hz: Double): Spectrum {
+            val s = Spectrum()
+            for (i in s.samples.indices) s.samples[i] = (.5 * sin(2 * PI * hz * i / 48_000)).toFloat()
+            repeat(30) { s.update(true, 1 / 60f, .5f) }
+            return s
+        }
+        val a = settle(55.0); val e = settle(82.4)
+        val top = a.cur.max()
+        val lit = (0 until Spectrum.bandOf(300.0)).count { a.cur[it] > .5f * top }
+        assertTrue("barras encendidas por una nota de 55 Hz: $lit", lit <= 4)
+        val pa = a.cur.indices.maxBy { a.cur[it] }; val pe = e.cur.indices.maxBy { e.cur[it] }
+        assertTrue("55 Hz en la barra $pa y 82 Hz en la $pe", pe - pa >= 3)
+    }
+
+    /**
+     * Platos 30 dB por debajo del bajo (lo normal en una mezcla) tienen que mover las barras de agudos al menos la mitad
+     * que el bajo las suyas. Antes llegaban al 2 %.
+     */
+    @Test fun losAgudosSubenComoLosGraves() {
+        val s = Spectrum(); val rnd = java.util.Random(7)
+        val noise = DoubleArray(s.samples.size) { rnd.nextGaussian() }
+        repeat(3) { for (i in noise.size - 1 downTo 1) noise[i] -= noise[i - 1] }   // ruido con casi todo arriba (platos)
+        val bassRms = .4 / Math.sqrt(2.0); val noiseRms = Math.sqrt(noise.sumOf { it * it } / noise.size)
+        val k = bassRms * Math.pow(10.0, -30 / 20.0) / noiseRms
+        for (i in s.samples.indices) s.samples[i] = (.4 * sin(2 * PI * 55 * i / 48_000) + k * noise[i]).toFloat()
+        repeat(60) { s.update(true, 1 / 60f, .5f) }
+        val bass = (0 until Spectrum.BASS_BANDS).maxOf { s.spec[it] }
+        val highs = (Spectrum.bandOf(6000.0) until Spectrum.NBAND).maxOf { s.spec[it] }
+        assertTrue("graves $bass agudos $highs", highs >= .5f * bass)
+    }
+
     @Test fun elBomboSeDetectaEnVivo() {
         val s = Spectrum(); var maxKick = 0f
         for (f in 0 until 240) {

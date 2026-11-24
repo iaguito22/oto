@@ -13,9 +13,19 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Espectro en vivo para el fondo, igual que el del laboratorio (Web Audio AnalyserNode + procesado de bandas):
- * FFT de 2048 con ventana de Blackman, suavizado 0,5, escala de −90 a −22 dB, 96 bandas logarítmicas de 30 Hz a
- * 14 kHz, ganancia automática, subida rápida y bajada lenta, picos que caen, historial de 16 cuadros y «golpe» de bajo.
+ * Espectro en vivo para el fondo: 96 bandas de 30 Hz a 14 kHz, escala de −90 a −22 dB, ganancia automática, subida
+ * rápida y bajada lenta, picos que caen, historial de 16 cuadros y «golpe» de bajo.
+ *
+ * - Medios y agudos: FFT de 2048 con ventana de Blackman (como el AnalyserNode del laboratorio).
+ * - Graves (bandas por debajo de [LONG_HZ]): FFT de 8192 con ventana de Hann, 5,9 Hz por bin. Con la de 2048 (23 Hz
+ *   por bin) una nota de bajo encendía todas las barras de graves y no se distinguían las notas.
+ * - Reparto de las barras: logarítmico en medios y agudos, menos denso en graves (ln(1 + f/[K])), para que una nota de
+ *   bajo no ocupe media docena de barras.
+ * - Inclinación de [TILT_DB] dB por octava: la música pierde energía hacia los agudos y, sin compensarla, los platos y
+ *   el brillo casi no movían las barras.
+ *
+ * [samples] lleva [NL] muestras; la ventana corta son las [N] que acaban [AHEAD] antes del final, así las dos ventanas
+ * se centran en el mismo instante. Quien lee el audio lo pide [AHEAD] muestras adelantado.
  *
  * Como en Oto no hay análisis previo de la canción, los instrumentos (bombo, caja, platos, bajo, voz) y la energía se
  * calculan aquí en vivo, a partir de las propias bandas.
@@ -23,24 +33,59 @@ import kotlin.math.sqrt
 internal class Spectrum(private val sampleRate: Int = 48_000) {
     companion object {
         const val N = 2048
+        const val NL = 8192
+        const val AHEAD = (NL - N) / 2
+        /** Donde acaba la ventana corta dentro de [samples]: lo que «suena ahora». */
+        const val SHORT_END = NL - AHEAD
         const val NBAND = 96
         const val HIST = 16
         private const val F0 = 30.0
         private const val F1 = 14_000.0
-        val BASS_BANDS = (NBAND * ln(140 / F0) / ln(F1 / F0)).roundToInt()
-        fun bandOf(hz: Double) = (NBAND * ln(hz / F0) / ln(F1 / F0)).roundToInt().coerceIn(0, NBAND)
+        private const val K = 80.0
+        private const val LONG_HZ = 320.0
+        private const val TILT_DB = 5.5
+        private fun scale(hz: Double) = ln(1 + hz / K)
+        private val S0 = scale(F0); private val S1 = scale(F1)
+        /** Frecuencia del borde [x] de las bandas (0 = 30 Hz, [NBAND] = 14 kHz). */
+        fun bandHz(x: Double) = K * (kotlin.math.exp(S0 + x / NBAND * (S1 - S0)) - 1)
+        fun bandOf(hz: Double) = (NBAND * (scale(hz) - S0) / (S1 - S0)).roundToInt().coerceIn(0, NBAND)
+        val BASS_BANDS = bandOf(140.0)
     }
 
-    val samples = FloatArray(N)
-    private val re = FloatArray(N)
-    private val im = FloatArray(N)
+    val samples = FloatArray(NL)
+    private val re = FloatArray(NL)
+    private val im = FloatArray(NL)
     private val window = FloatArray(N) { i -> val a = 2 * PI * i / (N - 1); (.42 - .5 * cos(a) + .08 * cos(2 * a)).toFloat() }
+    private val windowLong = FloatArray(NL) { i -> (.5 - .5 * cos(2 * PI * i / (NL - 1))).toFloat() }
     private val smoothMag = FloatArray(N / 2)
     private val bytes = FloatArray(N / 2)               // 0…1, como getByteFrequencyData / 255
-    private val bins: Array<IntArray> = Array(NBAND) { i ->
-        val hz = sampleRate.toDouble() / N
-        val f0 = F0 * (F1 / F0).pow(i.toDouble() / NBAND); val f1 = F0 * (F1 / F0).pow((i + 1).toDouble() / NBAND)
-        val b0 = (f0 / hz).toInt(); intArrayOf(b0, min(N / 2, max(b0 + 1, kotlin.math.ceil(f1 / hz).toInt())))
+    private val longBins = (LONG_HZ * 1.25 * NL / sampleRate).toInt() + 4
+    private val smoothMagLong = FloatArray(longBins)
+    private val bytesLong = FloatArray(longBins)
+    private var longAcc = 1f
+    /** dB que se suman a cada bin para compensar que la música pierde energía hacia los agudos (0 dB en 1 kHz). */
+    private fun tilt(hz: Double) = (TILT_DB * ln(max(hz, 20.0) / 1000.0) / ln(2.0)).toFloat()
+    private val tiltShort = FloatArray(N / 2) { tilt(it * sampleRate.toDouble() / N) }
+    private val tiltLong = FloatArray(longBins) { tilt(it * sampleRate.toDouble() / NL) }
+
+    /** Cada banda: si sale de la ventana larga, y o bien los bins que cubre o, si es más estrecha que dos bins, su centro. */
+    private class Band(val long: Boolean, val from: Int, val until: Int, val center: Float)
+    private val bands = Array(NBAND) { i ->
+        val f0 = bandHz(i.toDouble()); val f1 = bandHz(i + 1.0)
+        val long = f1 <= LONG_HZ
+        val hz = sampleRate.toDouble() / (if (long) NL else N)
+        val b0 = (f0 / hz).toInt()
+        Band(long, b0, max(b0 + 1, kotlin.math.ceil(f1 / hz).toInt()), (((f0 + f1) / 2) / hz).toFloat())
+    }
+    private fun bandValue(b: Band): Float {
+        val src = if (b.long) bytesLong else bytes
+        if (b.until - b.from <= 2) {   // más estrecha que dos bins: el valor en su centro, sin repetir el del bin entero
+            val k = b.center.toInt().coerceIn(0, src.size - 2); val f = (b.center - k).coerceIn(0f, 1f)
+            return src[k] * (1 - f) + src[k + 1] * f
+        }
+        var m = 0f
+        for (j in b.from until min(b.until, src.size)) m = max(m, src[j])
+        return m
     }
 
     val band = FloatArray(NBAND)       // crudo normalizado (sube y baja al instante)
@@ -67,6 +112,7 @@ internal class Spectrum(private val sampleRate: Int = 48_000) {
     var drop = 0f; private set
     var slow = 0f; private set
     private val voiceRange = bandOf(250.0) until bandOf(3500.0)
+    private val longBands = bands.count { it.long }
 
     // golpes: energía de cada rango (dB) en los últimos cuadros, para ver cuánto ha subido en ~30 ms
     private val pw = FloatArray(N / 2)                  // potencia de cada bin en este cuadro, sin suavizar
@@ -94,11 +140,12 @@ internal class Spectrum(private val sampleRate: Int = 48_000) {
     fun update(hasAudio: Boolean, dt: Float, smoothing: Float) {
         if (hasAudio) {
             fft()
+            // la larga basta 60 veces por segundo: los graves no cambian más deprisa y es la FFT cara
+            longAcc += dt
+            if (longAcc >= 1f / 61) { longAcc = 0f; fftLong() }
             var fm = 0f
             for (i in 0 until NBAND) {
-                var m = 0f
-                for (j in bins[i][0] until bins[i][1]) m = max(m, bytes[j])
-                val v = m.toDouble().pow(2.2).toFloat() * (1 + .9f * i / NBAND)
+                val v = bandValue(bands[i]).toDouble().pow(2.2).toFloat()
                 band[i] = v; if (v > fm) fm = v
             }
             agc = max(fm, agc * exp(-dt / 4f))
@@ -110,6 +157,13 @@ internal class Spectrum(private val sampleRate: Int = 48_000) {
             if (cur[i] >= peak[i]) { peak[i] = cur[i]; peakV[i] = 0f } else { peakV[i] += dt * 1.8f; peak[i] = max(cur[i], peak[i] - peakV[i] * dt) }
         }
         smoothInto(spec, cur, 1 + (smoothing * 2).roundToInt())
+        // en graves, solo con las vecinas: las notas son picos estrechos y el suavizado ancho los aplastaba
+        for (i in 0 until longBands) {
+            var s = 2 * cur[i]; var w = 2f
+            if (i > 0) { s += cur[i - 1]; w++ }
+            if (i + 1 < NBAND) { s += cur[i + 1]; w++ }
+            spec[i] = s / w
+        }
         histAcc += dt
         while (histAcc >= 1f / 60) { histAcc -= 1f / 60; histHead = (histHead + 1) % HIST; cur.copyInto(hist[histHead]) }
         var lb = 0f; for (i in 0 until BASS_BANDS) lb += cur[i]; lb /= BASS_BANDS
@@ -168,7 +222,7 @@ internal class Spectrum(private val sampleRate: Int = 48_000) {
 
         // volumen (dBFS de lo que suena) frente a lo más fuerte de la canción, que se olvida despacio (0,25 dB/s). La música
         // de ahora está muy comprimida: estrofa y estribillo se separan 2-4 dB (medido con pop y reguetón), de ahí la escala.
-        var sq = 0.0; for (i in N - 1024 until N) sq += samples[i].toDouble() * samples[i]
+        var sq = 0.0; for (i in SHORT_END - 1024 until SHORT_END) sq += samples[i].toDouble() * samples[i]
         val db = if (hasAudio) (10 * log10(sq / 1024 + 1e-10)).toFloat() else -100f
         loud = if (hasAudio && primed < .6f) max(-60f, db) else loud + (max(-60f, db) - loud) * (1 - exp(-dt / .35f))
         loudRef = max(loud, loudRef - dt * .25f).coerceAtLeast(-30f)
@@ -189,21 +243,47 @@ internal class Spectrum(private val sampleRate: Int = 48_000) {
         slow += ((ramp(energyLong - energy, .12f, .45f)) - slow) * (1 - exp(-dt / .8f))
     }
 
+    /** La ventana corta: medios, agudos y la potencia que usan los golpes. */
     private fun fft() {
-        for (i in 0 until N) { re[i] = samples[i] * window[i]; im[i] = 0f }
-        // radix 2, in situ
+        val from = SHORT_END - N
+        for (i in 0 until N) { re[i] = samples[from + i] * window[i]; im[i] = 0f }
+        transform(N)
+        for (k in 0 until N / 2) {
+            val p2 = (re[k] * re[k] + im[k] * im[k]) / (N.toFloat() * N); pw[k] = p2
+            val mag = sqrt(p2)
+            smoothMag[k] = .5f * smoothMag[k] + .5f * mag
+            val db = 20 * log10(max(1e-12f, smoothMag[k])) + tiltShort[k]
+            bytes[k] = ((db + 90f) / 68f).coerceIn(0f, 1f)
+        }
+    }
+
+    /** La ventana larga, solo para las bandas de graves. Misma escala que la corta: un seno da el mismo nivel en las dos. */
+    private fun fftLong() {
+        for (i in 0 until NL) { re[i] = samples[i] * windowLong[i]; im[i] = 0f }
+        transform(NL)
+        val gain = .42f / .5f   // ganancia de un seno con Blackman frente a Hann
+        for (k in 0 until longBins) {
+            val mag = sqrt(re[k] * re[k] + im[k] * im[k]) / NL * gain
+            smoothMagLong[k] = .5f * smoothMagLong[k] + .5f * mag
+            val db = 20 * log10(max(1e-12f, smoothMagLong[k])) + tiltLong[k]
+            bytesLong[k] = ((db + 90f) / 68f).coerceIn(0f, 1f)
+        }
+    }
+
+    /** FFT radix 2 in situ sobre las [n] primeras posiciones de [re] e [im]. */
+    private fun transform(n: Int) {
         var j = 0
-        for (i in 1 until N) {
-            var bit = N shr 1
+        for (i in 1 until n) {
+            var bit = n shr 1
             while (j and bit != 0) { j = j xor bit; bit = bit shr 1 }
             j = j xor bit
             if (i < j) { val tr = re[i]; re[i] = re[j]; re[j] = tr; val ti = im[i]; im[i] = im[j]; im[j] = ti }
         }
         var len = 2
-        while (len <= N) {
+        while (len <= n) {
             val ang = -2 * PI / len; val wr = cos(ang).toFloat(); val wi = sin(ang).toFloat()
             var s = 0
-            while (s < N) {
+            while (s < n) {
                 var cr = 1f; var ci = 0f
                 for (k in 0 until len / 2) {
                     val a = s + k; val b = a + len / 2
@@ -214,13 +294,6 @@ internal class Spectrum(private val sampleRate: Int = 48_000) {
                 s += len
             }
             len = len shl 1
-        }
-        for (k in 0 until N / 2) {
-            val p2 = (re[k] * re[k] + im[k] * im[k]) / (N.toFloat() * N); pw[k] = p2
-            val mag = sqrt(p2)
-            smoothMag[k] = .5f * smoothMag[k] + .5f * mag
-            val db = 20 * log10(max(1e-12f, smoothMag[k]))
-            bytes[k] = ((db + 90f) / 68f).coerceIn(0f, 1f)
         }
     }
 }
@@ -233,7 +306,8 @@ internal fun smoothInto(out: FloatArray, src: FloatArray, margin: Int): FloatArr
         for (j in -margin..margin) { val k = i + j; if (k < 0 || k >= n) continue; val wt = (margin - kotlin.math.abs(j) + 1).toFloat(); s += src[k] * wt; w += wt }
         out[i] = s / w
     }
-    val from = (n * .82f).toInt()
-    for (i in from until n) out[i] *= 1 - .55f * (i - n * .82f) / (n * .18f)
+    // solo las últimas barras (por encima de ~11 kHz) y poco: antes bajaba hasta la mitad todo lo de más de 7 kHz
+    val from = (n * .92f).toInt()
+    for (i in from until n) out[i] *= 1 - .3f * (i - n * .92f) / (n * .08f)
     return out
 }

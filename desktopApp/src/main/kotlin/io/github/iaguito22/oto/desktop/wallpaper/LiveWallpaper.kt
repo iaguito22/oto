@@ -72,9 +72,11 @@ internal object WallpaperAudio {
         if (now - last < 4_000_000L) return   // otra pantalla ya lo ha hecho en este cuadro
         last = now
         val d = demo
+        // Además se piden [Spectrum.AHEAD] muestras más (64 ms) para centrar la ventana larga de los graves en el mismo
+        // instante que la corta (ver Spectrum).
         // Se lee un poco por delante de lo que suena (la línea guarda ~128 ms ya escritos): la ventana de 2048 muestras
         // ve un golpe ~15-25 ms después de que empiece y la pantalla tarda uno o dos cuadros más en enseñarlo.
-        hasAudio = if (d != null) readDemo(d, now) else playing && AudioTap.read(spectrum.samples, ((LEAD_MS + p.desfase) * 48).toLong())
+        hasAudio = if (d != null) readDemo(d, now) else playing && AudioTap.read(spectrum.samples, ((LEAD_MS + p.desfase) * 48).toLong() + Spectrum.AHEAD)
         spectrum.update(hasAudio, dt, p.suavizado)
     }
 
@@ -96,7 +98,7 @@ internal object WallpaperAudio {
     private val demoStart = System.nanoTime()
     private fun readDemo(d: FloatArray, now: Long): Boolean {
         if (d.isEmpty()) return false
-        val end = ((now - demoStart) / 1e9 * 48_000).toLong() + (LEAD_MS * 48).toLong()
+        val end = ((now - demoStart) / 1e9 * 48_000).toLong() + (LEAD_MS * 48).toLong() + Spectrum.AHEAD
         val out = spectrum.samples
         for (k in out.indices) { val i = ((end - out.size + k) % d.size).toInt(); out[k] = if (i < 0) 0f else d[i] }
         return true
@@ -244,7 +246,7 @@ private fun WallpaperContent(player: DesktopPlayerConnection, monitor: Monitor, 
             val dt = ((now - last) / 1e9f).coerceIn(0f, .1f); last = now
             WallpaperAudio.update(now, dt, p, playing)
             val sp = WallpaperAudio.spectrum.samples
-            for (i in scene.td.indices) scene.td[i] = sp[sp.size - scene.td.size + i]
+            for (i in scene.td.indices) scene.td[i] = sp[Spectrum.SHORT_END - scene.td.size + i]
             scene.p = p; scene.playing = playing
             if (size.width > 0) scene.ensureGeometry(size.width.toFloat(), size.height.toFloat(), density)
             if (scene.G !== geo) geo = scene.G
