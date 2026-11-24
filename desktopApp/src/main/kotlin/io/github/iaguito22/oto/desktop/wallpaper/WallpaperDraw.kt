@@ -80,7 +80,7 @@ internal fun DrawScope.drawBack(sc: WallpaperScene, lyricBox: Rect?) {
     // sombra suave detrás del círculo y de la letra: se lee sobre cualquier fondo sin taparlo
     if (p.sombra > 0f) {
         val e = g.ex * 1.9f
-        drawCircle(Brush.radialGradient(0f to Color.Black.copy(alpha = .55f * p.sombra), .45f to Color.Black.copy(alpha = .41f * p.sombra),
+        if (p.visualizador) drawCircle(Brush.radialGradient(0f to Color.Black.copy(alpha = .55f * p.sombra), .45f to Color.Black.copy(alpha = .41f * p.sombra),
             .75f to Color.Black.copy(alpha = .16f * p.sombra), 1f to Color.Transparent, center = Offset(g.cx, g.cy), radius = e), e, Offset(g.cx, g.cy))
         lyricBox?.let { b ->
             val rx = b.width / 2 + g.H * .06f; val ry = b.height / 2 + g.H * .05f
@@ -90,6 +90,7 @@ internal fun DrawScope.drawBack(sc: WallpaperScene, lyricBox: Rect?) {
             } }
         }
     }
+    if (!p.visualizador) { drawLasers(sc, g); drawParticles(sc, g); return }
     // el bajo tiñe la luz alrededor del círculo
     val own = if (p.fondo == "actual") .55f else 1f; val rr = g.R * (if (p.fondo == "actual") 3.2f else 5f)
     val glowA = clamp(own * (.18f + .22f * U.bass + .2f * U.build), 0f, 1f)
@@ -197,6 +198,7 @@ private fun conic(sc: WallpaperScene, l: Float = .62f): Brush =
  */
 internal fun DrawScope.drawViz(sc: WallpaperScene, bloom: Boolean) {
     val g = sc.G ?: return; val p = sc.p; val U = sc.U; val a = sc.audio
+    if (!p.visualizador) return
     val rot = sc.vtime * p.giro * .25f
     translate(g.cx + sc.shakeX, g.cy + sc.shakeY) { scale(sc.pulse, sc.pulse, Offset.Zero) { rotate(0f, Offset.Zero) {
         when (p.estilo) {
@@ -315,16 +317,16 @@ private val gridReady = run {
 /** Lo de delante: carátula, rejilla de puntos de la esfera, anillo del drop, destellos, tono de los respiros y zonas. */
 internal fun DrawScope.drawFront(sc: WallpaperScene) {
     val g = sc.G ?: return; val p = sc.p; val U = sc.U
-    translate(g.cx + sc.shakeX, g.cy + sc.shakeY) { scale(sc.pulse, sc.pulse, Offset.Zero) {
+    if (p.visualizador) translate(g.cx + sc.shakeX, g.cy + sc.shakeY) { scale(sc.pulse, sc.pulse, Offset.Zero) {
         drawCover(sc, g)
         if (p.estilo == "malla") drawSphereGrid(sc, g) else if (p.dentro != "caratula") drawDotSphere(sc, g)
     } }
-    if (sc.dropAge < 1.4f && sc.playing) drawCircle(Color.White.copy(alpha = (1 - sc.dropAge / 1.4f).pow(2)), g.Rout + sc.dropAge * g.W * .45f, Offset(g.cx, g.cy), style = Stroke(4 * g.d))
+    if (p.visualizador && sc.dropAge < 1.4f && sc.playing) drawCircle(Color.White.copy(alpha = (1 - sc.dropAge / 1.4f).pow(2)), g.Rout + sc.dropAge * g.W * .45f, Offset(g.cx, g.cy), style = Stroke(4 * g.d))
     if (sc.flash > .005f) drawRect(Color.White.copy(alpha = clamp(sc.flash, 0f, 1f)))
     if (U.slow > .02f) drawRect(Color(20, 30, 60).copy(alpha = clamp(U.slow * .25f, 0f, 1f)))   // respiro: más frío y apagado
     if (p.verZonas) {
         for (z in g.zones) drawRect(Color(120, 255, 200, 200), Offset(z.x0, z.y0), Size(z.w, z.h), style = Stroke(1.5f * g.d))
-        drawCircle(Color(255, 120, 120, 200), g.ex, Offset(g.cx, g.cy), style = Stroke(1.5f * g.d))
+        if (p.visualizador) drawCircle(Color(255, 120, 120, 200), g.ex, Offset(g.cx, g.cy), style = Stroke(1.5f * g.d))
     }
 }
 
@@ -359,7 +361,7 @@ private fun DrawScope.drawDotSphere(sc: WallpaperScene, g: Geometry) {
             val x1 = x * cr + z * sr; val z1 = -x * sr + z * cr; val y2 = y * ccy - z1 * ssy; val z2 = y * ssy + z1 * ccy
             val b = if (z2 > .35f) 2 else if (z2 > -.2f) 1 else 0; val ss = s * floatArrayOf(.8f, 1f, 1.2f)[b]
             paths[b].addRect(Rect(x1 * rs - ss / 2, y2 * rs - ss / 2, x1 * rs + ss / 2, y2 * rs + ss / 2)) } }
-    val c = hsl(sc.h1, max(.85f, sc.sat), .7f)
+    val c = hsl(sc.h1, sc.accentSat(.85f), .7f)
     floatArrayOf(.18f, .45f, .9f).forEachIndexed { i, a -> drawPath(paths[i], c, alpha = a * alpha, blendMode = PLUS) }
 }
 

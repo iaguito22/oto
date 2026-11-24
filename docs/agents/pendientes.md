@@ -29,7 +29,7 @@ No eran bugs: el DJ normal sale hasta 75 s antes del final porque así lo pidió
 - PC: «el bucle no funciona» (24/11, desde una lista). Con audio real (`DesktopLoopAudioTest`, `OTO_AUDIO_INTEGRATION=1`; silencio, y música con el volumen de Oto a 0) funcionan repetir la lista y la canción, con fundido y sin él, en `main` y en la 2.2.0. Lo único que falla en la 2.2.0: «Siguiente» en la última con «Repetir la lista» pone una radio en vez de volver a la primera. En `main` vuelve (ahora explícito en `next()`). Si pasa con la 2.3.0, pedir cómo.
 - Enlace: «si cambias, la cola vuelve a empezar» (24/11). Causa probable, arreglada: con el PC mostrando el móvil, el panel «Cola» listaba la cola del móvil desde la primera canción (ya sonadas incluidas) y no desde la que suena (`remoteUpcoming`, `RemoteQueueTest`). En el código, el traspaso (índice, posición, cola manual) es correcto; sin probar con el móvil real.
 - Luces: en el PC de Iago, `%APPDATA%\oto\laboratorio-visual` es un enlace (junction) a `scratchpad/laboratorio-visual` para que la fila salga en Extras. Si se mueve el laboratorio, rehacer el enlace.
-- Fondo vivo: espectro nuevo (graves con FFT de 8192 y menos barras por nota; agudos compensados 5,5 dB por octava). Probado con señales, sin verlo en pantalla con música.
+- Fondo vivo: espectro nuevo (graves con FFT de 8192 y menos barras por nota; agudos compensados 6 dB por octava solo por encima de 1 kHz; punto muerto del 20 %, 24/11 tras «el bajo sube poco y los agudos casi siempre activos»). Probado con señales; falta que Iago lo vea con música.
 - Escucha de las mezclas del DJ en general (el agente no oye). Confirmado por Iago el 19/11: «Faint» va a tiempo y no hay distorsión tras un cuadre de beats.
 
 ## Mejoras

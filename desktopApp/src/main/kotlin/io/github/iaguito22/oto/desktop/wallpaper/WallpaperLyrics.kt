@@ -214,7 +214,7 @@ internal class WallpaperLyrics {
         if (alpha <= .002f) return
         val cs = cos(L.tilt); val sn = sin(L.tilt); val rx = w.x - L.cx; val ry = w.y - L.cy
         val px = L.cx + rx * cs - ry * sn; val py = L.cy + rx * sn + ry * cs
-        val accent = hsl(sc.h1, min(.9f, sc.sat + .1f), .68f); val glowC = hsl(sc.h1, .9f, .6f)
+        val accent = hsl(sc.h1, if (sc.greyCover) 0f else min(.9f, sc.sat + .1f), .68f); val glowC = hsl(sc.h1, if (sc.greyCover) 0f else .9f, .6f)
         val tl = Offset(-lay.size.width / 2f, -lay.size.height / 2f)
         translate(px + dx + (rnd.nextFloat() - .5f) * shake, py + dy + (rnd.nextFloat() - .5f) * shake) {
             rotate((L.tilt + rot) * 57.2958f, Offset.Zero) { scale(sx, sx, Offset.Zero) {

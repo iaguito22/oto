@@ -352,7 +352,7 @@ private fun WallpaperContent(player: DesktopPlayerConnection, monitor: Monitor, 
             // 3 · el brillo: el visualizador difuminado en la gráfica y sumado
             // solo un cuadrado alrededor del círculo, no la pantalla entera (la gráfica difumina mucho menos)
             val g0 = geo
-            if (glow > 0f && g0 != null) {
+            if (glow > 0f && g0 != null && p.visualizador) {
                 val r = (10f + 16f * p.resplandor) * density
                 val half = g0.R * 2.9f + r * 3
                 val box = with(LocalDensity.current) { (half * 2).toDp() }
@@ -435,8 +435,7 @@ private fun WidgetOnlyWindow(monitor: Monitor, clock: Boolean, player: DesktopPl
     val settings by WallpaperStore.settings.collectAsState()
     val p by rememberUpdatedState(settings)
     val d = remember { runCatching { java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration.defaultTransform.scaleX.toFloat() }.getOrDefault(1f) }
-    // solo el widget de esta ventana: el mismo sitio que con el fondo vivo, sin reservar el del otro
-    val g = remember(settings, monitor) { geometry(monitor.w.toFloat(), monitor.h.toFloat(), d, if (clock) settings.copy(controles = false) else settings.copy(reloj = false)) }
+    val g = remember(settings, monitor) { widgetOnlyGeometry(monitor.w.toFloat(), monitor.h.toFloat(), d, settings) }
     val c = (if (clock) g.clock else g.ctl) ?: return
     // el vinilo asoma por la izquierda de su sitio y las sombras salen un poco: margen
     val pad = g.H * .012f + (if (!clock && settings.ctlEstilo == "vinilo") c.height * .5f else 0f)

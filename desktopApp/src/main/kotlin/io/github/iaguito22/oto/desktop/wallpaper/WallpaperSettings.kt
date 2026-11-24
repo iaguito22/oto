@@ -17,6 +17,7 @@ data class WallpaperSettings(
     // Monitor
     val monitor: String = "principal",            // principal · segundo · todos
     // Visualizador
+    val visualizador: Boolean = true,             // sin él quedan la letra, la hora y los controles (Iago, 24/11)
     val estilo: String = "anillo",                // por defecto barras en anillo (Iago, 23/11) · malla · ncs · anillo · onda · pulso · eclipse · instrumentos · barras
     val resplandor: Float = .6f,
     val aro: Float = .85f,                        // intensidad del aro (estilo NCS)
@@ -72,7 +73,7 @@ data class WallpaperSettings(
     val verZonas: Boolean = false,
     // Reloj (apagado por defecto)
     val reloj: Boolean = false,
-    val relojPos: String = "sobre",               // sobre · bajo · izquierda · derecha (del círculo) · ai · ad · bi · bd (esquinas)
+    val relojPos: String = "sobre",               // sobre · bajo · izquierda · derecha (del círculo) · centro (de la pantalla) · ai · ad · bi · bd (esquinas)
     val relojEstilo: String = "dia",              // dia (el día en grande, como los widgets de Android; Iago, 24/11) · fino · grueso · digital · contorno
     val relojFuente: String = "estilo",           // estilo (la suya: «día» → Anurati o Michroma) · anurati · blanka · elianto · ailerons · michroma · oto
     val relojTam: Float = 1f,

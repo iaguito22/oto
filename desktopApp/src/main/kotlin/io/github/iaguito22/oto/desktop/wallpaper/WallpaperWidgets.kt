@@ -206,7 +206,7 @@ internal fun DrawScope.drawClock(sc: WallpaperScene, g: Geometry, tm: TextMeasur
     val time = tm.measure(st.time, tStyle)
     val suf = st.suffix.takeIf { it.isNotEmpty() }?.let { tm.measure(it, TextStyle(fontFamily = rubik, fontWeight = FontWeight.Bold, fontSize = (fs * .26f / density).sp)) }
     val date = if (p.fecha && st.date.isNotEmpty()) tm.measure(st.date, TextStyle(fontFamily = rubik, fontWeight = FontWeight.Normal, fontSize = (ds / density).sp)) else null
-    val color = if (p.relojColor == "caratula") hsl(sc.h1, min(.9f, sc.sat + .1f), .76f) else Color.White
+    val color = if (p.relojColor == "caratula") hsl(sc.h1, if (sc.greyCover) 0f else min(.9f, sc.sat + .1f), .76f) else Color.White
     val a = clamp(p.relojOpacidad, 0f, 1f); val shadowA = a * (.18f + .3f * p.sombra)
     // hacia dónde se alinea: hacia el círculo en los lados, al borde en las esquinas, centrada arriba y abajo
     val align = when (p.relojPos) { "ai", "bi", "derecha" -> 0; "ad", "bd", "izquierda" -> 2; else -> 1 }
@@ -233,7 +233,7 @@ internal fun DrawScope.drawClock(sc: WallpaperScene, g: Geometry, tm: TextMeasur
 private fun DrawScope.drawDayClock(sc: WallpaperScene, g: Geometry, r: Rect, tm: TextMeasurer, st: WidgetState) {
     val p = sc.p; val k = r.height / clockSize(p, g.H).second
     val fs = g.H * .062f * p.relojTam * k; val ss = g.H * .017f * p.relojTam * k
-    val color = if (p.relojColor == "caratula") hsl(sc.h1, min(.9f, sc.sat + .1f), .78f) else Color.White
+    val color = if (p.relojColor == "caratula") hsl(sc.h1, if (sc.greyCover) 0f else min(.9f, sc.sat + .1f), .78f) else Color.White
     val a = clamp(p.relojOpacidad, 0f, 1f); val shadowA = a * (.18f + .3f * p.sombra)
     val sp = .3f
     val dayFont = if (p.relojFuente == "estilo") "anurati" else p.relojFuente
@@ -281,7 +281,7 @@ internal fun DrawScope.drawControls(sc: WallpaperScene, g: Geometry, tm: TextMea
     val alpha = clamp(st.reveal * p.ctlOpacidad, 0f, 1f)
     if (!st.hasSong || alpha < .01f) { st.hits = emptyList(); return }
     val hits = ArrayList<Hit>()
-    val accent = if (p.ctlColor == "caratula") hsl(sc.h1, max(.55f, sc.sat), .62f) else Color.White
+    val accent = if (p.ctlColor == "caratula") hsl(sc.h1, sc.accentSat(.55f), .62f) else Color.White
     val onAccent = if (p.ctlColor == "caratula") Color.White else Color(0xFF111114)
     val k = r.height / ctlSize(p, g.H).second; val u = g.H * p.ctlTam * k
 

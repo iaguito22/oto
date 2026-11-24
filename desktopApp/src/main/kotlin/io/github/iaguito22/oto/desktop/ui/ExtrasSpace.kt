@@ -213,6 +213,9 @@ private fun WallpaperPanel(accent: Color) {
             Note("Cambian varios ajustes a la vez. Después puedes tocar lo que quieras.")
         }
         Section("Visualizador", open, { open = it }) {
+            Toggle("Mostrar el visualizador", p.visualizador, accent) { set { it.copy(visualizador = !it.visualizador) } }
+            if (!p.visualizador) Note("Sin él quedan la letra y, si los enciendes, la hora y los controles (lo que iba encima o debajo del círculo, en el centro).")
+            if (p.visualizador) {
             Chips(listOf("NCS: esfera de hilos", "Espectro en capas", "Barras en anillo", "Onda", "Anillo que tiembla", "Eclipse", "Un anillo por instrumento", "Barras abajo"),
                 STYLE_KEYS.indexOf(p.estilo), accent) { i -> set { it.copy(estilo = STYLE_KEYS[i]) } }
             Range("Resplandor", p.resplandor, 0f, 1.5f, accent, pct) { v -> set { it.copy(resplandor = v) } }
@@ -228,6 +231,7 @@ private fun WallpaperPanel(accent: Color) {
             PositionGrid(p.pos, accent) { v -> set { it.copy(pos = v, offX = 0f, offY = 0f) } }
             Range("Ajuste horizontal", p.offX, -.2f, .2f, accent, pct) { v -> set { it.copy(offX = v) } }
             Range("Ajuste vertical", p.offY, -.2f, .2f, accent, pct) { v -> set { it.copy(offY = v) } }
+            }
             Label("Monitor")
             Chips(listOf("Principal", "Segundo", "Todos"), listOf("principal", "segundo", "todos").indexOf(p.monitor), accent) { i -> set { it.copy(monitor = listOf("principal", "segundo", "todos")[i]) } }
         }
@@ -314,8 +318,8 @@ private fun WallpaperPanel(accent: Color) {
 private val STYLE_KEYS = listOf("malla", "ncs", "anillo", "onda", "pulso", "eclipse", "instrumentos", "barras")
 private val LYRIC_KEYS = listOf("auto", "editorial", "electronica", "rock", "hiphop", "indie", "sobria")
 private val BG_KEYS = listOf("actual", "caratula", "degradado", "color", "negro")
-private val WIDGET_POS = listOf("sobre", "bajo", "izquierda", "derecha", "ai", "ad", "bi", "bd")
-private val WIDGET_POS_LABELS = listOf("Encima del círculo", "Debajo del círculo", "A su izquierda", "A su derecha", "Esquina arriba izq.", "Esquina arriba dcha.", "Esquina abajo izq.", "Esquina abajo dcha.")
+private val WIDGET_POS = listOf("centro", "sobre", "bajo", "izquierda", "derecha", "ai", "ad", "bi", "bd")
+private val WIDGET_POS_LABELS = listOf("En el centro", "Encima del círculo", "Debajo del círculo", "A su izquierda", "A su derecha", "Esquina arriba izq.", "Esquina arriba dcha.", "Esquina abajo izq.", "Esquina abajo dcha.")
 private val CLOCK_STYLES = listOf("dia", "fino", "grueso", "digital", "contorno")
 private val FONT_KEYS = listOf("anurati", "blanka", "elianto", "ailerons", "michroma", "oto")
 private val FONT_NAMES = mapOf("estilo" to "Según el estilo", "anurati" to "Anurati", "blanka" to "Blanka", "elianto" to "Elianto", "ailerons" to "Ailerons", "michroma" to "Michroma", "oto" to "La de Oto")

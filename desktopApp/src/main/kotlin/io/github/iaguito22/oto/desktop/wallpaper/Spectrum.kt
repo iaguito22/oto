@@ -21,8 +21,9 @@ import kotlin.math.sqrt
  *   por bin) una nota de bajo encendía todas las barras de graves y no se distinguían las notas.
  * - Reparto de las barras: logarítmico en medios y agudos, menos denso en graves (ln(1 + f/[K])), para que una nota de
  *   bajo no ocupe media docena de barras.
- * - Inclinación de [TILT_DB] dB por octava: la música pierde energía hacia los agudos y, sin compensarla, los platos y
- *   el brillo casi no movían las barras.
+ * - Inclinación de [TILT_DB] dB por octava por encima de 1 kHz: la música pierde energía hacia los agudos y, sin
+ *   compensarla, los platos y el brillo casi no movían las barras.
+ * - Punto muerto ([DEAD]): lo flojo (el siseo, la reverberación) no enciende nada; solo lo que destaca.
  *
  * [samples] lleva [NL] muestras; la ventana corta son las [N] que acaban [AHEAD] antes del final, así las dos ventanas
  * se centran en el mismo instante. Quien lee el audio lo pide [AHEAD] muestras adelantado.
@@ -43,7 +44,9 @@ internal class Spectrum(private val sampleRate: Int = 48_000) {
         private const val F1 = 14_000.0
         private const val K = 80.0
         private const val LONG_HZ = 320.0
-        private const val TILT_DB = 5.5
+        private const val TILT_DB = 6.0
+        /** Punto muerto: lo que no llega a esta parte de lo más fuerte del momento se queda en 0 (Iago, 24/11: «más selectivo»). */
+        const val DEAD = .2f
         private fun scale(hz: Double) = ln(1 + hz / K)
         private val S0 = scale(F0); private val S1 = scale(F1)
         /** Frecuencia del borde [x] de las bandas (0 = 30 Hz, [NBAND] = 14 kHz). */
@@ -63,8 +66,9 @@ internal class Spectrum(private val sampleRate: Int = 48_000) {
     private val smoothMagLong = FloatArray(longBins)
     private val bytesLong = FloatArray(longBins)
     private var longAcc = 1f
-    /** dB que se suman a cada bin para compensar que la música pierde energía hacia los agudos (0 dB en 1 kHz). */
-    private fun tilt(hz: Double) = (TILT_DB * ln(max(hz, 20.0) / 1000.0) / ln(2.0)).toFloat()
+    /** dB que se suman por encima de 1 kHz para compensar que la música pierde energía hacia los agudos (debajo, nada: antes
+     *  restaba 23 dB a una nota de 55 Hz y el bajo casi no subía). */
+    private fun tilt(hz: Double) = (TILT_DB * max(0.0, ln(hz / 1000.0) / ln(2.0))).toFloat()
     private val tiltShort = FloatArray(N / 2) { tilt(it * sampleRate.toDouble() / N) }
     private val tiltLong = FloatArray(longBins) { tilt(it * sampleRate.toDouble() / NL) }
 
@@ -149,7 +153,7 @@ internal class Spectrum(private val sampleRate: Int = 48_000) {
                 band[i] = v; if (v > fm) fm = v
             }
             agc = max(fm, agc * exp(-dt / 4f))
-            for (i in 0 until NBAND) band[i] = min(1.15f, band[i] / max(agc, .12f))
+            for (i in 0 until NBAND) band[i] = (min(1.15f, band[i] / max(agc, .12f)) - DEAD).coerceAtLeast(0f) / (1 - DEAD)
         } else band.fill(0f)
         val ka = 1 - exp(-dt / .025f); val kr = 1 - exp(-dt / (.06f + .4f * smoothing))
         for (i in 0 until NBAND) {

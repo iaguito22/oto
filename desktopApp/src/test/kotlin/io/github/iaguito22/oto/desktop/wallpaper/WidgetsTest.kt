@@ -53,14 +53,14 @@ class WidgetsTest {
 
     /** En cualquier sitio y estilo: dentro de la pantalla, sin tocar el círculo (los sitios junto a él) ni la letra. */
     @Test fun nuncaPisanElCirculoNiLaLetra() {
-        val sitios = listOf("sobre", "bajo", "izquierda", "derecha", "ai", "ad", "bi", "bd")
+        val sitios = listOf("sobre", "bajo", "izquierda", "derecha", "centro", "ai", "ad", "bi", "bd")
         for (estilo in listOf("anillo", "malla", "barras")) for (tam in listOf(.08f, .11f, .16f)) for (rp in sitios) for (cp in sitios) for (ce in listOf("compacta", "pildora", "tarjeta", "botones", "vinilo")) {
             val p = WallpaperSettings(estilo = estilo, tam = tam, reloj = true, relojPos = rp, controles = true, ctlPos = cp, ctlEstilo = ce, ctlVolumen = true, ctlAleatorio = true)
             val g = geometry(1920f, 1080f, 1f, p)
             val what = "$estilo $tam reloj $rp controles $cp $ce"
             for ((name, r, pos) in listOf(Triple("reloj", g.clock!!, rp), Triple("controles", g.ctl!!, cp))) {
                 assertTrue("$what: $name fuera de la pantalla $r", r.left >= 0f && r.top >= 0f && r.right <= g.W && r.bottom <= g.H)
-                if (pos in listOf("sobre", "bajo", "izquierda", "derecha") && !(name == "controles" && ce == "vinilo")) {
+                if (pos in listOf("sobre", "bajo", "izquierda", "derecha", "centro") && !(name == "controles" && ce == "vinilo")) {
                     val nx = g.cx.coerceIn(r.left, r.right); val ny = g.cy.coerceIn(r.top, r.bottom)
                     assertTrue("$what: $name toca el círculo", hypot(nx - g.cx, ny - g.cy) >= g.ex - .5f)
                 }
@@ -68,6 +68,49 @@ class WidgetsTest {
             }
             if (rp == cp) assertFalse("$what: hora y controles se pisan", g.clock!!.overlaps(g.ctl!!))
         }
+    }
+
+    /** Sin visualizador, la hora y los controles quedan en el centro de la pantalla, uno encima del otro (Iago, 24/11). */
+    @Test fun sinVisualizador_laHoraYLosControlesVanAlCentro() {
+        for ((rp, cp) in listOf("sobre" to "bajo", "centro" to "centro")) {
+            val p = WallpaperSettings(visualizador = false, reloj = true, relojPos = rp, controles = true, ctlPos = cp)
+            val g = geometry(1920f, 1080f, 1f, p)
+            val c = g.clock!!; val k = g.ctl!!; val what = "$rp/$cp: hora $c, controles $k"
+            assertEquals(what, 960f, c.center.x, 1f); assertEquals(what, 960f, k.center.x, 1f)
+            assertTrue(what, c.bottom <= k.top)
+            assertTrue(what, c.bottom <= 540f + 1f && k.top >= 540f - 1f || rp == "centro")
+            if (rp == "centro") assertEquals(what, 540f, (c.top + k.bottom) / 2, 1f)
+            for (z in g.zones) assertFalse("$what: la letra (${z.id}) los pisa", Rect(z.x0, z.y0, z.x1, z.y1).overlaps(c) || Rect(z.x0, z.y0, z.x1, z.y1).overlaps(k))
+        }
+    }
+
+    /** «En el centro» con el visualizador allí: la hora encima del círculo y los controles debajo. */
+    @Test fun enElCentroConVisualizador_laHoraEncima() {
+        val g = geometry(1280f, 720f, 1f, WallpaperSettings(reloj = true, relojPos = "centro", controles = true, ctlPos = "centro"))
+        assertTrue("hora ${g.clock}", g.clock!!.bottom <= g.cy); assertTrue("controles ${g.ctl}", g.ctl!!.top >= g.cy)
+    }
+
+    /**
+     * Con el fondo vivo apagado no hay visualizador: la hora y los controles van al centro, uno encima del otro, y no
+     * alrededor de un círculo que no se ve (antes cada uno se colocaba solo, con el hueco del círculo en medio).
+     */
+    @Test fun sinFondoVivo_laHoraYLosControlesJuntosEnElCentro() {
+        val g = widgetOnlyGeometry(1920f, 1080f, 1f, WallpaperSettings(reloj = true, controles = true))
+        val c = g.clock!!; val k = g.ctl!!
+        assertEquals(960f, c.center.x, 1f); assertEquals(960f, k.center.x, 1f)
+        assertTrue("hora $c controles $k", c.bottom <= k.top && k.top - c.bottom < 1080f * .06f)
+    }
+
+    /** Solo la hora en el centro: justo en medio de la pantalla. */
+    @Test fun laHoraSolaEnElCentro() {
+        val g = geometry(1920f, 1080f, 1f, WallpaperSettings(visualizador = false, reloj = true, relojPos = "centro"))
+        assertEquals(960f, g.clock!!.center.x, 1f); assertEquals(540f, g.clock!!.center.y, 1f)
+    }
+
+    /** Con la hora y los controles encima, la letra se queda sitio: no desaparece por quitar el visualizador. */
+    @Test fun sinVisualizador_laLetraTieneSitio() {
+        val g = geometry(1920f, 1080f, 1f, WallpaperSettings(visualizador = false, reloj = true, controles = true))
+        assertTrue("sin zonas: ${g.zones}", lyricCandidates(g.zones).isNotEmpty())
     }
 
     /** Con la hora encima y el vinilo abajo a la izquierda, la letra también sale arriba a la izquierda (Iago, 24/11). */
@@ -116,6 +159,8 @@ class WidgetsTest {
             "tarjeta" to WallpaperSettings(reloj = true, relojEstilo = "grueso", relojPos = "ad", controles = true, ctlEstilo = "tarjeta", ctlPos = "derecha", ctlVolumen = true, ctlAleatorio = true, ctlRepetir = true),
             "botones" to WallpaperSettings(reloj = true, relojEstilo = "digital", segundos = true, controles = true, ctlEstilo = "botones", ctlVolumen = true, relojPos = "bajo"),
             "contorno" to WallpaperSettings(reloj = true, relojEstilo = "contorno", hora24 = false, relojPos = "izquierda", controles = true, ctlPos = "bd", ctlColor = "blanco", ctlTitulo = false),
+            "sin-visualizador" to WallpaperSettings(visualizador = false, reloj = true, controles = true),
+            "centro" to WallpaperSettings(reloj = true, relojPos = "centro", controles = true, ctlPos = "centro"),
         )
         for ((name, p) in casos) {
             val sp = Spectrum(); val sc = WallpaperScene().apply { audio = sp; this.p = p; playing = true }

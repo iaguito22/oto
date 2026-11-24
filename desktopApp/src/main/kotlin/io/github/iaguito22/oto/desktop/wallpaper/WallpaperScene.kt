@@ -69,6 +69,12 @@ internal data class Zone(val id: String, val x0: Float, val x1: Float, val y0: F
     val side get() = id == "izquierda" || id == "derecha"
 }
 
+/**
+ * Dónde van la hora y los controles con el fondo vivo apagado: sin visualizador (no se ve ningún círculo), así que lo que
+ * va encima o debajo de él queda en el centro; y los dos a la vez, para que se apilen sin pisarse (Iago, 24/11).
+ */
+internal fun widgetOnlyGeometry(W: Float, H: Float, d: Float, p: WallpaperSettings): Geometry = geometry(W, H, d, p.copy(visualizador = false))
+
 /** Geometría de un monitor: dónde va el círculo, su radio, el círculo prohibido para la letra y las zonas libres. */
 internal data class Geometry(val W: Float, val H: Float, val d: Float, val cx: Float, val cy: Float, val R: Float, val Rout: Float,
                              val ex: Float, val zones: List<Zone>, val barsTop: Float, val task: Float,
@@ -78,14 +84,17 @@ internal val EXT = mapOf("malla" to .75f, "ncs" to .95f, "eclipse" to 1.05f, "an
 
 internal fun geometry(W: Float, H: Float, d: Float, p: WallpaperSettings): Geometry {
     val xs = mapOf('l' to .27f, 'c' to .5f, 'r' to .73f); val ys = mapOf('t' to .32f, 'm' to .5f, 'b' to .68f)
-    val cx = W * ((xs[p.pos.getOrElse(1) { 'c' }] ?: .5f) + p.offX); val cy = H * ((ys[p.pos.getOrElse(0) { 'm' }] ?: .5f) + p.offY)
-    val R = H * p.tam
+    // Sin visualizador no hay círculo: lo que va «encima» o «debajo» de él queda en el centro de la pantalla.
+    val viz = p.visualizador
+    val cx = if (!viz) W / 2 else W * ((xs[p.pos.getOrElse(1) { 'c' }] ?: .5f) + p.offX)
+    val cy = if (!viz) H / 2 else H * ((ys[p.pos.getOrElse(0) { 'm' }] ?: .5f) + p.offY)
+    val R = if (viz) H * p.tam else 0f
     val ext = EXT[p.estilo] ?: .75f
     val Rout = R * (1 + ext * (if (p.estilo == "barras") 1f else p.largo))
-    val ex = Rout * 1.1f + H * .03f
+    val ex = if (viz) Rout * 1.1f + H * .03f else 0f
     val m = min(W, H) * .035f; val task = 48 * d; val icons = if (p.respetarIconos) 104 * d else 0f; val gap = H * .02f
     val top = m; val bottom = H - task - m * .6f
-    val barsTop = if (p.estilo == "barras") H - task - H * .2f * p.largo - gap else H
+    val barsTop = if (viz && p.estilo == "barras") H - task - H * .2f * p.largo - gap else H
     val yMax = min(bottom, barsTop - gap)
     // la hora y los controles van primero; la letra se queda con lo que dejen libre
     val (clock, ctl) = layoutWidgets(W, H, cx, cy, ex, m, m + icons, W - m, top, yMax, gap, p)
@@ -140,6 +149,8 @@ internal fun layoutWidgets(W: Float, H: Float, cx: Float, cy: Float, ex: Float, 
                            gap: Float, p: WallpaperSettings): Pair<androidx.compose.ui.geometry.Rect?, androidx.compose.ui.geometry.Rect?> {
     // por cada sitio, dónde empieza el siguiente que se apile allí (hacia fuera del círculo o hacia dentro de la pantalla)
     val next = HashMap<String, Float>(); val placed = ArrayList<androidx.compose.ui.geometry.Rect>()
+    val centerStack = if (p.reloj && p.controles && p.ctlEstilo != "vinilo" && p.relojPos == "centro" && p.ctlPos == "centro")
+        clockSize(p, H).second + gap + ctlSize(p, H).second else null
     fun k(avail: Float, need: Float) = clamp(avail / need, .5f, 1f)
     fun at(pos: String, w0: Float, h0: Float): androidx.compose.ui.geometry.Rect = when (pos) {
         "bajo" -> { val t = next[pos] ?: (cy + ex + gap); val k = k(bottom - t, h0); androidx.compose.ui.geometry.Rect(cx - w0 * k / 2, t, cx + w0 * k / 2, t + h0 * k) }
@@ -149,6 +160,8 @@ internal fun layoutWidgets(W: Float, H: Float, cx: Float, cy: Float, ex: Float, 
             if (pos == "izquierda") androidx.compose.ui.geometry.Rect(cx - ex - gap - w0 * k, t, cx - ex - gap, t + h0 * k)
             else androidx.compose.ui.geometry.Rect(cx + ex + gap, t, cx + ex + gap + w0 * k, t + h0 * k)
         }
+        // en medio de la pantalla (no del círculo); si van los dos, la hora encima y el bloque entero centrado
+        "centro" -> { val t = next[pos] ?: (H / 2 - (centerStack ?: h0) / 2); androidx.compose.ui.geometry.Rect(W / 2 - w0 / 2, t, W / 2 + w0 / 2, t + h0) }
         "ai" -> { val t = next[pos] ?: top; androidx.compose.ui.geometry.Rect(left, t, left + w0, t + h0) }
         "ad" -> { val t = next[pos] ?: top; androidx.compose.ui.geometry.Rect(right - w0, t, right, t + h0) }
         "bi" -> { val b = next[pos] ?: bottom; androidx.compose.ui.geometry.Rect(left, b - h0, left + w0, b) }
@@ -158,16 +171,19 @@ internal fun layoutWidgets(W: Float, H: Float, cx: Float, cy: Float, ex: Float, 
     fun mark(pos: String, r: androidx.compose.ui.geometry.Rect) { next[pos] = if (pos == "sobre" || pos == "bi" || pos == "bd") r.top - gap else r.bottom + gap }
     val opposite = mapOf("sobre" to "bajo", "bajo" to "sobre", "izquierda" to "derecha", "derecha" to "izquierda", "ai" to "bi", "ad" to "bd", "bi" to "ai", "bd" to "ad")
     /** Donde se pidió; si no cabe ni a la mitad de tamaño, al lado contrario; y si tampoco, a una esquina. */
-    fun place(pos: String, size: Pair<Float, Float>): androidx.compose.ui.geometry.Rect {
+    fun place(pos: String, size: Pair<Float, Float>, clock: Boolean): androidx.compose.ui.geometry.Rect {
         val (w0, h0) = size
-        for (cand in listOf(pos, opposite[pos] ?: "bajo", "ad", "bd", "ai", "bi")) {
+        // «en el centro» con el círculo allí: la hora encima de él y los controles debajo (si no caben, al revés)
+        val near = if (pos == "centro") (if (clock) listOf("sobre", "bajo") else listOf("bajo", "sobre")) else listOf(opposite[pos] ?: "bajo")
+        for (cand in listOf(pos) + near + listOf("ad", "bd", "ai", "bi")) {
             val r = at(cand, w0, h0)
             val inside = r.left >= left - .5f && r.top >= top - .5f && r.right <= right + .5f && r.bottom <= bottom + .5f
             // ni encima de otro ni del círculo (una esquina con una hora muy ancha podía llegar a tocarlo)
             val clear = kotlin.math.hypot(cx.coerceIn(r.left, r.right) - cx, cy.coerceIn(r.top, r.bottom) - cy) >= ex
             if (inside && clear && placed.none { it.overlaps(r) }) { mark(cand, r); placed += r; return r }
         }
-        return at(pos, w0, h0).also { mark(pos, it); placed += it }
+        val last = if (pos == "centro") (if (clock) "sobre" else "bajo") else pos
+        return at(last, w0, h0).also { mark(last, it); placed += it }
     }
     // el vinilo va siempre abajo a la izquierda, pegado al borde (el disco se sale de la pantalla), y primero
     val vinyl = if (p.controles && p.ctlEstilo == "vinilo") {
@@ -176,9 +192,9 @@ internal fun layoutWidgets(W: Float, H: Float, cx: Float, cy: Float, ex: Float, 
     } else null
     // si los dos van encima del círculo, los controles quedan más cerca y la hora arriba del todo (como en los widgets)
     val ctlFirst = p.controles && vinyl == null && p.reloj && p.relojPos == p.ctlPos && p.ctlPos == "sobre"
-    val ctl0 = if (ctlFirst) place(p.ctlPos, ctlSize(p, H)) else null
-    val clock = if (p.reloj) place(p.relojPos, clockSize(p, H)) else null
-    val ctl = vinyl ?: ctl0 ?: if (p.controles) place(p.ctlPos, ctlSize(p, H)) else null
+    val ctl0 = if (ctlFirst) place(p.ctlPos, ctlSize(p, H), clock = false) else null
+    val clock = if (p.reloj) place(p.relojPos, clockSize(p, H), clock = true) else null
+    val ctl = vinyl ?: ctl0 ?: if (p.controles) place(p.ctlPos, ctlSize(p, H), clock = false) else null
     return clock to ctl
 }
 
@@ -207,6 +223,10 @@ internal class WallpaperScene {
     var h2 = .85f; private set
     var sat = .85f; private set
     private var satMul = .85f
+    /** La carátula casi no tiene color (blanca, negra o gris) y los colores salen de ella: todo en grises. */
+    val greyCover: Boolean get() = (p.colores == "caratula" || p.colores == "mezcla") && coverCols?.grey == true
+    /** Saturación de un acento que pide al menos [min]; en grises, 0. */
+    fun accentSat(min: Float): Float = if (greyCover) 0f else max(min, sat)
     var sphereHue = -1f; private set
 
     // carátula (actual y anterior, para la transición)
@@ -259,7 +279,7 @@ internal class WallpaperScene {
         // lo normal: nada ha cambiado (antes se montaba una cadena larga en cada cuadro)
         if (p === lastP && W == lastW && H == lastH && d == lastD) return
         lastP = p; lastW = W; lastH = H; lastD = d
-        val key = "$W|$H|$d|${p.estilo}|${p.tam}|${p.pos}|${p.offX}|${p.offY}|${p.largo}|${p.respetarIconos}|" +
+        val key = "$W|$H|$d|${p.visualizador}|${p.estilo}|${p.tam}|${p.pos}|${p.offX}|${p.offY}|${p.largo}|${p.respetarIconos}|" +
             "${p.reloj}|${p.relojPos}|${p.relojTam}|${p.relojEstilo}|${p.segundos}|${p.hora24}|${p.relojIdioma}|${p.fecha}|${p.controles}|${p.ctlPos}|${p.ctlEstilo}|${p.ctlTam}|" +
             "${p.ctlCaratula}|${p.ctlTitulo}|${p.ctlProgreso}|${p.ctlMeGusta}|${p.ctlAleatorio}|${p.ctlRepetir}|${p.ctlVolumen}"
         if (key != geoKey) { geoKey = key; G = geometry(W, H, d, p); waveHist.clear(); ghosts.clear() }
@@ -313,6 +333,8 @@ internal class WallpaperScene {
         val cc = coverCols
         when {
             p.colores == "fijo" -> { val (a, sa) = hexHue(p.color1); t1 = a; t2 = hexHue(p.color2).first; s *= max(.15f, sa) }
+            // sin color en la carátula: grises (el tono se queda quieto; antes derivaba con la música a todo color)
+            greyCover -> s = 0f
             (p.colores == "caratula" || p.colores == "mezcla") && cc != null && !cc.grey -> {
                 t1 = cc.h1; t2 = cc.h2; s *= cc.s
                 if (p.colores == "mezcla") { t1 += .1f * U.build + .06f * (U.lvl - 1); t2 = cc.h2 + (if (U.lvl >= 2) .25f else 0f) }
@@ -321,7 +343,8 @@ internal class WallpaperScene {
         }
         h1 = hueLerp(h1, t1, 1 - exp(-dt / .4f)); h2 = hueLerp(h2, t2, 1 - exp(-dt / .15f))
         satMul = lerp(satMul, if (p.colores != "fijo") .7f + .15f * U.lvl else 1f, 1 - exp(-dt / .5f))
-        sat = clamp(s * (.55f + .45f * satMul), 0f, 1f)
+        // al cambiar de carátula el color entra y sale poco a poco, como el tono
+        sat = lerp(sat, clamp(s * (.55f + .45f * satMul), 0f, 1f), 1 - exp(-dt / .4f))
         // la malla NCS tiene un color fijo: sigue al de la carátula muy despacio
         sphereHue = if (sphereHue < 0f) h1 else hueLerp(sphereHue, h1, 1 - exp(-dt / 1.4f))
     }

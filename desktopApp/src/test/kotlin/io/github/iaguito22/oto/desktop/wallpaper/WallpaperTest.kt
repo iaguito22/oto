@@ -82,21 +82,49 @@ class WallpaperTest {
         assertTrue("55 Hz en la barra $pa y 82 Hz en la $pe", pe - pa >= 3)
     }
 
-    /**
-     * Platos 30 dB por debajo del bajo (lo normal en una mezcla) tienen que mover las barras de agudos al menos la mitad
-     * que el bajo las suyas. Antes llegaban al 2 %.
-     */
-    @Test fun losAgudosSubenComoLosGraves() {
+    /** Bajo de 55 Hz con platos (ruido de agudos) [db] dB por debajo: el máximo de graves y de agudos en las barras. */
+    private fun bassAndCymbals(db: Double): Pair<Float, Float> {
         val s = Spectrum(); val rnd = java.util.Random(7)
         val noise = DoubleArray(s.samples.size) { rnd.nextGaussian() }
         repeat(3) { for (i in noise.size - 1 downTo 1) noise[i] -= noise[i - 1] }   // ruido con casi todo arriba (platos)
         val bassRms = .4 / Math.sqrt(2.0); val noiseRms = Math.sqrt(noise.sumOf { it * it } / noise.size)
-        val k = bassRms * Math.pow(10.0, -30 / 20.0) / noiseRms
+        val k = bassRms * Math.pow(10.0, db / 20.0) / noiseRms
         for (i in s.samples.indices) s.samples[i] = (.4 * sin(2 * PI * 55 * i / 48_000) + k * noise[i]).toFloat()
         repeat(60) { s.update(true, 1 / 60f, .5f) }
-        val bass = (0 until Spectrum.BASS_BANDS).maxOf { s.spec[it] }
-        val highs = (Spectrum.bandOf(6000.0) until Spectrum.NBAND).maxOf { s.spec[it] }
-        assertTrue("graves $bass agudos $highs", highs >= .5f * bass)
+        return (0 until Spectrum.BASS_BANDS).maxOf { s.spec[it] } to (Spectrum.bandOf(6000.0) until Spectrum.NBAND).maxOf { s.spec[it] }
+    }
+
+    /** El bajo llega arriba aunque haya platos fuertes (antes la inclinación le restaba 23 dB y se quedaba en el 43 %). */
+    @Test fun elBajoMandaAunqueHayaPlatos() {
+        val (bass, highs) = bassAndCymbals(-10.0)
+        assertTrue("graves $bass agudos $highs", bass >= .75f && bass > highs)
+    }
+
+    /** Punto muerto (Iago, 24/11): un siseo flojo no enciende los agudos; antes, 40 dB por debajo, seguían al 22 %. */
+    @Test fun unSiseoFlojoNoEnciendeLosAgudos() {
+        val (bass, highs) = bassAndCymbals(-40.0)
+        assertTrue("graves $bass agudos $highs", highs < .03f)
+    }
+
+    /** Los platos que destacan sí suben, y más cuanto más fuertes. */
+    @Test fun losPlatosQueDestacanSiSuben() {
+        val loud = bassAndCymbals(-10.0).second; val mid = bassAndCymbals(-20.0).second
+        assertTrue("agudos a −10 dB $loud, a −20 dB $mid", loud >= .35f && mid >= .15f && loud > mid)
+    }
+
+    /** Carátula blanca o gris (Iago, 24/11): el color de acento es gris, no un tono al azar que va cambiando. */
+    @Test fun conCaratulaGrisLosColoresSonGrises() {
+        val img = androidx.compose.ui.graphics.ImageBitmap(4, 4)
+        val sc = WallpaperScene().apply { audio = Spectrum(); p = WallpaperSettings(colores = "caratula"); playing = true }
+        sc.setCover(img, CoverColors(0f, 0f, 0f, grey = true))
+        sc.ensureGeometry(1280f, 720f, 1f)
+        repeat(240) { sc.step(1 / 60f) }
+        assertTrue("saturación ${sc.sat}", sc.sat < .02f)
+        assertTrue(sc.greyCover)
+        // con una carátula de color, vuelve el color
+        sc.setCover(androidx.compose.ui.graphics.ImageBitmap(4, 4), CoverColors(.6f, .7f, .8f, grey = false))
+        repeat(240) { sc.step(1 / 60f) }
+        assertTrue("saturación ${sc.sat}", sc.sat > .3f); assertFalse(sc.greyCover)
     }
 
     @Test fun elBomboSeDetectaEnVivo() {
