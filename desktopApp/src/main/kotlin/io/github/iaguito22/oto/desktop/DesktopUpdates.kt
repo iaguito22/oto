@@ -130,24 +130,35 @@ internal fun rememberDesktopUpdates(prefs: Prefs, quit: () -> Unit): DesktopUpda
     return state
 }
 
+/**
+ * Espera a que Oto se cierre, abre el instalador y, al acabar (también si se cancela), vuelve a abrir Oto. Los datos
+ * van por variables de entorno, no dentro del texto: así una ruta con comillas o espacios no rompe nada.
+ */
+internal val installerScript = """
+    Wait-Process -Id ${'$'}env:OTO_UPDATE_PARENT_PID -ErrorAction SilentlyContinue
+    try {
+        ${'$'}arguments = '/i "' + ${'$'}env:OTO_UPDATE_MSI + '"'
+        Start-Process -FilePath (Join-Path ${'$'}env:SystemRoot 'System32\msiexec.exe') -ArgumentList ${'$'}arguments -Wait
+    } finally {
+        Remove-Item -LiteralPath ${'$'}env:OTO_UPDATE_MSI -ErrorAction SilentlyContinue
+        if (${'$'}env:OTO_UPDATE_RELAUNCH -and (Test-Path -LiteralPath ${'$'}env:OTO_UPDATE_RELAUNCH)) {
+            Start-Process -FilePath ${'$'}env:OTO_UPDATE_RELAUNCH
+        }
+    }
+""".trimIndent()
+
 private fun launchInstallerAfterExit(installer: File) {
     // Windows Installer necesita que el lanzador y los archivos de la app estén libres.
-    val script = """
-        Wait-Process -Id ${'$'}env:OTO_UPDATE_PARENT_PID -ErrorAction SilentlyContinue
-        try {
-            ${'$'}arguments = '/i "' + ${'$'}env:OTO_UPDATE_MSI + '"'
-            Start-Process -FilePath (Join-Path ${'$'}env:SystemRoot 'System32\msiexec.exe') -ArgumentList ${'$'}arguments -Wait
-        } finally {
-            Remove-Item -LiteralPath ${'$'}env:OTO_UPDATE_MSI -ErrorAction SilentlyContinue
-        }
-    """.trimIndent()
-    val encoded = Base64.getEncoder().encodeToString(script.toByteArray(Charsets.UTF_16LE))
+    val encoded = Base64.getEncoder().encodeToString(installerScript.toByteArray(Charsets.UTF_16LE))
+    // Solo se vuelve a abrir el Oto instalado (Oto.exe), no una prueba lanzada con java.
+    val relaunch = ProcessHandle.current().info().command().orElse(null)?.takeIf { it.endsWith("Oto.exe", ignoreCase = true) }
     ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded)
         .redirectOutput(ProcessBuilder.Redirect.DISCARD)
         .redirectError(ProcessBuilder.Redirect.DISCARD)
         .apply {
             environment()["OTO_UPDATE_PARENT_PID"] = ProcessHandle.current().pid().toString()
             environment()["OTO_UPDATE_MSI"] = installer.absolutePath
+            if (relaunch != null) environment()["OTO_UPDATE_RELAUNCH"] = relaunch
         }
         .start()
 }

@@ -58,7 +58,7 @@
 ## Reglas de publicación
 
 - Oto consulta `releases/latest` del repo público al arrancar, tras 5 s, y como máximo una vez cada 6 h por perfil. Solo avisa de versiones estables con paquete compatible. «Buscar actualizaciones» viene activado en Ajustes del escritorio y de la APK pública. `phone` y Android 12 quedan fuera del actualizador.
-- El botón de Windows busca `Oto-<versión>-windows-x64.msi`, muestra el progreso y cierra con «Salir de Oto» antes de que arranque Windows Installer. En Linux se abre la release si ofrece `oto_<versión>_amd64.deb` o `oto-<versión>-1-x86_64.pkg.tar.zst`. Android entrega `Oto-<versión>-android.apk` al instalador del sistema. GitHub debe devolver el tamaño y el SHA-256 del MSI y la APK pública para que Oto pueda verificarlos y ofrecerlos.
+- El botón de Windows busca `Oto-<versión>-windows-x64.msi`, muestra el progreso y cierra con «Salir de Oto» antes de que arranque Windows Installer. Al acabar el instalador (o si se cancela) vuelve a abrir Oto, solo si se lanzó desde `Oto.exe`. En Linux se abre la release si ofrece `oto_<versión>_amd64.deb` o `oto-<versión>-1-x86_64.pkg.tar.zst`. Android entrega `Oto-<versión>-android.apk` al instalador del sistema. GitHub debe devolver el tamaño y el SHA-256 del MSI y la APK pública para que Oto pueda verificarlos y ofrecerlos.
 - Para probar el aviso de escritorio con un perfil aislado, se puede pasar la ruta a un JSON local con el formato de `releases/latest` en `OTO_UPDATE_PREVIEW_JSON`. En ese modo el botón simula el progreso y la comprobación no se guarda en las preferencias.
 
 - Iago autorizó subir todo, arreglar ramas y crear releases la última vez; no es un permiso permanente: push y release, solo si los pide.
