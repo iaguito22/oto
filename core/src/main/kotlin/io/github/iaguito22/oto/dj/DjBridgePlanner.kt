@@ -41,6 +41,8 @@ object DjBridgePlanner {
     /** DJ rápido: cuánto puede pasarse la mezcla del final previsto del trozo (para que quepa empezando en frase). */
     const val ADHD_OUT_LATE_MS = 6_000L
     private const val ADHD_FALLBACK_OUT_LATE_MS = 28_000L
+    /** DJ rápido: lo que tiene que haber sonado un trozo para poder salir antes de un estribillo que llena su salida. */
+    const val ADHD_EARLY_EXIT_MIN_LISTEN_MS = 30_000L
 
     /**
      * Margen antes de un estribillo con el que entra B cuando empieza por él (listas): cubre la corrección de fase del
@@ -863,12 +865,29 @@ object DjBridgePlanner {
             it >= outMinMs && len >= min(fallbackDur, minFallback) && it <= outLastSound - 1_500L &&
                 fallbackEntry != null && protectsChorus(it, it + len, fallbackEntry)
         }
-        val fallbackStart = fallbackStarts.minWithOrNull(
+        val windowFallbackStart = fallbackStarts.minWithOrNull(
             // Mejor con los 6 s enteros; entre iguales, DJ rápido el primero (sale de su trozo cuanto antes) y el resto el
             // más cercano al final de A (antes era el primero de la ventana: hasta 75 s antes del final en DJ normal).
             compareBy<Long>({ fallbackLen(it) < fallbackDur }, { if (adhd) it else abs(outLastSound - fallbackDur - it) }),
         )
-        val fallbackLength = fallbackStart?.let { fallbackLen(it) } ?: 0L
+        // DJ rápido sin salida limpia en su ventana (toda cae en un estribillo de A): antes de ese estribillo, si el trozo ya
+        // ha sonado [ADHD_EARLY_EXIT_MIN_LISTEN_MS]; la más tardía (lo más cerca del final previsto), y mejor en un límite
+        // de frase sin voz. Antes se esperaba a que acabara el estribillo, que solía ser el final de la canción (escucha
+        // del 24/11: fundidos de respaldo a 153 de 160 s y a 199 de 204 s, en pleno estribillo).
+        val earlyFallbackStart = if (windowFallbackStart == null && adhd && outgoingAdhd != null && fallbackEntry != null) {
+            val earliest = outgoingAdhd.startMs + ADHD_EARLY_EXIT_MIN_LISTEN_MS
+            fun fits(start: Long) = start in earliest until outMinMs && start + fallbackDur <= outLastSound &&
+                protectsChorus(start, start + fallbackDur, fallbackEntry)
+            phraseA.filter { !inSection(sectionsA, it) && fits(it) }.maxOrNull()
+                ?: (sectionsA.filter { it.isChorus }.map { it.startMs - fallbackDur } +
+                    sectionsA.map { it.endMs + SongSections.VOCAL_TAIL_MS }).filter(::fits).maxOrNull()
+        } else null
+        val fallbackStart = windowFallbackStart ?: earlyFallbackStart
+        val fallbackLength = when {
+            windowFallbackStart != null -> fallbackLen(windowFallbackStart)
+            earlyFallbackStart != null -> fallbackDur
+            else -> 0L
+        }
         // Ventanas y descartes: sin esto un «sin mezcla» no se podía repartir entre la salida de A y la entrada de B.
         val noMixWhy = "descartes por estribillo A $rejChorusA, B $rejChorusB; ventana A %.1f–%.1f s, B %.1f–%.1f s".format(
             outMinMs / 1000.0, outMaxMs / 1000.0, inMinMs / 1000.0, inMaxMs / 1000.0,
@@ -896,6 +915,7 @@ object DjBridgePlanner {
             reason = when {
                 outro -> "Enlace al final: se conserva el estribillo completo"
                 fallbackStart == null -> "Sin mezcla: proteger el estribillo completo ($noMixWhy)"
+                fallbackStart == earlyFallbackStart -> "Fundido antes del estribillo (el trozo sale antes; $noMixWhy)"
                 fallbackLength < fallbackDur -> "Fundido corto tras el estribillo completo"
                 else -> "Fundido tras el estribillo completo"
             },

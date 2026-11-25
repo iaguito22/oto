@@ -119,6 +119,28 @@ class DjBridgeNoFadeTest {
         assertTrue("el plan sin puente conserva el motivo: ${live.reason}", live.reason.contains("descartes por estribillo"))
     }
 
+    /**
+     * DJ rápido con toda la salida del trozo dentro de un estribillo que dura hasta casi el final (escucha del 24/11:
+     * «Sin mezcla: proteger el estribillo completo» y luego un fundido de respaldo a 153 de 160 s o a 199 de 204 s, en
+     * pleno estribillo). Si el trozo ya ha sonado bastante, se sale antes de ese estribillo.
+     */
+    @Test
+    fun aRapidExcerptLeavesBeforeAChorusThatFillsItsExitWindow() {
+        val duration = 200_000L
+        val excerpt = AdhdSegment(40_000L, 120_000L, 80_000L, 114_000L, 4_000L, duration)
+        val chorus = listOf(SongSection(95_000L, 192_000L, 1.0))
+        val spec = DjBridgePlanner.plan(
+            outgoingDurationMs = duration, incomingDurationMs = 180_000L, configuredFadeMs = 8_000L,
+            outgoingAudio = metrics("a", durMs = duration), incomingAudio = metrics("b"),
+            outgoingVocals = chorus, outgoingAdhd = excerpt, djMode = DjMode.Adhd,
+        )
+        val label = "${spec.reason}: ${spec.cueOutStartMs}..${spec.cueOutEndMs}"
+        assertTrue(label, spec.transitionDurationMs > 0L)
+        assertTrue(label, spec.cueOutEndMs <= 95_000L)
+        assertTrue(label, spec.cueOutStartMs >= 40_000L + DjBridgePlanner.ADHD_EARLY_EXIT_MIN_LISTEN_MS)
+        assertTrue(label, ChorusSafety.allows(spec, chorus, emptyList()))
+    }
+
     @Test
     fun aRapidExcerptDoesNotTurnIntoAnOutroAtTheEndOfTheTrack() {
         val duration = 180_000L
