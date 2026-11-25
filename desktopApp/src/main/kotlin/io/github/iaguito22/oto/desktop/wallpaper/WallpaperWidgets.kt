@@ -67,7 +67,8 @@ internal class WidgetState {
     private val es = Locale.forLanguageTag("es-ES")
     // Los nombres van escritos aquí: el Java que va con Oto no lleva los datos de idiomas (jdk.localedata) y con
     // DateTimeFormatter salían abreviaturas genéricas en vez de «martes» o «noviembre».
-    private val days = listOf("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+    // Sin tildes (Iago, 25/11): la É y la Á en mayúsculas descuadran muchas fuentes del reloj.
+    private val days = listOf("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo")
     private val months = listOf("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre")
     private val daysEn = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
     private val monthsEn = listOf("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")

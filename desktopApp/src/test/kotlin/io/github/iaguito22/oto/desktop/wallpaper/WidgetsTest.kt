@@ -40,6 +40,9 @@ class WidgetsTest {
         st.tick(WallpaperSettings(hora24 = false, segundos = true), t); assertEquals("9:05:07", st.time); assertEquals("a. m.", st.suffix)
         st.tick(WallpaperSettings(hora24 = false), t.withHour(0)); assertEquals("12:05", st.time)
         st.tick(WallpaperSettings(hora24 = false), t.withHour(21)); assertEquals("9:05", st.time); assertEquals("p. m.", st.suffix)
+        // Sin tildes: la É y la Á en mayúsculas descuadran muchas fuentes del reloj (Iago, 25/11).
+        st.tick(WallpaperSettings(), t.withDayOfMonth(25)); assertEquals("MIERCOLES", st.day); assertEquals("miercoles, 25 de noviembre", st.date)
+        st.tick(WallpaperSettings(), t.withDayOfMonth(28)); assertEquals("SABADO", st.day)
         assertEquals("3:07", fmtTime(187_400L))
     }
 
