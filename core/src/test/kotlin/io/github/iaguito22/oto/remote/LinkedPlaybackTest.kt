@@ -41,8 +41,9 @@ class LinkedPlaybackTest {
         assertTrue(RemoteNow.follow(true, localHasSong=true, localPlaying=false, remote=paused))
         // Ambos en pausa sin haberlo seguido: manda lo local.
         assertFalse(RemoteNow.follow(false, localHasSong=true, localPlaying=false, remote=paused))
-        // Sin nada local, se muestra lo de allí aunque esté en pausa.
-        assertTrue(RemoteNow.follow(false, localHasSong=false, localPlaying=false, remote=paused))
+        // Sin nada local y allí en pausa, tampoco: al abrir el PC salía siempre lo del móvil aunque no sonara (Iago, 25/11).
+        assertFalse(RemoteNow.follow(false, localHasSong=false, localPlaying=false, remote=paused))
+        assertTrue(RemoteNow.follow(false, localHasSong=false, localPlaying=false, remote=playing))
         // En cuanto suena aquí, o se desconecta, vuelve lo local.
         assertFalse(RemoteNow.follow(true, localHasSong=true, localPlaying=true, remote=playing))
         assertFalse(RemoteNow.follow(true, localHasSong=true, localPlaying=false, remote=null))

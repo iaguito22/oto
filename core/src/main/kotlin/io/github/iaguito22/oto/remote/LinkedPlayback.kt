@@ -55,12 +55,15 @@ data class RemoteNow(val id: String, val title: String, val artist: String, val 
         }
 
         /**
-         * Si el reproductor local debe mostrar y controlar lo del otro dispositivo.
-         * Se mantiene tras pausar allí, para poder reanudarlo; lo local manda en cuanto suena.
+         * Si el reproductor local debe mostrar y controlar lo del otro dispositivo: solo si suena allí (o se mandó allí,
+         * [previous]). Se mantiene tras pausar allí, para poder reanudarlo; lo local manda en cuanto suena.
+         * Antes, sin nada cargado aquí, se mostraba lo de allí aunque estuviera en pausa: al abrir el PC (que no guarda su
+         * cola) salía siempre «sonando en el móvil» con la última canción del móvil (Iago, 25/11).
          */
+        @Suppress("UNUSED_PARAMETER")
         fun follow(previous: Boolean, localHasSong: Boolean, localPlaying: Boolean, remote: RemoteNow?): Boolean = when {
             remote == null || localPlaying -> false
-            remote.playing || !localHasSong -> true
+            remote.playing -> true
             else -> previous
         }
     }

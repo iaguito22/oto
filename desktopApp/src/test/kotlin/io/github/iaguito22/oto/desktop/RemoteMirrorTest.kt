@@ -46,13 +46,30 @@ class RemoteMirrorTest {
         } finally { scope.cancel() }
     }
 
-    @Test fun receivingPausedMusicStopsShowingThePhone() = runBlocking {
+    @Test fun openingTheComputerDoesNotShowAPausedPhone(): Unit = runBlocking {
+        // Al abrir Oto en el PC (sin nada cargado) salía siempre «sonando en el móvil» con su última canción, aunque en el
+        // móvil no se hubiera puesto nada (Iago, 25/11). Solo se muestra si suena allí.
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val remote = MutableStateFlow<JSONObject?>(phone(false))
             val local = MutableStateFlow(NowPlaying(id = null, playing = false))
             val mirror = RemoteMirror(remote, local, scope)
+            delay(300)
+            assertNull(mirror.state.value)
+            remote.value = phone(true)
             withTimeout(2000) { mirror.state.first { it?.now?.id == "m1" } }
+        } finally { scope.cancel() }
+    }
+
+    @Test fun receivingPausedMusicStopsShowingThePhone() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val remote = MutableStateFlow<JSONObject?>(phone(true))
+            val local = MutableStateFlow(NowPlaying(id = null, playing = false))
+            val mirror = RemoteMirror(remote, local, scope)
+            withTimeout(2000) { mirror.state.first { it?.now?.id == "m1" } }
+            remote.value = phone(false)
+            withTimeout(2000) { mirror.state.first { it?.now?.playing == false } }
             // Llega la música del móvil en pausa: ahora es de aquí, aunque no suene.
             local.value = NowPlaying(id = "m1", playing = false)
             mirror.release()
