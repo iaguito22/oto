@@ -449,6 +449,42 @@ class DjTempoQueueTest {
         assertTrue("con índice $known", known >= 0.75)
     }
 
+    /**
+     * Tempo casi obligatorio (Iago, 24/11: en DJ normal 17 de 18 mezclas salieron «tempo lejos» y no hubo cuadre de
+     * beats). Con todo medido, casi todas las parejas se pueden cuadrar; con solo un tercio medido (como su biblioteca),
+     * una que se sabe lejana no sale mientras haya otra que encaje o aún sin medir.
+     */
+    @Test
+    fun theTempoIsAlmostARequirement() = runBlocking {
+        val songs = (1..10).flatMap { i ->
+            listOf("duki", "quevedo", "bzrp").map { a -> Heard("$a-$i", "$a $i", a, null, a) }
+        }
+        val pl = listOf(LocalPlaylist("mix", "Mix", songs))
+        val bpmOf = songs.associate { it.id to (if (it.id.substringAfter('-').toInt() % 2 == 0) 100.0 else 128.0) }
+        suspend fun run(measured: (String) -> Boolean): Pair<Double, Int> {
+            var ok = 0; var pairs = 0; var farKnown = 0
+            repeat(25) { seed ->
+                val cache = AudioAnalysisCache(file = null)
+                bpmOf.filterKeys(measured).forEach { (id, bpm) -> cache.put(metrics(id, bpm)) }
+                val dj = Dj(Profile(pl, emptyList(), emptyList(), emptyList(), now, utc), noCatalog, Memory(null), this, Random(seed), analysisCache = cache)
+                val seq = ArrayList<String>()
+                var t = dj.start()
+                while (t != null && seq.size < 8) { seq += t.id; t = dj.next() }
+                seq.zipWithNext().forEach { (x, y) ->
+                    if (!measured(x) || !measured(y)) return@forEach
+                    pairs++
+                    if (bpmOf[x] == bpmOf[y]) ok++ else farKnown++
+                }
+            }
+            return ok.toDouble() / pairs.coerceAtLeast(1) to farKnown
+        }
+        val (all, _) = run { true }
+        assertTrue("con todo medido: $all", all >= 0.95)
+        // Un tercio medido: las medidas que se suceden casi siempre encajan.
+        val (third, far) = run { id -> id.substringAfter('-').toInt() % 3 == 0 || id.substringAfter('-').toInt() <= 2 }
+        assertTrue("con un tercio medido: $third ($far lejanas)", third >= 0.9)
+    }
+
     @Test
     fun theKickKeepsImprovingAsMoreOfTheSongIsHeard() {
         val dir = Files.createTempDirectory("oto-tempo-kick").toFile()

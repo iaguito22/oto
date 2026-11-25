@@ -1109,7 +1109,7 @@ class Dj(
                 ) to baseW
             }
         }
-        return weighted(candidates) { it.second }?.first
+        return weighted(tempoGate(candidates) { it.first.track }) { it.second }?.first
     }
 
     /** Regula la proporción objetivo (~90 % conocida / ~10 % descubrimiento en modos normales; invertida en Descubrir). */
@@ -1364,7 +1364,7 @@ class Dj(
             val a = weighted(artists) { artist ->
                 val valid = artist.songs.values.filter(::ok)
                 if (valid.isEmpty()) return@weighted 0.0
-                val tempoBias = valid.maxOf { tempoFit(it) }.coerceIn(0.42, 1.90)
+                val tempoBias = artistTempoBias(valid)
                 val base = (region[artist.key] ?: 0.0).coerceAtLeast(0.05) *
                     artist.affinity.pow(0.45) *
                     artistRepeatWeight(artist.key) *
@@ -1373,7 +1373,7 @@ class Dj(
                     tempoBias
                 base
             } ?: return null
-            val validTracks = a.songs.values.filter(::ok)
+            val validTracks = tempoGate(a.songs.values.filter(::ok)) { it }
             val t = weighted(validTracks) { track ->
                 val w = (profile.weight[track.key] ?: 1.0).pow(0.65) *
                     forgotten(track) *
@@ -1401,7 +1401,7 @@ class Dj(
     private fun pickDiscoveryCandidate(items: List<Candidate>): Candidate? {
         if (items.isEmpty()) return null
         val topCount = if (mood == DjMood.Descubrir) 6 else 3
-        val ranked = items.asSequence()
+        val ranked = tempoGate(items) { it.track }.asSequence()
             .map { it to score(it) }
             .filter { it.second > 0.0 }
             .sortedByDescending { it.second }
@@ -1601,6 +1601,43 @@ class Dj(
         return (1.0 + gain + lyric).coerceIn(0.22, 3.0)
     }
 
+    /**
+     * Cómo encaja [track] en tempo detrás de la última de la cola (o la que suena), con los mismos límites que la
+     * revisión de la cola: Fits, lejos (estirar de más, sin bombo, sin pulso o, en DJ rápido, tonos que chocan) o Unknown
+     * (sin medir). null si el tempo no cuenta: la saliente no se puede cuadrar con nada o no hay saliente.
+     */
+    private fun tempoVerdictOf(track: Track): DjTempoMatch.TempoVerdict? {
+        val prev = effectiveLastPick() ?: return null
+        val v = DjTempoMatch.tempoVerdict(tempoOf(prev.track.id), tempoOf(track.id), stretchLimitOf(track.id, entryOf(track)))
+        if (v.fit == DjTempoMatch.TempoFit.NotApplicable) return null
+        if (v.fit != DjTempoMatch.TempoFit.Fits) return v
+        return fastMixBlock(prev.track.id, track.id) { entryOf(track) }?.let { v.copy(fit = it) } ?: v
+    }
+
+    /**
+     * Tempo casi obligatorio (Iago, 24/11: en DJ normal 17 de 18 mezclas salieron «tempo lejos» y casi nunca hubo cuadre
+     * de beats, lo que más gusta). Si alguna de [items] encaja, solo esas; si no, ninguna que se sepa lejana mientras
+     * quede alguna sin medir. Si nada encaja ni queda sin medir, todas (mejor una lejana que parar).
+     */
+    private fun <T> tempoGate(items: List<T>, track: (T) -> Track): List<T> {
+        if (items.size < 2) return items
+        val verdicts = items.map { it to tempoVerdictOf(track(it)) }
+        if (verdicts.all { it.second == null }) return items
+        verdicts.filter { it.second?.fit == DjTempoMatch.TempoFit.Fits }.map { it.first }.takeIf { it.isNotEmpty() }?.let { return it }
+        return verdicts.filter { it.second?.fit == DjTempoMatch.TempoFit.Unknown || it.second == null }.map { it.first }.ifEmpty { items }
+    }
+
+    /** Peso de un artista según lo que puede poner a tempo: con alguna que encaja, mucho más; con todas lejanas, casi nada. */
+    private fun artistTempoBias(valid: List<Track>): Double {
+        val fits = valid.map { tempoVerdictOf(it) }
+        return when {
+            fits.all { it == null } -> 1.0
+            fits.any { it?.fit == DjTempoMatch.TempoFit.Fits } -> 2.6
+            fits.any { it == null || it.fit == DjTempoMatch.TempoFit.Unknown } -> 1.0
+            else -> 0.12
+        }
+    }
+
     /** Puntuación de [track] según el [mood] activo y la hora del día. */
     private fun moodFit(track: Track, vias: Set<String>): Double {
         val v = effectiveVibe(track, vias)
@@ -1718,6 +1755,11 @@ class Dj(
         picks += p
         if (tandaLabel != null) trackTandas[c.track.id] = tandaLabel
         trackReasons[c.track.id] = reason
+        // Para revisar luego una sesión escuchada: por qué salió cada una (tipo, motivo, género y tempo frente a la anterior).
+        if (precomputedReason == null) log(
+            "elegida: ${c.track.artist} — ${c.track.title} (${c.kind.name.lowercase()}, $reason, género ${genreOf(c.track) ?: "?"}, " +
+                "tempo ${tempoVerdictOf(c.track)?.fit?.name ?: "no cuenta"})",
+        )
         keys += c.track.key
         keys += c.track.id
         if (c.track.base.length >= 4) keys += "~" + c.track.base
@@ -2381,8 +2423,10 @@ class Dj(
         /** Cuántos cambios de tanda sin puente van a cualquier otra parte de lo tuyo. */
         private const val JUMP = 0.12
         // Con «Todo»: canciones y centros de tanda de otro género que la tanda que suena (ver [looseGenreFit]).
-        private const val LOOSE_OTHER_GENRE_FIT = 0.4
-        private const val LOOSE_UNKNOWN_GENRE_FIT = 0.85
+        // 24/11: con 0,4 se colaban canciones sueltas de otro estilo en la tanda (dubstep y EDM dentro de una de Bad
+        // Bunny en DJ normal); el cambio de estilo va por los cambios de tanda.
+        private const val LOOSE_OTHER_GENRE_FIT = 0.12
+        private const val LOOSE_UNKNOWN_GENRE_FIT = 0.7
         private const val LOOSE_OTHER_ANCHOR_FIT = 0.2
         private const val LOOSE_UNKNOWN_ANCHOR_FIT = 0.6
         // Llevando muchas seguidas del mismo género, cambiar de estilo cuesta menos (≈ 3 tandas) y luego nada (≈ 4–5).
