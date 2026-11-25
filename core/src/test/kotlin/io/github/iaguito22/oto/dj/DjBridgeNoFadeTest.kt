@@ -141,6 +141,46 @@ class DjBridgeNoFadeTest {
         assertTrue(label, ChorusSafety.allows(spec, chorus, emptyList()))
     }
 
+    /**
+     * DJ rápido sin ninguna salida limpia (escucha del 24/11: casi todas «FUERA de frase» y salidas a mitad de letra):
+     * entre las relajadas, mejor una fuera de frase pero sin voz que una en frase que corta la letra de A.
+     */
+    @Test
+    fun withoutACleanExitARapidMixPrefersMissingThePhraseToCuttingTheLyrics() {
+        val duration = 200_000L
+        // Los límites de frase del trozo caen todos dentro de un verso (95–112 s); después, hasta 126 s, no se canta.
+        val excerpt = AdhdSegment(
+            40_000L, 120_000L, 80_000L, 108_000L, 4_000L, duration,
+            phrasePointsMs = listOf(100_000L, 104_000L, 108_000L),
+        )
+        val verse = listOf(SongSection(95_000L, 112_000L, 0.0), SongSection(126_000L, 150_000L, 0.0))
+        val spec = DjBridgePlanner.plan(
+            outgoingDurationMs = duration, incomingDurationMs = 180_000L, configuredFadeMs = 8_000L,
+            outgoingAudio = metrics("a", durMs = duration), incomingAudio = metrics("b"),
+            outgoingVocals = verse, outgoingAdhd = excerpt, djMode = DjMode.Adhd,
+        )
+        val label = "${spec.style} ${spec.reason} ${spec.tempoNote}: ${spec.cueOutStartMs}..${spec.cueOutEndMs}"
+        assertTrue(label, spec.transitionDurationMs > 0L)
+        assertFalse("sale cortando la letra: $label", verse.any { spec.cueOutStartMs in (it.startMs + 250L)..(it.endMs - 250L) })
+    }
+
+    /**
+     * DJ normal (escucha del 24/11: «entrada en letra» en Wanda, Ay Vamos, Safaera): si B canta casi desde el principio
+     * y tiene un hueco sin voz dentro de su ventana de entrada, entra ahí y no con la voz encima.
+     */
+    @Test
+    fun theIncomingSongEntersWhereItIsNotSinging() {
+        val incomingVerses = listOf(SongSection(2_000L, 20_000L, 0.0), SongSection(30_000L, 60_000L, 0.0))
+        val spec = DjBridgePlanner.plan(
+            outgoingDurationMs = 200_000L, incomingDurationMs = 180_000L, configuredFadeMs = 8_000L,
+            outgoingAudio = metrics("a", durMs = 200_000L), incomingAudio = metrics("b", bpm = 96.0),
+            incomingVocals = incomingVerses, djMode = DjMode.Normal,
+        )
+        val entry = spec.entryInMs
+        val sung = incomingVerses.sumOf { s -> (minOf(s.endMs, entry + 6_000L) - maxOf(s.startMs, entry)).coerceAtLeast(0L) }
+        assertTrue("${spec.style} ${spec.reason}: entra a $entry ms con $sung ms cantados en sus 6 primeros s", sung <= 2_000L)
+    }
+
     @Test
     fun aRapidExcerptDoesNotTurnIntoAnOutroAtTheEndOfTheTrack() {
         val duration = 180_000L

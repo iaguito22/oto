@@ -257,8 +257,9 @@ object DjBridgePlanner {
         val candidatesA = (selectOutCandidateBars(barsA, outMinMs, outMaxMs, durA) +
             phraseA.filter { it in outMinMs..(outMaxMs - 2_000L) }.map { barAt(barsA, it) } +
             sectionExitsA.map { barAt(barsA, it) }).distinctBy { it.startMs }
-        // En sesiones de DJ, B también puede entrar justo tras un estribillo suyo (su verso siguiente).
-        val chorusExitsB = if (!isDjSession) emptyList() else sectionsB.filter { it.isChorus }
+        // En sesiones de DJ, B también puede entrar justo al acabar un bloque cantado suyo (estribillo o verso): son las
+        // entradas sin voz por definición (antes solo tras un estribillo, y B entraba cantando aunque hubiera un hueco).
+        val chorusExitsB = if (!isDjSession) emptyList() else sectionsB
             .map { it.endMs + SongSections.VOCAL_TAIL_MS }.filter { it in inMinMs..inMaxMs }
         val candidatesB = (selectInCandidateBars(barsB, inMinMs, inMaxMs, durB, !isDjSession) +
             phraseB.filter { it in inMinMs..inMaxMs }.map { barAt(barsB, it) } +
@@ -373,12 +374,16 @@ object DjBridgePlanner {
         // Descartes por estribillo, por lado (para atribuir un «sin mezcla» en `oto.mix`).
         var rejChorusA = 0
         var rejChorusB = 0
-        fun adhdClean(cand: CandidatePair): Boolean {
-            if (!adhd || cand.style == DjBridgeStyle.LyricLoopCut) return true
+        /**
+         * DJ rápido: 0 si la mezcla es limpia; si no, cuánto se castiga en el cubo relajado. Cortar la letra de A es lo que
+         * más se nota (escucha del 24/11: «salida en medio del estribillo/verso» en casi todas), luego entrar a mitad de
+         * verso de B, y por último no caer en frase. Antes valían todas lo mismo (−3) y ganaba una que cortaba la letra.
+         */
+        fun adhdFault(cand: CandidatePair): Double {
+            if (!adhd || cand.style == DjBridgeStyle.LyricLoopCut) return 0.0
             val refOut = cand.phraseOutMs ?: cand.cueOutStartMs
             val onPhraseA = phraseA.isEmpty() || phraseA.any { abs(it - refOut) <= beatTolA }
             val onPhraseB = phraseB.isEmpty() || phraseB.any { abs(it - cand.entryInMs) <= beatTolB }
-            if (!onPhraseA || !onPhraseB) { rejPhrase++; return false }
             val outVoc = DjLyricMatcher.vocalOccupancyRatio(outgoingLyrics, cand.cueOutStartMs, cand.cueOutEndMs)
                 ?: vocalOverlapSections(sectionsA, cand.cueOutStartMs, cand.cueOutEndMs)
             // El corte al drop tiene su propia guarda (no parte palabras y solo corta la voz en la costura pre-estribillo →
@@ -388,8 +393,8 @@ object DjBridgePlanner {
                     (outVoc != null && outVoc > 0.25)
                 )
             val cutsB = inSection(sectionsB, cand.entryInMs) || DjLyricMatcher.isMidVocal(incomingLyrics, cand.entryInMs)
-            if (cutsA || cutsB) { rejVocal++; return false }
-            return true
+            if (!onPhraseA || !onPhraseB) rejPhrase++ else if (cutsA || cutsB) rejVocal++
+            return (if (!onPhraseA || !onPhraseB) 2.0 else 0.0) + (if (cutsA) 7.0 else 0.0) + (if (cutsB) 4.0 else 0.0)
         }
         /**
          * Si [pastChorusTail] retrasó el arranque solo por la cola vocal, la frase de referencia sigue siendo el compás
@@ -419,10 +424,11 @@ object DjBridgePlanner {
                 return
             }
             val cand = raw.copy(score = raw.score + adhdLanding(raw))
-            if (adhdClean(cand)) {
+            val fault = adhdFault(cand)
+            if (fault == 0.0) {
                 if (best == null || cand.score > best!!.score) best = cand
             } else {
-                val relaxed = cand.copy(score = cand.score - 3.0)
+                val relaxed = cand.copy(score = cand.score - fault)
                 if (bestRelaxed == null || relaxed.score > bestRelaxed!!.score) bestRelaxed = relaxed
             }
         }
@@ -474,6 +480,12 @@ object DjBridgePlanner {
                 val harshDiff = abs(bOut.harshness - bIn.harshness)
                 val pairTimbreShock = hasTimbreShock(bOut, bIn)
                 val lufsDiffLocal = abs(bOut.lufs - bIn.lufs)
+                // La entrada de B (escucha del 24/11: «entrada en letra» y «mucha intensidad con la salida muy floja»):
+                // cantando nada más entrar o a mitad de verso, y un salto grande de volumen o de batería entre lo que se va
+                // y lo que entra. Antes solo restaba ~0,5 × la voz y una entrada cantada ganaba a un hueco sin voz.
+                val entryPenalty = 1.4 * entryVocals + (if (midVocalIn) 1.8 else 0.0) +
+                    0.35 * (lufsDiffLocal - 3.0).coerceIn(0.0, 6.0) +
+                    1.2 * (bIn.drumEnergy - bOut.drumEnergy - 0.25).coerceAtLeast(0.0)
                 // Aproximación (ventanas fijas, tope instrumental) de si esta pareja se podría cuadrar: SOLO para no
                 // castigar el fundido cuando el cuadre no es posible. Las puertas reales están en cada estilo.
                 val pairMayBeatMatch = beatReliable &&
@@ -534,6 +546,7 @@ object DjBridgePlanner {
                         0.40 * harshDiff -
                         (if (tandaChanged) 0.55 else 0.0) -
                         (lufsDiffLocal * 0.20) -
+                        entryPenalty -
                         edgeCost(startOut + mixDur, beatEntry) -
                         fatigueBeat
                     val fits = fitsInB(beatEntry, mixDur, ratio)
@@ -615,7 +628,7 @@ object DjBridgePlanner {
                 val echoScore = 4.15 +
                     echoBoost -
                     0.55 * exitPenalty -
-                    0.45 * entryVocals -
+                    entryPenalty -
                     edgeCost(echoStart + echoDur, echoEntry) -
                     fatigueEcho
                 consider(
@@ -688,7 +701,7 @@ object DjBridgePlanner {
                     closeDrumFadePenalty -
                     dualVocalPenalty -
                     0.65 * exitPenalty -
-                    0.50 * entryVocals -
+                    entryPenalty -
                     (if (tandaChanged) 1.6 else 0.0) -
                     (if (pairTimbreShock) 2.2 else 0.0) -
                     (if (zoneTimbreShock) 1.5 else 0.0) -
