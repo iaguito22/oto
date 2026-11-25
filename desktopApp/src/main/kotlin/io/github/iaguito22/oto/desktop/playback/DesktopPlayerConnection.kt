@@ -73,6 +73,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -252,7 +254,7 @@ class DesktopPlayerConnection(
                 scope.launch {
                     if (activeDeck.value === deck) {
                         Timber.w(err, "Fallo en pista actual")
-                        _state.value = _state.value.copy(playing = false, buffering = false, error = "No se pudo reproducir. Pulsa para reintentar.")
+                        _state.update { it.copy(playing = false, buffering = false, error = "No se pudo reproducir. Pulsa para reintentar.") }
                     }
                 }
             },
@@ -338,12 +340,15 @@ class DesktopPlayerConnection(
             activeDeck.filterNotNull().collectLatest { active ->
                 active.state.collect { es ->
                     _positionMs.value = es.positionMs
-                    val cur = _state.value
-                    _state.value = cur.copy(
-                        playing = es.playing,
-                        buffering = resolvingTrack || es.buffering,
-                        durationMs = if (es.durationMs > 0L) es.durationMs else cur.durationMs,
-                    )
+                    // Atómico: leer y escribir por separado pisaba la canción nueva que se acababa de poner desde otro hilo
+                    // (24/11: sonaba Energy y se veía «Battlecry» con la duración de Energy).
+                    val cur = _state.updateAndGet {
+                        it.copy(
+                            playing = es.playing,
+                            buffering = resolvingTrack || es.buffering,
+                            durationMs = if (es.durationMs > 0L) es.durationMs else it.durationMs,
+                        )
+                    }
                     val activeDj = dj
                     if (
                         activeDj != null &&
@@ -828,6 +833,7 @@ class DesktopPlayerConnection(
 
         val started = withTimeoutOrNull(1500) { deck.state.first { it.playing && !it.buffering } } != null
         if (!started || nextMixIndex() != nextIndex || engine !== old || !old.state.value.playing || songQueue.getOrNull(nextIndex)?.id != next.next.id || currentIndex != originalIndex) {
+            Timber.tag("oto.mix").i("Mezcla %s -> %s no arrancó (entrante lista: %s)", next.currentId, next.next.id, started)
             deck.stop()
             deck.resetMixBands()
             deck.setTempo(1f)
@@ -856,7 +862,8 @@ class DesktopPlayerConnection(
                 engine === old && currentIndex == originalIndex && old.state.value.playing &&
                     nextMixIndex() == nextIndex && songQueue.getOrNull(nextIndex)?.id == song.id && dj === activeDj &&
                     (simple || ((plan == null || ChorusSafety.allows(plan, latestSections, sectionsOf(song.id))) &&
-                        ChorusSafety.allowsLive(old.state.value.positionMs, length, 1.0, latestSections)))
+                        (if (plan != null) DesktopTransitionPlanner.liveSafe(plan, old.state.value.positionMs, latestSections)
+                        else ChorusSafety.allowsLive(old.state.value.positionMs, length, 1.0, latestSections))))
             },
             commit = { resolvedNextSeg ->
                 if (activeDj != null) {
@@ -906,6 +913,9 @@ class DesktopPlayerConnection(
             },
         )
         if (!committed) {
+            // Antes callaba: la mezcla se rehacía y, pasado su momento, la canción sonaba hasta el final (Battlecry, 24/11).
+            Timber.tag("oto.mix").i("Mezcla %s -> %s cancelada al empezar (a %d ms): ya no era segura o cambió la cola",
+                next.currentId, song.id, old.state.value.positionMs)
             deck.stop(); deck.resetMixBands(); deck.setTempo(1f); deck.setGain(volumeGain())
             preparedNext = null; preparingKey = null
             return
@@ -1892,7 +1902,7 @@ class DesktopPlayerConnection(
             resolveJob?.cancel()
             resolvingTrack = false
             engine.stop()
-            _state.value = st.copy(playing = false, buffering = false)
+            _state.update { it.copy(playing = false, buffering = false) }
         } else if (playing && engine.state.value.durationMs <= 0L) {
             startCurrentTrack()
         } else if (!engine.supportsCrossfade) {
@@ -2349,7 +2359,7 @@ class DesktopPlayerConnection(
                     val message = if (songUnplayable && failures > UnplayableTracks.MAX_SKIPS_IN_A_ROW) {
                         "YouTube no da audio ahora mismo ($failures canciones seguidas). Pulsa para reintentar."
                     } else err.message
-                    _state.value = _state.value.copy(playing = false, buffering = false, error = message)
+                    _state.update { it.copy(playing = false, buffering = false, error = message) }
                 }
             }
         }
@@ -2494,7 +2504,7 @@ class DesktopPlayerConnection(
             )
         }
         _previousEntry.value = if (currentIndex > 0) _queue.value.getOrNull(currentIndex - 1) else null
-        _state.value = _state.value.copy(index = currentIndex, upNext = (songQueue.size - currentIndex - 1).coerceAtLeast(0))
+        _state.update { it.copy(index = currentIndex, upNext = (songQueue.size - currentIndex - 1).coerceAtLeast(0)) }
     }
 
     private companion object {

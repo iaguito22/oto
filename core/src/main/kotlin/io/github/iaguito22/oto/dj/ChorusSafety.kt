@@ -3,6 +3,14 @@ package io.github.iaguito22.oto.dj
 import kotlin.math.roundToLong
 
 object ChorusSafety {
+    /**
+     * Lo que aún suena de A durante el cruce de [plan]: en un puente, hasta su corte (lo de después, respiro y entrada, ya
+     * es B); si no, el cruce entero. Mirar el cruce entero impedía un corte en drop justo antes del estribillo de A
+     * (Battlecry → Energy, 24/11: en el PC no empezaba nunca; en el móvil se aplazaba hasta pasado el estribillo).
+     */
+    fun outgoingSpanMs(plan: DjTransitionPlan): Long =
+        plan.bridgeSpec?.let { (it.cueOutEndMs - it.cueOutStartMs).coerceIn(0L, plan.fadeDurationMs) } ?: plan.fadeDurationMs
+
     fun allowsLive(sourcePositionMs: Long, fadeMs: Long, sourceSpeed: Double, outgoing: List<SongSection>): Boolean =
         !SongSections.overlapsChorus(sourcePositionMs, sourcePositionMs + (fadeMs * sourceSpeed).roundToLong(), outgoing)
 

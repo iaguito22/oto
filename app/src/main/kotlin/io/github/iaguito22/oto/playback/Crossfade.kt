@@ -932,12 +932,14 @@ class Crossfade(
             }
 
             val targetFade = plan?.fadeDurationMs?.takeIf { it > 0L } ?: fallbackRemainingMs ?: requestedFade
+            // Para el estribillo solo cuenta lo que aún suena de A (en un corte en drop, hasta el corte).
+            val outgoingSpan = plan?.takeIf { it.fadeDurationMs > 0L }?.let(ChorusSafety::outgoingSpanMs) ?: targetFade
             var deferredForChorus = false
             while (!sessionCancelled(next, pair.second) && t.playbackState != Player.STATE_ENDED) {
                 val sourceNow = t.currentPosition
                 val spans = sectionsFor(currentItem?.mediaId.orEmpty())
                 val maxSourceSpeed = maxOf(t.playbackParameters.speed, tailSpeed, 1f).toDouble()
-                if (simple || ChorusSafety.allowsLive(sourceNow, targetFade, maxSourceSpeed, spans)) {
+                if (simple || ChorusSafety.allowsLive(sourceNow, outgoingSpan, maxSourceSpeed, spans)) {
                     if (!deferredForChorus) break
                     // Restore B's entry after holding A, then recheck after B's seek/buffer delay.
                     seekSession(next, nextStartMs)

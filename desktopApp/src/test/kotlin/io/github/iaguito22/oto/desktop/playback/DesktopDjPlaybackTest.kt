@@ -6,7 +6,10 @@ import io.github.iaguito22.oto.dj.AdhdSegment
 import io.github.iaguito22.oto.dj.DjCrossfadeFallback
 import io.github.iaguito22.oto.dj.DjTransitionPlan
 import io.github.iaguito22.oto.dj.DjTransitionStyle
+import io.github.iaguito22.oto.dj.DjBridgeSpec
+import io.github.iaguito22.oto.dj.DjBridgeStyle
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DesktopDjPlaybackTest {
@@ -368,5 +371,33 @@ class DesktopDjPlaybackTest {
             nextReady = true, adhdSegment = sampleSegment, plan = plan,
             outgoingSections = listOf(SongSection(100_000L, 130_000L, 1.0)),
         ))
+    }
+
+    /**
+     * Corte en drop (Battlecry → Energy, 24/11): A se corta justo antes de su estribillo; lo que sigue del cruce (respiro y
+     * entrada de B) ya no suena en A y no puede impedir que la mezcla empiece. Antes se miraba el cruce entero desde la
+     * posición en vivo, que llega unos ms tarde: no empezaba nunca y A sonaba hasta el final.
+     */
+    @Test
+    fun elCorteEnDropEmpiezaAunqueDetrasVengaElEstribillo() {
+        val spec = DjBridgeSpec(
+            style = DjBridgeStyle.EnergyDropCut, preRollStartMs = 96_200L, cueOutStartMs = 100_000L, cueOutEndMs = 102_000L,
+            entryInMs = 60_000L, dryBResumeMs = 64_000L, transitionDurationMs = 3_250L,
+        )
+        val plan = DjTransitionPlan(DjTransitionStyle.EnergyDropCut, 3_250L, outgoingFadeStartMs = 100_000L, incomingStartMs = 60_000L, bridgeSpec = spec)
+        val chorus = listOf(SongSection(102_300L, 130_000L, repeat = 1.0))
+        for (late in listOf(0L, 100L, 250L)) {
+            val action = DesktopTransitionPlanner.evaluate(
+                positionMs = 100_000L + late, durationMs = 223_000L, playing = true, buffering = false, configuredFadeSeconds = 10,
+                ramSaver = false, crossfadeSupported = true, nextReady = true, adhdSegment = null, plan = plan, outgoingSections = chorus,
+            )
+            assertTrue("con $late ms de retraso: $action", action is TransitionAction.StartCrossfade)
+        }
+        // Muy tarde (p. ej. tras volver atrás en la barra hasta justo antes del estribillo), ya no: cortaría en él.
+        val tooLate = DesktopTransitionPlanner.evaluate(
+            positionMs = 101_500L, durationMs = 223_000L, playing = true, buffering = false, configuredFadeSeconds = 10,
+            ramSaver = false, crossfadeSupported = true, nextReady = true, adhdSegment = null, plan = plan, outgoingSections = chorus,
+        )
+        assertTrue("$tooLate", tooLate !is TransitionAction.StartCrossfade)
     }
 }

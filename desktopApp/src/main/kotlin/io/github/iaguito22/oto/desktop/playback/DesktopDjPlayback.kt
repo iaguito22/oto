@@ -51,7 +51,7 @@ internal object DesktopTransitionPlanner {
         }
         if (plan != null && positionMs < plan.outgoingFadeStartMs) return TransitionAction.None
         if (plan != null && crossfadeSupported && !ramSaver && nextReady && plan.fadeDurationMs > 0L) {
-            if (positionMs >= plan.outgoingFadeStartMs && ChorusSafety.allowsLive(positionMs, plan.fadeDurationMs, 1.0, outgoingSections)) {
+            if (positionMs >= plan.outgoingFadeStartMs && liveSafe(plan, positionMs, outgoingSections)) {
                 return TransitionAction.StartCrossfade(plan.fadeDurationMs, plan)
             }
             if (adhdSegment != null && forcedExitDue(adhdSegment, positionMs, outgoingSections, durationMs)) {
@@ -77,6 +77,15 @@ internal object DesktopTransitionPlanner {
         if (durationMs < fadeMs * 3L) return TransitionAction.None
         if (durationMs - positionMs <= fadeMs) return TransitionAction.StartCrossfade(fadeMs)
         return TransitionAction.None
+    }
+
+    /** El bucle de mezclas mira cada 100 ms: llegar hasta aquí de tarde no mueve la mezcla (el plan ya se comprobó desde su inicio). */
+    const val LATE_OK_MS = 400L
+
+    /** Si la mezcla de [plan] puede empezar en [positionMs] sin que A suene dentro de un estribillo. */
+    internal fun liveSafe(plan: DjTransitionPlan, positionMs: Long, outgoingSections: List<SongSection>): Boolean {
+        val from = if (positionMs - plan.outgoingFadeStartMs in 0L..LATE_OK_MS) plan.outgoingFadeStartMs else positionMs
+        return ChorusSafety.allowsLive(from, ChorusSafety.outgoingSpanMs(plan), 1.0, outgoingSections)
     }
 
     fun withFallback(
