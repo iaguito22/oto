@@ -24,6 +24,9 @@ object DjBridgePlanner {
     // Nothing: con 5,0/5,2 s solo cabía una ronda y el relevo se hacía con el resto (13–15 ms, golpe doble audible).
     // 2 s más a cada lado dejan sitio a una segunda ronda.
     const val PRE_ROLL_MS = 7_000L
+
+    /** Solo para las sondas (`MixQualityProbeTest`): por qué salió cada plan. */
+    @Volatile internal var trace: ((String) -> Unit)? = null
     const val POST_ROLL_MS = 7_200L
     const val NORMAL_WINDOW_MS = 30_000L
 
@@ -36,6 +39,9 @@ object DjBridgePlanner {
     // adicionales devolvían al inicio del archivo muchas entradas elegidas en el primer estribillo.
     const val ADHD_IN_EARLY_MS = 1_500L
     const val ADHD_IN_LATE_MS = 4_000L
+    /** DJ rápido: hasta dónde se busca una entrada sin voz si la ventana normal canta toda. */
+    const val ADHD_IN_QUIET_EARLY_MS = 8_000L
+    const val ADHD_IN_QUIET_LATE_MS = 10_000L
     /** DJ rápido: lo que debería quedar de B tras una entrada de respaldo fuera de su ventana (un trozo entero). */
     const val ADHD_MIN_B_LEFT_MS = 70_000L
     /** DJ rápido: cuánto puede pasarse la mezcla del final previsto del trozo (para que quepa empezando en frase). */
@@ -75,6 +81,10 @@ object DjBridgePlanner {
         val stretchLimit: Double? = null,
         /** Instante de A que debe caer en frase (por defecto el arranque de la mezcla; en el corte al drop, el drop). */
         val phraseOutMs: Long? = null,
+        /** En el cubo relajado: A canta mientras se va o B entra cantando (ver `fault`). */
+        val cutsVoice: Boolean = false,
+        /** En el cubo relajado: A canta mientras se va (lo que más se nota). */
+        val cutsVoiceA: Boolean = false,
     )
 
     fun plan(
@@ -113,6 +123,9 @@ object DjBridgePlanner {
         fun protectsChorus(start: Long, end: Long, entry: Long): Boolean =
             !SongSections.overlapsChorus(start, end, sectionsA) &&
                 sectionsB.none { it.isChorus && entry > it.startMs && entry < it.endMs }
+        // Dónde canta cada una de verdad (null: no se sabe). Solo en sesiones de DJ: en listas B empieza por su principio.
+        val voiceA = if (isDjSession) Voice.of(outgoingLyrics, sectionsA) else null
+        val voiceB = if (isDjSession) Voice.of(incomingLyrics, sectionsB) else null
 
         val barsA = effectiveBars(outgoingAudio, durA)
         val barsB = effectiveBars(incomingAudio, durB)
@@ -159,8 +172,21 @@ object DjBridgePlanner {
                     .coerceAtMost((outMaxMs - 2_000L).coerceAtLeast(0L))
                     .coerceAtLeast(0L)
                 val targetIn = incomingAdhd?.startMs ?: min(durB / 4, 30_000L)
-                inMinMs = max(inFirstSound, targetIn - ADHD_IN_EARLY_MS).coerceAtMost(durB - 25_000L).coerceAtLeast(inFirstSound)
-                inMaxMs = min(durB - 20_000L, targetIn + ADHD_IN_LATE_MS).coerceAtLeast(inMinMs + 2_000L)
+                val narrowMin = max(inFirstSound, targetIn - ADHD_IN_EARLY_MS).coerceAtMost(durB - 25_000L).coerceAtLeast(inFirstSound)
+                val narrowMax = min(durB - 20_000L, targetIn + ADHD_IN_LATE_MS).coerceAtLeast(narrowMin + 2_000L)
+                // Si en esa ventana B canta todo el rato (el trozo empieza a mitad de verso), se acerca al hueco sin voz más
+                // cercano (hasta 8 s antes o 10 s después): mejor entrar algo antes o después que entrar cantando (sonda
+                // con las canciones de Iago: B entraba a mitad de letra en ~45 % de las mezclas del DJ rápido).
+                val quietLo = max(inFirstSound, targetIn - ADHD_IN_QUIET_EARLY_MS)
+                val quietHi = min(durB - 25_000L, targetIn + ADHD_IN_QUIET_LATE_MS)
+                // Sin hueco cerca (canta sin parar), al menos al empezar una frase, no a mitad.
+                val quiet = voiceB?.takeIf { it.gapStarts(narrowMin, narrowMax, VOICE_GAP_B_MS, VOICE_END_GAP_MS).isEmpty() }?.let { v ->
+                    (v.gapStarts(quietLo, quietHi, VOICE_GAP_B_MS, VOICE_END_GAP_MS).ifEmpty { null }
+                        ?: v.startsIn(narrowMin, narrowMax).ifEmpty { v.startsIn(quietLo, quietHi) })
+                        .minByOrNull { abs(it - targetIn) }
+                }
+                inMinMs = if (quiet != null) min(narrowMin, quiet) else narrowMin
+                inMaxMs = if (quiet != null) max(narrowMax, quiet) else narrowMax
             }
             else -> {
                 // DJ Normal: el cambio no tiene por qué ir pegado al final de A ni al principio de B (lo pidió Iago):
@@ -254,16 +280,21 @@ object DjBridgePlanner {
         // salidas sin voz por definición y la poda por compases podía dejarlas fuera (sobre todo con estribillos largos).
         val sectionExitsA = sectionsA.map { it.endMs + SongSections.VOCAL_TAIL_MS }
             .filter { it in outMinMs..(outMaxMs - 2_000L) }
+        // Y al acabar cada frase cantada tras la que hay hueco para una mezcla corta (por las palabras de la letra): los
+        // compases «tranquilos» se eligen por su energía, no por la voz, y muchas veces caían encima de un verso.
+        val voiceExitsA = voiceA?.gapStarts(outMinMs, outMaxMs - 2_000L, VOICE_GAP_A_MS, VOICE_END_GAP_MS).orEmpty().takeLast(12)
         val candidatesA = (selectOutCandidateBars(barsA, outMinMs, outMaxMs, durA) +
             phraseA.filter { it in outMinMs..(outMaxMs - 2_000L) }.map { barAt(barsA, it) } +
-            sectionExitsA.map { barAt(barsA, it) }).distinctBy { it.startMs }
+            sectionExitsA.map { barAt(barsA, it) } + voiceExitsA.map { barAt(barsA, it) }).distinctBy { it.startMs }
         // En sesiones de DJ, B también puede entrar justo al acabar un bloque cantado suyo (estribillo o verso): son las
         // entradas sin voz por definición (antes solo tras un estribillo, y B entraba cantando aunque hubiera un hueco).
         val chorusExitsB = if (!isDjSession) emptyList() else sectionsB
             .map { it.endMs + SongSections.VOCAL_TAIL_MS }.filter { it in inMinMs..inMaxMs }
+        // Sin hueco en la ventana, los comienzos de frase (B entra con su primera palabra, no a mitad).
+        val voiceEntriesB = voiceB?.let { v -> v.gapStarts(inMinMs, inMaxMs, VOICE_GAP_B_MS, VOICE_END_GAP_MS).ifEmpty { v.startsIn(inMinMs, inMaxMs) } }.orEmpty().take(8)
         val candidatesB = (selectInCandidateBars(barsB, inMinMs, inMaxMs, durB, !isDjSession) +
             phraseB.filter { it in inMinMs..inMaxMs }.map { barAt(barsB, it) } +
-            chorusExitsB.map { barAt(barsB, it) }).distinctBy { it.startMs }
+            chorusExitsB.map { barAt(barsB, it) } + voiceEntriesB.map { barAt(barsB, it) }).distinctBy { it.startMs }
         val zoneTimbreShock = hasTimbreShock(representativeBar(candidatesA), representativeBar(candidatesB))
 
         // 1. Evaluar `LyricLoopCut` (prioridad alta si ambas letras reales coinciden con intensidades compatibles).
@@ -374,27 +405,54 @@ object DjBridgePlanner {
         // Descartes por estribillo, por lado (para atribuir un «sin mezcla» en `oto.mix`).
         var rejChorusA = 0
         var rejChorusB = 0
+        val minVoiceFit = if (adhd) MIN_VOICE_FIT_ADHD_MS else MIN_VOICE_FIT_MS
         /**
-         * DJ rápido: 0 si la mezcla es limpia; si no, cuánto se castiga en el cubo relajado. Cortar la letra de A es lo que
-         * más se nota (escucha del 24/11: «salida en medio del estribillo/verso» en casi todas), luego entrar a mitad de
-         * verso de B, y por último no caer en frase. Antes valían todas lo mismo (−3) y ganaba una que cortaba la letra.
+         * (A canta mientras aún se oye, B canta antes de mandar) con una mezcla de [dur] que empieza en [start] de A y entra
+         * en [entry] de B (a [ratio] de velocidad). Sin letra ni bloques de un lado, ese lado no cuenta.
          */
-        fun adhdFault(cand: CandidatePair): Double {
-            if (!adhd || cand.style == DjBridgeStyle.LyricLoopCut) return 0.0
-            val refOut = cand.phraseOutMs ?: cand.cueOutStartMs
-            val onPhraseA = phraseA.isEmpty() || phraseA.any { abs(it - refOut) <= beatTolA }
-            val onPhraseB = phraseB.isEmpty() || phraseB.any { abs(it - cand.entryInMs) <= beatTolB }
-            val outVoc = DjLyricMatcher.vocalOccupancyRatio(outgoingLyrics, cand.cueOutStartMs, cand.cueOutEndMs)
-                ?: vocalOverlapSections(sectionsA, cand.cueOutStartMs, cand.cueOutEndMs)
+        fun voiceClash(start: Long, entry: Long, dur: Long, ratio: Double, style: DjBridgeStyle = DjBridgeStyle.SmartFade): Pair<Boolean, Boolean> {
+            val a = voiceA != null && voiceA.freeFrom(start) + VOICE_SLACK_MS < (dur * audibleShareA(style)).roundToLong()
+            val b = voiceB != null && voiceB.freeFrom(entry) + VOICE_SLACK_MS < (dur * ratio * B_QUIET_SHARE).roundToLong() &&
+                !voiceB.startsAt(entry)
+            return a to b
+        }
+        /**
+         * La mezcla de [dur] acortada lo justo para que quepa en los huecos sin voz de las dos (nunca por debajo de
+         * [minDur]; si ni así cabe, [dur] y la pareja se va al cubo relajado). Antes cada estilo tenía su duración fija
+         * (4,5–8,5 s) y un hueco de 3 s tras un estribillo acababa con la mezcla encima del verso siguiente.
+         */
+        fun voiceFit(
+            start: Long, entry: Long, dur: Long, ratio: Double, minDur: Long = minVoiceFit,
+            style: DjBridgeStyle = DjBridgeStyle.SmartFade,
+        ): Long {
+            val a = voiceA?.freeFrom(start)?.let { ((it + VOICE_SLACK_MS) / audibleShareA(style)).toLong() } ?: Long.MAX_VALUE
+            val b = voiceB?.freeFrom(entry)?.let { ((it + VOICE_SLACK_MS) / (B_QUIET_SHARE * ratio)).toLong() } ?: Long.MAX_VALUE
+            val fit = minOf(dur, a, b)
+            return if (fit >= min(minDur, dur)) fit else dur
+        }
+        /**
+         * 0 si la mezcla es limpia; si no, cuánto se castiga en el cubo relajado (que solo gana si no hay ninguna limpia).
+         * En todos los modos del DJ (antes solo en el rápido; en el normal la voz solo restaba puntos y ganaban fundidos
+         * encima de un verso): que A cante mientras aún se oye es lo que más se nota (escuchas del 24 y 25/11), luego que B
+         * entre cantando, y en el DJ rápido, no caer en frase.
+         */
+        fun fault(cand: CandidatePair): Triple<Double, Boolean, Boolean> {
+            if (!isDjSession || cand.style == DjBridgeStyle.LyricLoopCut) return Triple(0.0, false, false)
             // El corte al drop tiene su propia guarda (no parte palabras y solo corta la voz en la costura pre-estribillo →
-            // estribillo, que es justo donde debe cortar).
-            val cutsA = cand.style != DjBridgeStyle.EnergyDropCut && (
-                inSection(sectionsA, cand.cueOutStartMs) || DjLyricMatcher.isMidVocal(outgoingLyrics, cand.cueOutStartMs) ||
-                    (outVoc != null && outVoc > 0.25)
-                )
-            val cutsB = inSection(sectionsB, cand.entryInMs) || DjLyricMatcher.isMidVocal(incomingLyrics, cand.entryInMs)
-            if (!onPhraseA || !onPhraseB) rejPhrase++ else if (cutsA || cutsB) rejVocal++
-            return (if (!onPhraseA || !onPhraseB) 2.0 else 0.0) + (if (cutsA) 7.0 else 0.0) + (if (cutsB) 4.0 else 0.0)
+            // estribillo, que es justo donde debe cortar; B entra en su golpe).
+            val (singA, singB) = if (cand.style == DjBridgeStyle.EnergyDropCut) false to false
+                else voiceClash(cand.cueOutStartMs, cand.entryInMs, cand.transitionDurMs, cand.tempoRatio, cand.style)
+            val cutsA = singA || (cand.style != DjBridgeStyle.EnergyDropCut && DjLyricMatcher.isMidVocal(outgoingLyrics, cand.cueOutStartMs))
+            val cutsB = singB || DjLyricMatcher.isMidVocal(incomingLyrics, cand.entryInMs)
+            var onPhrase = true
+            if (adhd) {
+                val refOut = cand.phraseOutMs ?: cand.cueOutStartMs
+                onPhrase = (phraseA.isEmpty() || phraseA.any { abs(it - refOut) <= beatTolA }) &&
+                    (phraseB.isEmpty() || phraseB.any { abs(it - cand.entryInMs) <= beatTolB })
+            }
+            if (cutsA || cutsB) rejVocal++ else if (!onPhrase) rejPhrase++
+            val penalty = (if (!onPhrase) 2.0 else 0.0) + (if (cutsA) 7.0 else 0.0) + (if (cutsB) 4.0 else 0.0)
+            return Triple(penalty, cutsA || cutsB, cutsA)
         }
         /**
          * Si [pastChorusTail] retrasó el arranque solo por la cola vocal, la frase de referencia sigue siendo el compás
@@ -424,12 +482,15 @@ object DjBridgePlanner {
                 return
             }
             val cand = raw.copy(score = raw.score + adhdLanding(raw))
-            val fault = adhdFault(cand)
-            if (fault == 0.0) {
+            val (penalty, cutsVoice, cutsVoiceA) = fault(cand)
+            if (penalty == 0.0) {
                 if (best == null || cand.score > best!!.score) best = cand
             } else {
-                val relaxed = cand.copy(score = cand.score - fault)
-                if (bestRelaxed == null || relaxed.score > bestRelaxed!!.score) bestRelaxed = relaxed
+                val relaxed = cand.copy(score = cand.score - penalty, cutsVoice = cutsVoice, cutsVoiceA = cutsVoiceA)
+                // Entre relajadas: sin cortar la voz > B entra cantando > A canta mientras se va; a igualdad, la puntuación.
+                fun rank(c: CandidatePair) = if (!c.cutsVoice) 0 else if (!c.cutsVoiceA) 1 else 2
+                val better = bestRelaxed.let { r -> r == null || rank(relaxed) < rank(r) || (rank(relaxed) == rank(r) && relaxed.score > r.score) }
+                if (better) bestRelaxed = relaxed
             }
         }
 
@@ -483,9 +544,17 @@ object DjBridgePlanner {
                 // La entrada de B (escucha del 24/11: «entrada en letra» y «mucha intensidad con la salida muy floja»):
                 // cantando nada más entrar o a mitad de verso, y un salto grande de volumen o de batería entre lo que se va
                 // y lo que entra. Antes solo restaba ~0,5 × la voz y una entrada cantada ganaba a un hueco sin voz.
+                // Intensidad (escucha del 25/11: «lo de coincidencias de intensidad está un poco mal»; sonda: en ~25 % B
+                // quedaba 4 dB más fuerte y en otro ~25 % más floja): lo que suena de A al empezar a irse frente a lo que
+                // suena de B cuando ya manda (no en su primer compás, que aún no se oye), en las dos direcciones; subir de
+                // golpe se nota más que bajar.
+                val bLead = barAt(barsB, rawEntry + (defaultMixDur * 0.8).roundToLong())
+                val loudJump = bLead.lufs - bOut.lufs
+                val drumJump = bLead.drumEnergy - bOut.drumEnergy
+                val intensityPenalty = 0.45 * (loudJump - 2.5).coerceIn(0.0, 6.0) + 0.30 * (-loudJump - 3.0).coerceIn(0.0, 6.0) +
+                    1.4 * (drumJump - 0.22).coerceAtLeast(0.0) + 0.9 * (-drumJump - 0.30).coerceAtLeast(0.0)
                 val entryPenalty = 1.4 * entryVocals + (if (midVocalIn) 1.8 else 0.0) +
-                    0.35 * (lufsDiffLocal - 3.0).coerceIn(0.0, 6.0) +
-                    1.2 * (bIn.drumEnergy - bOut.drumEnergy - 0.25).coerceAtLeast(0.0)
+                    0.20 * (lufsDiffLocal - 3.0).coerceIn(0.0, 6.0) + intensityPenalty
                 // Aproximación (ventanas fijas, tope instrumental) de si esta pareja se podría cuadrar: SOLO para no
                 // castigar el fundido cuando el cuadre no es posible. Las puertas reales están en cada estilo.
                 val pairMayBeatMatch = beatReliable &&
@@ -499,16 +568,20 @@ object DjBridgePlanner {
                     val barsCount = if (autoLength) {
                         if (tandaChanged) 4 else if (bpmRel.relDiffPct <= 3.5 && harmonic >= 0.72) 6 else 4
                     } else 0
-                    val mixDur = if (barsCount > 0) {
+                    val fullMixDur = if (barsCount > 0) {
                         (barsCount * 4.0 * beatA).roundToLong().coerceIn(5_500L, min(14_000L, max(5_500L, durA - bOut.startMs)))
                     } else {
                         defaultMixDur.coerceAtMost(max(4_500L, durA - bOut.startMs))
                     }
                     // Que la mezcla no rebase la zona útil de A, y que arranque en un compás de A y en su beat (con B
                     // también en su beat): si no, los bombos de las dos van desfasados toda la mezcla.
-                    val startGrid = onGridStart(bOut.startMs, outMinMs, outMaxMs - mixDur, barsA, outgoingAudio)
-                    val startOut = pastChorusTail(startGrid, outMaxMs - mixDur)
+                    val startGrid = onGridStart(bOut.startMs, outMinMs, outMaxMs - fullMixDur, barsA, outgoingAudio)
+                    val startOut = pastChorusTail(startGrid, outMaxMs - fullMixDur)
                     val beatEntry = snapEntry(rawEntry)
+                    // Si no cabe sin voz, en compases enteros (al menos dos): el cuadre sigue cayendo en frase.
+                    val barMsA = 4.0 * beatA
+                    val mixDur = voiceFit(startOut, beatEntry, fullMixDur, bpmRel.ratioOutOverIn, max(minVoiceFit, (2 * barMsA).roundToLong()), DjBridgeStyle.BeatMatchLongMix)
+                        .let { fit -> if (fit >= fullMixDur) fullMixDur else ((fit / barMsA).toInt().coerceAtLeast(2) * barMsA).roundToLong() }
                     // Mejor si B entra en un cambio de sección y A termina la mezcla en otro (frases enteras).
                     val phraseFit = 0.6 * sectionLift(barsB, bIn) + 0.4 * sectionLift(barsA, nearestBar(barsA, startOut + mixDur))
                     val outVocWin = DjLyricMatcher.vocalOccupancyRatio(outgoingLyrics, startOut, startOut + mixDur)
@@ -611,11 +684,12 @@ object DjBridgePlanner {
                     (outgoingAudio?.beatGrid?.size ?: 0) >= 8 &&
                     avgDrumA < 0.52
                 val maxEchoDur = if (echoCanBeatMatch) 8_500L else 6_800L
-                val echoDur = (defaultMixDur * (if (echoCanBeatMatch) 0.90 else 0.78)).roundToLong()
+                val echoDurFull = (defaultMixDur * (if (echoCanBeatMatch) 0.90 else 0.78)).roundToLong()
                     .coerceIn(4_500L, min(maxEchoDur, max(4_500L, durA - bOut.startMs)))
-                val echoGrid = onGridStart(bOut.startMs, outMinMs, outMaxMs - echoDur, barsA, outgoingAudio)
-                val echoStart = pastChorusTail(echoGrid, outMaxMs - echoDur)
+                val echoGrid = onGridStart(bOut.startMs, outMinMs, outMaxMs - echoDurFull, barsA, outgoingAudio)
+                val echoStart = pastChorusTail(echoGrid, outMaxMs - echoDurFull)
                 val echoEntry = if (echoCanBeatMatch) snapEntry(rawEntry) else rawEntry
+                val echoDur = voiceFit(echoStart, echoEntry, echoDurFull, if (echoCanBeatMatch) bpmRel.ratioOutOverIn else 1.0, style = DjBridgeStyle.FilterEcho)
                 val beatEcho = if (useBeatEcho) straightEchoMs(beatA) else 0.0
                 val trueTimbreReason = zoneTimbreShock && pairTimbreShock
                 val calmZoneFilterBoost = 1.30 * outLowIntensity + 0.65 * inCalmZone
@@ -662,11 +736,12 @@ object DjBridgePlanner {
                 val localCalmPair = bOut.drumEnergy < 0.30 || bIn.drumEnergy < 0.30 ||
                     (outLowIntensity >= 0.45 && inCalmZone >= 0.35)
                 val maxFadeDur = 7_200L
-                val fadeDur = (if (fadeTempoClose) (defaultMixDur * 0.85).roundToLong() else (defaultMixDur * 0.78).roundToLong())
+                val fadeDurFull = (if (fadeTempoClose) (defaultMixDur * 0.85).roundToLong() else (defaultMixDur * 0.78).roundToLong())
                     .coerceIn(4_000L, min(maxFadeDur, max(4_000L, durA - bOut.startMs)))
-                val fadeGrid = onGridStart(bOut.startMs, outMinMs, outMaxMs - fadeDur, barsA, outgoingAudio)
-                val fadeStart = pastChorusTail(fadeGrid, outMaxMs - fadeDur)
+                val fadeGrid = onGridStart(bOut.startMs, outMinMs, outMaxMs - fadeDurFull, barsA, outgoingAudio)
+                val fadeStart = pastChorusTail(fadeGrid, outMaxMs - fadeDurFull)
                 val fadeEntry = if (fadeTempoClose) snapEntry(rawEntry) else rawEntry
+                val fadeDur = voiceFit(fadeStart, fadeEntry, fadeDurFull, 1.0)
                 // Fundido a tempo (opcional en el renderizador, `beatAligned = true`): B al tempo de A y en fase durante el
                 // cruce, y vuelta a 1× ya sola. Pide lo mismo que el cuadre en las ventanas reales del fundido: bombo al
                 // pulso en las dos (A en su cruce, B en el audio que gasta), límite 6 % con voz / 8 % instrumental en el
@@ -728,6 +803,20 @@ object DjBridgePlanner {
             }
         }
 
+        // Tiempos del corte con eco (al drop o al final de una frase): un beat de arranque, 3–4 beats de eco y respiro.
+        val bpmEff = when {
+            bpmA <= 20.0 -> 120.0
+            bpmA < 85.0 -> bpmA * 2.0
+            bpmA > 168.0 -> bpmA * 0.5
+            else -> bpmA
+        }
+        val effBeatA = 60_000.0 / bpmEff
+        val gapBeats = if (bpmEff > 112.0) 4.0 else 3.0
+        val preDropGap = (effBeatA * 0.5).roundToLong().coerceIn(180L, 460L)
+        val gapEchoMs = (effBeatA * gapBeats).roundToLong().coerceIn(1_200L, 2_700L)
+        val pickup = effBeatA.roundToLong().coerceIn(380L, 750L)
+        val echoStepMs = (effBeatA * (if (bpmEff > 126.0) 2.0 else 1.0)).coerceIn(380.0, 950.0)
+
         // B. `EnergyDropCut`: A sube hacia un estribillo/drop y, justo cuando iba a caer, se calla (eco amplio a pulso
         // + respiro de tensión) y entra el riser de B hasta el drop de B. Nunca cortar palabras, frases ni en mitad de estribillo.
         run {
@@ -749,18 +838,6 @@ object DjBridgePlanner {
                 bIn.drumEnergy >= 0.36 && bIn.lufs >= avgLufsB - 1.5 &&
                     (rise(barsB, bIn).first >= 0.9 || bIn.drumEnergy >= 0.48 || bIn.kickSteady >= 0.55)
             }
-            val bpmEff = when {
-                bpmA <= 20.0 -> 120.0
-                bpmA < 85.0 -> bpmA * 2.0
-                bpmA > 168.0 -> bpmA * 0.5
-                else -> bpmA
-            }
-            val effBeatA = 60_000.0 / bpmEff
-            val gapBeats = if (bpmEff > 112.0) 4.0 else 3.0
-            val preDropGap = (effBeatA * 0.5).roundToLong().coerceIn(180L, 460L)
-            val gapEchoMs = (effBeatA * gapBeats).roundToLong().coerceIn(1_200L, 2_700L)
-            val pickup = effBeatA.roundToLong().coerceIn(380L, 750L)
-            val echoStepMs = (effBeatA * (if (bpmEff > 126.0) 2.0 else 1.0)).coerceIn(380.0, 950.0)
             for ((barA, liftA) in dropExits) {
                 val atBreak = barA.startMs in breaksA
                 val dropAt = snapToBeat(barA.startMs, outgoingAudio, outMinMs + 2_000L, outMaxMs)
@@ -845,10 +922,15 @@ object DjBridgePlanner {
         val fallbackDur = 6_000L.coerceAtMost(durA)
         // DJ rápido: antes los límites de frase (B en su entrada prevista, A tras acabar un bloque), y fuera de la
         // ventana también: mejor salir algo tarde que no mezclar y oír la canción entera hasta el final.
-        val fallbackEntry = (phraseB.filter { it in inMinMs..inMaxMs }.sortedBy { abs(it - (incomingAdhd?.startMs ?: it)) } +
+        val minFallback = if (adhd) 2_000L else MIN_FALLBACK_FADE_MS
+        val entryOptions = (phraseB.filter { it in inMinMs..inMaxMs }.sortedBy { abs(it - (incomingAdhd?.startMs ?: it)) } +
             listOf(inMinMs) + sectionsB.filter { it.isChorus }.flatMap { listOf(it.startMs, it.endMs + SongSections.VOCAL_TAIL_MS) } +
             listOfNotNull(inMaxMs.takeIf { adhd }))
-            .firstOrNull { it in inMinMs..inMaxMs && sectionsB.none { s -> s.isChorus && it > s.startMs && it < s.endMs } }
+            .filter { it in inMinMs..inMaxMs && sectionsB.none { s -> s.isChorus && it > s.startMs && it < s.endMs } }
+        // Mejor una por la que B no entre cantando ni con el respaldo más corto.
+        val fallbackEntry = entryOptions.firstOrNull {
+            voiceB == null || voiceB.freeFrom(it) + VOICE_SLACK_MS >= (minFallback * B_QUIET_SHARE).roundToLong()
+        } ?: entryOptions.firstOrNull()
             // Toda la ventana cae dentro de un estribillo de B (su trozo empieza a mitad de uno): se entra en el borde más
             // cercano (su inicio o su final) aunque quede fuera. Antes no había mezcla y el aviso de la cola desaparecía
             // (medido el 17/11 en DJ rápido, dos veces en 15 min).
@@ -868,57 +950,144 @@ object DjBridgePlanner {
             val limit = if (outgoingAdhd.fallbackExit) outMaxMs else max(outMaxMs, outgoingAdhd.endMs + ADHD_FALLBACK_OUT_LATE_MS)
             min(durA - AdhdPlanner.FALLBACK_END_MARGIN_MS, limit)
         } else durA
-        val minFallback = if (adhd) 2_000L else MIN_FALLBACK_FADE_MS
         fun fallbackLen(start: Long): Long = min(fallbackDur, fallbackEnd - start)
-        val fallbackStarts = (phraseA.filter { it >= outMinMs && !inSection(sectionsA, it) } +
+        // Entradas de B por las que no entra cantando (además de las de antes, los huecos de su voz en la ventana): antes el
+        // respaldo entraba siempre por la misma y en ~1/4 de las mezclas B entraba a mitad de una frase.
+        val quietEntries = (entryOptions + voiceEntriesB).distinct().filter { e ->
+            e in inMinMs..inMaxMs && sectionsB.none { s -> s.isChorus && e > s.startMs && e < s.endMs } &&
+                (voiceB == null || voiceB.freeFrom(e) >= QUIET_ENTRY_MS || voiceB.startsAt(e))
+        }.sortedBy { voiceB?.startsAt(it) == true && voiceB.freeFrom(it) < QUIET_ENTRY_MS }
+        /**
+         * El respaldo desde [start]: (duración, entrada de B), acortado para que A no cante mientras aún se oye y, si se
+         * puede, por una entrada de B sin voz; null si A canta aunque sea con el mínimo.
+         */
+        fun cleanFit(start: Long, maxLen: Long = fallbackLen(start)): Pair<Long, Long>? {
+            val base = fallbackEntry ?: return null
+            var withVoiceB: Pair<Long, Long>? = null
+            for (entry in quietEntries + base) {
+                val len = voiceFit(start, entry, maxLen, 1.0, minFallback)
+                if (len < min(fallbackDur, minFallback)) continue
+                val (a, b) = voiceClash(start, entry, len, 1.0)
+                if (a) continue
+                if (!b) return len to entry
+                if (withVoiceB == null) withVoiceB = len to entry
+            }
+            return withVoiceB
+        }
+        fun usable(start: Long, len: Long, entry: Long?): Boolean = start >= outMinMs && start <= outLastSound - 1_500L &&
+            entry != null && protectsChorus(start, start + len, entry)
+        // Además de los límites de frase y los finales de bloque, el final de cada frase cantada de A (por sus palabras):
+        // los huecos de voz que no separan bloques también son salidas si cabe el fundido.
+        val startOptions = (phraseA.filter { it >= outMinMs && !inSection(sectionsA, it) } +
             listOf(outMinMs, (outMaxMs - fallbackDur).coerceAtLeast(outMinMs)) +
             listOfNotNull(outgoingAdhd?.fadeOutStartMs.takeIf { adhd }) +
-            sectionsA.map { it.endMs + SongSections.VOCAL_TAIL_MS }).distinct().filter {
-            val len = fallbackLen(it)
-            it >= outMinMs && len >= min(fallbackDur, minFallback) && it <= outLastSound - 1_500L &&
-                fallbackEntry != null && protectsChorus(it, it + len, fallbackEntry)
-        }
-        val windowFallbackStart = fallbackStarts.minWithOrNull(
-            // Mejor con los 6 s enteros; entre iguales, DJ rápido el primero (sale de su trozo cuanto antes) y el resto el
-            // más cercano al final de A (antes era el primero de la ventana: hasta 75 s antes del final en DJ normal).
-            compareBy<Long>({ fallbackLen(it) < fallbackDur }, { if (adhd) it else abs(outLastSound - fallbackDur - it) }),
-        )
-        // DJ rápido sin salida limpia en su ventana (toda cae en un estribillo de A): antes de ese estribillo, si el trozo ya
-        // ha sonado [ADHD_EARLY_EXIT_MIN_LISTEN_MS]; la más tardía (lo más cerca del final previsto), y mejor en un límite
-        // de frase sin voz. Antes se esperaba a que acabara el estribillo, que solía ser el final de la canción (escucha
-        // del 24/11: fundidos de respaldo a 153 de 160 s y a 199 de 204 s, en pleno estribillo).
-        val earlyFallbackStart = if (windowFallbackStart == null && adhd && outgoingAdhd != null && fallbackEntry != null) {
+            sectionsA.map { it.endMs + SongSections.VOCAL_TAIL_MS } +
+            voiceA?.endsIn(outMinMs, fallbackEnd).orEmpty().map { it + VOICE_END_GAP_MS }).distinct()
+        // Mejor con los 6 s enteros; entre iguales, DJ rápido el primero (sale de su trozo cuanto antes) y el resto el más
+        // cercano al final de A (antes era el primero de la ventana: hasta 75 s antes del final en DJ normal).
+        // (inicio, duración, entrada de B)
+        val fallbackOrder = compareBy<Triple<Long, Long, Long>>({ it.second < fallbackDur }, { if (adhd) it.first else abs(outLastSound - fallbackDur - it.first) })
+        val cleanWindow = startOptions
+            .mapNotNull { s -> cleanFit(s)?.let { (len, entry) -> Triple(s, len, entry) } }
+            .filter { (s, len, entry) -> usable(s, len, entry) }.minWithOrNull(fallbackOrder)
+        // DJ rápido sin salida limpia en su ventana (toda cae en un estribillo de A, o canta sin parar): antes, si el trozo
+        // ya ha sonado [ADHD_EARLY_EXIT_MIN_LISTEN_MS], la más tardía SIN VOZ (al acabar un bloque o una frase). Antes
+        // también valía «el estribillo menos 6 s», que fundía encima del verso que lleva a él (escucha del 25/11).
+        val earlyClean = if (cleanWindow == null && adhd && outgoingAdhd != null && fallbackEntry != null) {
             val earliest = outgoingAdhd.startMs + ADHD_EARLY_EXIT_MIN_LISTEN_MS
-            fun fits(start: Long) = start in earliest until outMinMs && start + fallbackDur <= outLastSound &&
-                protectsChorus(start, start + fallbackDur, fallbackEntry)
-            phraseA.filter { !inSection(sectionsA, it) && fits(it) }.maxOrNull()
-                ?: (sectionsA.filter { it.isChorus }.map { it.startMs - fallbackDur } +
-                    sectionsA.map { it.endMs + SongSections.VOCAL_TAIL_MS }).filter(::fits).maxOrNull()
+            // «El estribillo menos el fundido» vuelve a valer, pero solo si ahí A no canta (lo mira [cleanFit]).
+            (phraseA.filter { !inSection(sectionsA, it) } + sectionsA.map { it.endMs + SongSections.VOCAL_TAIL_MS } +
+                sectionsA.filter { it.isChorus }.map { it.startMs - fallbackDur } +
+                voiceA?.endsIn(earliest, outMinMs).orEmpty().map { it + VOICE_END_GAP_MS })
+                .filter { it in earliest until outMinMs }
+                .mapNotNull { s ->
+                    val (len, entry) = cleanFit(s, fallbackDur) ?: return@mapNotNull null
+                    Triple(s, len, entry).takeIf { len >= minFallback && s + len <= outLastSound && protectsChorus(s, s + len, entry) }
+                }.maxByOrNull { it.first }
         } else null
-        val fallbackStart = windowFallbackStart ?: earlyFallbackStart
-        val fallbackLength = when {
-            windowFallbackStart != null -> fallbackLen(windowFallbackStart)
-            earlyFallbackStart != null -> fallbackDur
-            else -> 0L
+        // Sin hueco sin voz donde mezclar (estribillos que se repiten hasta el final, voz sin pausas): corte con eco al acabar
+        // un bloque cantado, como pidió Iago para el corte (25/11): deja acabar la frase, corta y deja eco y reverb hasta que
+        // entra B. Nunca a mitad de un estribillo: al final de un bloque (o de una vuelta de uno repetido largo). Sonda con
+        // sus canciones: sin esto, ~1/3 del DJ normal acababa en «Enlace al final» y ~1/6 del rápido «sin mezcla».
+        val phraseCut: CandidatePair? = if (!isDjSession || fallbackEntry == null || voiceA == null || sectionsA.isEmpty()) null else run {
+            val lo = (if (adhd && outgoingAdhd != null) outgoingAdhd.startMs + ADHD_EARLY_EXIT_MIN_LISTEN_MS else outMinMs) + pickup
+            val hi = min(if (adhd) fallbackEnd else outMaxMs, outLastSound - gapEchoMs)
+            val target = if (adhd) outgoingAdhd?.fadeOutStartMs ?: outMaxMs else outLastSound
+            val cuts = sectionsA.mapNotNull { s ->
+                val cut = (voiceA.lastEndBefore(s.endMs + 50L) ?: return@mapNotNull null) + PHRASE_CUT_TAIL_MS
+                cut.takeIf {
+                    it in lo..hi && voiceA.freeFrom(it) >= PHRASE_CUT_TAIL_MS &&
+                        !DjLyricMatcher.cutsWordOrPhrase(outgoingLyrics, it) && ChorusSafety.cutAllowed(it, sectionsA)
+                }?.let { it to s.isChorus }
+            }
+            // Mejor tras un estribillo; entre iguales, lo más cerca de la salida prevista (DJ rápido) o del final (normal).
+            cuts.minWithOrNull(compareBy({ !it.second }, { abs(it.first - target) }))?.first?.let { cut ->
+                // B entra entera tras el silencio: por un sitio en el que no esté cantando y, entre esos, con una intensidad
+                // parecida a la de A justo antes del corte (escucha del 25/11: «lo de coincidencias de intensidad está mal»).
+                val levelA = nearestBar(barsA, cut - 600L)
+                val cutEntry = quietEntries.minByOrNull { e ->
+                    val bar = nearestBar(barsB, e + 1_000L)
+                    abs(bar.lufs - levelA.lufs) / 3.0 + abs(bar.drumEnergy - levelA.drumEnergy) / 0.25
+                } ?: fallbackEntry
+                CandidatePair(
+                    style = DjBridgeStyle.EnergyDropCut,
+                    cueOutStartMs = (cut - pickup).coerceAtLeast(0L),
+                    cueOutEndMs = cut,
+                    entryInMs = snapEntry(cutEntry),
+                    transitionDurMs = pickup + gapEchoMs + 750L,
+                    pickupMs = pickup,
+                    silenceMs = gapEchoMs,
+                    tempoRatio = 1.0,
+                    echoDelayMs = echoStepMs,
+                    score = 1.5,
+                    phraseOutMs = cut,
+                    reason = "Corte con eco al acabar la frase + respiro (${gapEchoMs} ms)",
+                )
+            }
         }
+        // Sin letra no hay voz que mirar: el respaldo de siempre (fuera de estribillos).
+        val legacy = if (fallbackEntry == null) null else startOptions.map { Triple(it, fallbackLen(it), fallbackEntry) }
+            .filter { (s, len, entry) -> len >= min(fallbackDur, minFallback) && usable(s, len, entry) }.minWithOrNull(fallbackOrder)
         // Ventanas y descartes: sin esto un «sin mezcla» no se podía repartir entre la salida de A y la entrada de B.
         val noMixWhy = "descartes por estribillo A $rejChorusA, B $rejChorusB; ventana A %.1f–%.1f s, B %.1f–%.1f s".format(
             outMinMs / 1000.0, outMaxMs / 1000.0, inMinMs / 1000.0, inMaxMs / 1000.0,
         ) + (if (fallbackEntry == null) "; B sin entrada fuera de estribillo" else "")
         val outroCanKeepSegment = !adhd || outgoingAdhd == null || outgoingAdhd.endMs >= durA
-        val outro = outroCanKeepSegment && fallbackStart == null && fallbackEntry != null && durA >= PRE_ROLL_MS * 2 &&
+        val outroPossible = outroCanKeepSegment && fallbackEntry != null && durA >= PRE_ROLL_MS * 2 &&
             durB - fallbackEntry >= POST_ROLL_MS + OUTRO_TAIL_MS
+        // Orden: limpia > relajada sin cortar la voz (DJ rápido fuera de frase) > respaldo sin voz > corte con eco al acabar
+        // un bloque > B entra cantando >
+        // enlace al final (A entera: «correcto, aunque simple», 24/11) > A canta mientras se va > respaldo de siempre.
+        val relaxedNoVoice = bestRelaxed?.takeIf { !it.cutsVoice }
+        val relaxedBOnly = bestRelaxed?.takeIf { it.cutsVoice && !it.cutsVoiceA }
+        val cleanFallback = cleanWindow ?: earlyClean
+        val mixWinner = best ?: relaxedNoVoice
+        val useFallback = mixWinner == null && (cleanFallback != null ||
+            (phraseCut == null && relaxedBOnly == null && !outroPossible && bestRelaxed == null))
+        val chosenFallback = if (!useFallback) null else cleanFallback ?: legacy
+        val cutWinner = if (mixWinner == null && chosenFallback == null) phraseCut else null
+        val fallbackStart = chosenFallback?.first
+        val fallbackLength = chosenFallback?.second ?: 0L
+        val earlyFallbackStart = earlyClean?.first?.takeIf { chosenFallback === earlyClean }
+        val outro = mixWinner == null && chosenFallback == null && cutWinner == null && relaxedBOnly == null && outroPossible
+        val bestRelaxedUsed = if (mixWinner == null && chosenFallback == null && cutWinner == null && !outro) bestRelaxed else null
+        trace?.invoke(
+            "ventana A $outMinMs–$outMaxMs (último sonido $outLastSound, dur $durA) B $inMinMs–$inMaxMs · cand A ${candidatesA.size} B ${candidatesB.size} · " +
+                "limpia ${best != null} relajada ${bestRelaxed?.let { "${it.style}/voz ${it.cutsVoice}/A ${it.cutsVoiceA}" }} · " +
+                "estribillo A $rejChorusA B $rejChorusB voz $rejVocal frase $rejPhrase · respaldo limpio $cleanWindow pronto $earlyClean de siempre $legacy · " +
+                "entrada respaldo $fallbackEntry · enlace posible $outroPossible · corte con eco ${phraseCut?.cueOutEndMs}",
+        )
         // If whole-track analysis found dead air at the end, start B there while keeping every sample of A.
         val outroBStart = if (outro && fallbackEntry != null && outgoingAudio?.coversWholeSong == true) {
             val lastChorusEnd = sectionsA.filter { it.isChorus }.maxOfOrNull { it.endMs + SongSections.VOCAL_TAIL_MS } ?: 0L
             val overlapBudget = min(MAX_OUTRO_SILENCE_OVERLAP_MS, durB - fallbackEntry - POST_ROLL_MS)
             maxOf(outLastSound + 300L, lastChorusEnd, durA - overlapBudget).coerceAtMost(durA)
         } else durA
-        val winner = best ?: bestRelaxed ?: CandidatePair(
+        val winner = mixWinner ?: cutWinner ?: bestRelaxedUsed ?: CandidatePair(
             style = if (outro) DjBridgeStyle.OutroTail else DjBridgeStyle.SmartFade,
             cueOutStartMs = fallbackStart ?: (if (outro) outroBStart - OUTRO_DRY_A_MS else durA),
             cueOutEndMs = fallbackStart?.plus(fallbackLength) ?: durA,
-            entryInMs = fallbackEntry ?: inMinMs,
+            entryInMs = chosenFallback?.third ?: fallbackEntry ?: inMinMs,
             transitionDurMs = if (outro) OUTRO_DRY_A_MS + max(OUTRO_TAIL_MS, durA - outroBStart) else fallbackLength,
             pickupMs = 0L,
             silenceMs = 0L,
@@ -928,14 +1097,18 @@ object DjBridgePlanner {
             reason = when {
                 outro -> "Enlace al final: se conserva el estribillo completo"
                 fallbackStart == null -> "Sin mezcla: proteger el estribillo completo ($noMixWhy)"
-                fallbackStart == earlyFallbackStart -> "Fundido antes del estribillo (el trozo sale antes; $noMixWhy)"
-                fallbackLength < fallbackDur -> "Fundido corto tras el estribillo completo"
+                fallbackStart == earlyFallbackStart -> "Fundido al acabar la voz (el trozo sale antes; $noMixWhy)"
+                chosenFallback !== cleanFallback -> "Fundido tras el estribillo completo (sin letra que mirar)"
+                fallbackLength < fallbackDur -> "Fundido corto al acabar la voz"
                 else -> "Fundido tras el estribillo completo"
             },
         )
-        val phraseNote = if (!adhd) "" else when {
-            best != null -> ", en frase"
-            bestRelaxed != null -> ", FUERA de frase (descartes: frase $rejPhrase, voz $rejVocal)"
+        val voiceNote = if (bestRelaxedUsed != null) ", corta la voz (no había otra)" else ""
+        val phraseNote = when {
+            !adhd -> voiceNote
+            winner === best -> ", en frase"
+            winner === relaxedNoVoice -> ", FUERA de frase (descartes: frase $rejPhrase, voz $rejVocal)"
+            bestRelaxedUsed != null -> ", FUERA de frase (descartes: frase $rejPhrase, voz $rejVocal)$voiceNote"
             else -> ", respaldo"
         }
         // Bombo de la pareja ELEGIDA, en las mismas ventanas que miró la puerta (la de B en audio de B: cruce × ratio).
@@ -952,7 +1125,7 @@ object DjBridgePlanner {
             append("estira %.1f %%".format(applied))
             if (abs(applied - stretchPct) >= 0.05) append(" (pareja %.1f %%)".format(stretchPct))
             append(phraseNote)
-            if (best == null && bestRelaxed == null) append(" ($noMixWhy)")
+            if (winner !== best && winner !== relaxedNoVoice && winner !== bestRelaxedUsed) append(" ($noMixWhy)")
             if (aligned) {
                 append(" (lím %.0f %%), bombo A %.2f B %.2f".format(winner.stretchLimit ?: limitSeen, winKickA, winKickB))
                 append(
@@ -1264,6 +1437,97 @@ object DjBridgePlanner {
 
     /** Mismos umbrales que usa el DJ al elegir canciones cuadrables (viven en [DjTempoMatch]). */
     private fun isBeatMatchReady(m: AudioMetrics?): Boolean = DjTempoMatch.isBeatMatchReady(m)
+
+    /**
+     * Parte de la mezcla en la que aún se oye la saliente (el resto ya está a −12 dB o menos): ahí no puede cantar.
+     * Escucha del 25/11 y sonda con las canciones de Iago: en ~60 % de las mezclas la saliente seguía cantando mientras
+     * se iba. Depende del estilo: con filtro y eco el seco de A cae enseguida; en el cuadre A sigue casi entera hasta el
+     * relevo de graves.
+     */
+    internal fun audibleShareA(style: DjBridgeStyle): Double = when (style) {
+        DjBridgeStyle.FilterEcho -> 0.45
+        DjBridgeStyle.BeatMatchLongMix -> 0.75
+        else -> 0.6
+    }
+    /** Parte de la mezcla (en audio de B) antes de la cual la entrante no debe cantar: aún no manda. */
+    internal const val B_QUIET_SHARE = 0.5
+    /** Lo que se tolera de voz en esas partes (una sílaba que se alarga, un error de la letra). */
+    private const val VOICE_SLACK_MS = 200L
+    /** Lo más corta que se deja una mezcla para que quepa en un hueco sin voz. */
+    private const val MIN_VOICE_FIT_MS = 3_000L
+    private const val MIN_VOICE_FIT_ADHD_MS = 2_000L
+    /** Tras la última palabra de una frase, antes de empezar a bajar (su cola). */
+    private const val VOICE_END_GAP_MS = 250L
+    /** Corte con eco al acabar un bloque: tras su última palabra (la cola de la sílaba), y sin la primera del siguiente. */
+    private const val PHRASE_CUT_TAIL_MS = 150L
+    /** Una entrada de B «sin voz»: no canta en al menos esto desde ella. */
+    private const val QUIET_ENTRY_MS = 1_000L
+    /**
+     * B que entra justo al empezar una frase (como mucho esto antes de su primera palabra) no entra «a mitad de letra»:
+     * en canciones que cantan sin parar es la mejor entrada que hay (sonda del 25/11: el trozo del DJ rápido empezaba
+     * a mitad de un verso en ~1/4 de las mezclas).
+     */
+    private const val PHRASE_START_LEAD_MS = 250L
+    /** Hueco sin voz tras una frase para que sea candidata de salida (A) o de entrada (B). */
+    private const val VOICE_GAP_A_MS = 1_200L
+    private const val VOICE_GAP_B_MS = 1_500L
+
+    /**
+     * Dónde canta una canción, por las palabras de su letra sincronizada (no por la línea: en las letras de LRCLIB una
+     * línea dura hasta que empieza la siguiente, también sobre los huecos instrumentales); sin letra, por sus bloques.
+     */
+    internal class Voice private constructor(private val spans: List<LongRange>) {
+        /** Cuánto falta desde [ms] hasta que vuelva a cantar (0 si canta en [ms]; muy grande si ya no canta más). */
+        fun freeFrom(ms: Long): Long {
+            for (s in spans) {
+                if (s.last <= ms + 40L) continue
+                return if (s.first <= ms - 40L) 0L else (s.first - ms).coerceAtLeast(0L)
+            }
+            return Long.MAX_VALUE / 4
+        }
+
+        /** Si en [ms] empieza una frase (B entra con ella, desde su primera palabra: no a mitad). */
+        fun startsAt(ms: Long): Boolean = spans.any { it.first in (ms - 60L)..(ms + PHRASE_START_LEAD_MS) }
+
+        /** Dónde empieza cada frase cantada en `[from, to]` (un poco antes, para no comerse la primera sílaba). */
+        fun startsIn(from: Long, to: Long): List<Long> = spans.map { it.first - 40L }.filter { it in from..to }
+
+        /** Dónde acaba la última frase cantada que termina antes de [ms] (null si ninguna). */
+        fun lastEndBefore(ms: Long): Long? = spans.lastOrNull { it.last <= ms }?.last
+
+        /** Dónde acaba cada frase cantada en `[from, to]`. */
+        fun endsIn(from: Long, to: Long): List<Long> = spans.map { it.last }.filter { it in from..to }
+
+        /** Puntos en `[from, to]` tras los que no se canta en al menos [minGapMs]: [from] mismo y el final de cada frase + [tailMs]. */
+        fun gapStarts(from: Long, to: Long, minGapMs: Long, tailMs: Long): List<Long> {
+            val out = ArrayList<Long>()
+            if (freeFrom(from) >= minGapMs) out += from
+            for (i in spans.indices) {
+                val at = spans[i].last + tailMs
+                if (at < from || at > to) continue
+                val next = spans.getOrNull(i + 1)?.first ?: Long.MAX_VALUE / 4
+                if (next - at >= minGapMs) out += at
+            }
+            return out
+        }
+
+        companion object {
+            fun of(lyrics: Lyrics.Synced?, sections: List<SongSection>): Voice? {
+                val raw = lyrics?.lines?.mapNotNull { line ->
+                    val words = line.words + line.bg
+                    val end = words.maxOfOrNull { it.end } ?: if (line.end > line.start + 300L) line.end else return@mapNotNull null
+                    val start = words.minOfOrNull { it.start }?.let { min(it, line.start) } ?: line.start
+                    if (end > start) start..end else null
+                }?.takeIf { it.isNotEmpty() } ?: sections.map { it.startMs..it.endMs }.takeIf { it.isNotEmpty() } ?: return null
+                val merged = ArrayList<LongRange>()
+                for (r in raw.sortedBy { it.first }) {
+                    val last = merged.lastOrNull()
+                    if (last != null && r.first <= last.last + 120L) merged[merged.size - 1] = last.first..max(last.last, r.last) else merged += r
+                }
+                return Voice(merged)
+            }
+        }
+    }
 
     /** Eco a pulso de negra (`1.0 * beatMs`, o `0.5 * beatMs` si el tempo detectado es muy lento) para caer siempre sobre el pulso. */
     private fun straightEchoMs(beatMs: Double): Double {

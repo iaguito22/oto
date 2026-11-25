@@ -14,9 +14,31 @@ object ChorusSafety {
     fun allowsLive(sourcePositionMs: Long, fadeMs: Long, sourceSpeed: Double, outgoing: List<SongSection>): Boolean =
         !SongSections.overlapsChorus(sourcePositionMs, sourcePositionMs + (fadeMs * sourceSpeed).roundToLong(), outgoing)
 
+    /**
+     * Lo mismo para [plan] empezando en [sourcePositionMs]. En un corte ([DjBridgeStyle.EnergyDropCut]) A suena tal cual
+     * hasta el corte y nada después: solo importa dónde corta ([cutAllowed]). Mirar todo su arranque impedía el corte con
+     * eco al acabar un estribillo (su último beat es estribillo) y la mezcla nunca empezaba.
+     */
+    fun allowsLive(plan: DjTransitionPlan, sourcePositionMs: Long, sourceSpeed: Double, outgoing: List<SongSection>): Boolean =
+        if (plan.bridgeSpec?.style == DjBridgeStyle.EnergyDropCut) cutAllowed(sourcePositionMs + outgoingSpanMs(plan), outgoing)
+        else allowsLive(sourcePositionMs, outgoingSpanMs(plan), sourceSpeed, outgoing)
+
+    /**
+     * Un corte en [cutMs] no interrumpe ningún estribillo: o antes de que empiece (ni un ms dentro: se oiría su golpe) o
+     * en su último segundo, tras su última palabra (con tiempos estimados el bloque acaba hasta 1 s después de ella, ver
+     * `SongSections.sungEnd`; que no corte una palabra lo mira quien planifica).
+     */
+    fun cutAllowed(cutMs: Long, outgoing: List<SongSection>): Boolean =
+        outgoing.none { it.isChorus && cutMs > it.startMs && cutMs < it.endMs - CUT_END_SLACK_MS }
+
+    private const val CUT_END_SLACK_MS = 1_000L
+
     fun allows(spec: DjBridgeSpec, outgoing: List<SongSection>, incoming: List<SongSection>): Boolean {
         if (spec.transitionDurationMs <= 0L) return true
         val entry = spec.entryInMs + spec.kickShiftMs.roundToLong()
+        if (spec.style == DjBridgeStyle.EnergyDropCut) {
+            return cutAllowed(spec.cueOutEndMs, outgoing) && incoming.none { it.isChorus && entry > it.startMs && entry < it.endMs }
+        }
         val overlapStart = if (spec.style == DjBridgeStyle.OutroTail) {
             spec.outroIncomingOffsetMs?.let { spec.cueOutStartMs + it } ?: spec.cueOutEndMs
         } else spec.cueOutStartMs

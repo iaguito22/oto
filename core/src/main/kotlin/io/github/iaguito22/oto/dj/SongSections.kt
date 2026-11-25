@@ -232,9 +232,16 @@ object SongSections {
         return (listOf(a) + cuts).zip(cuts.map { it - 1 } + listOf(b))
     }
 
-    /** Lo que de verdad dura la voz: con tiempos estimados, el fin de la línea llega hasta la siguiente. */
+    /**
+     * Lo que de verdad dura la voz. Con tiempos estimados la última palabra puede quedarse algo corta y el fin de la línea
+     * llega hasta la siguiente; pero no más de [ESTIMATED_TAIL_MS] tras su última palabra: en las letras de LRCLIB la
+     * última línea dura hasta el final de la canción (medido: «Hell no» acaba a 139 s y la línea a 154 s) y el último
+     * estribillo tapaba el outro instrumental: no se podía mezclar en él y salía «Enlace al final» (37 % en DJ normal).
+     */
     private fun sungEnd(l: Line): Long {
         val lastWord = (l.words + l.bg).maxOfOrNull { it.end } ?: l.end
-        return if (l.real) maxOf(lastWord, l.start) else maxOf(lastWord, l.start, l.end)
+        return if (l.real) maxOf(lastWord, l.start) else maxOf(lastWord, l.start, minOf(l.end, lastWord + ESTIMATED_TAIL_MS))
     }
+
+    private const val ESTIMATED_TAIL_MS = 1_000L
 }

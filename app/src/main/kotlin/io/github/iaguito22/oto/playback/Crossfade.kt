@@ -939,7 +939,10 @@ class Crossfade(
                 val sourceNow = t.currentPosition
                 val spans = sectionsFor(currentItem?.mediaId.orEmpty())
                 val maxSourceSpeed = maxOf(t.playbackParameters.speed, tailSpeed, 1f).toDouble()
-                if (simple || ChorusSafety.allowsLive(sourceNow, outgoingSpan, maxSourceSpeed, spans)) {
+                // En un corte (en drop o con eco al acabar un bloque) solo cuenta dónde corta: ver [ChorusSafety.allowsLive].
+                val liveOk = if (plan != null && plan.fadeDurationMs > 0L) ChorusSafety.allowsLive(plan, sourceNow, maxSourceSpeed, spans)
+                    else ChorusSafety.allowsLive(sourceNow, outgoingSpan, maxSourceSpeed, spans)
+                if (simple || liveOk) {
                     if (!deferredForChorus) break
                     // Restore B's entry after holding A, then recheck after B's seek/buffer delay.
                     seekSession(next, nextStartMs)
