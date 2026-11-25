@@ -19,7 +19,68 @@ internal sealed interface TransitionAction {
  * Planifica cuando arrancar la mezcla entre pistas (modo normal y DJ rapido ADHD)
  * y calcula el tiempo real escuchado dentro del segmento activo.
  */
+/**
+ * El corte en drop en el PC (Iago, 25/11: «debería dejar sonar el runner up del preestribillo, cortar justo en el peak y
+ * no dejar sonar el drop/estribillo, y dejar un poco de silencio con eco y reverb hasta que entra la otra canción, en
+ * plan dar incertidumbre»). Antes el PC lo hacía como un fundido de 3,5 s y se oía el drop de A mientras bajaba.
+ * Todo va en ms de cada canción ([BandsCue]): A se corta en [cutMs] y queda su eco (a pulso) y una reverb que se apagan
+ * antes de que entre B; B suena solo desde un respiro con filtro (riser) justo antes de [entryMs] y entra entera en él.
+ */
+internal data class DropCutScript(
+    val cutMs: Long,
+    val gapMs: Long,
+    val entryMs: Long,
+    /** Dónde arranca B (en silencio) para tener su riser. */
+    val bStartMs: Long,
+    val outgoing: List<BandsCue>,
+    val incoming: List<BandsCue>,
+) {
+    /** Cuándo (posición de A) hay que arrancar B para que llegue a [entryMs] al acabar el silencio, si tarda [lagMs] en sonar. */
+    fun resumeBAtMs(lagMs: Long): Long = cutMs + gapMs - (entryMs - bStartMs) - lagMs
+}
+
 internal object DesktopTransitionPlanner {
+    /** El corte en drop del plan ([DjBridgeStyle.EnergyDropCut]) como cambios de mezcla en cada canción. */
+    fun dropCutScript(spec: io.github.iaguito22.oto.dj.DjBridgeSpec): DropCutScript {
+        val cut = spec.cueOutEndMs
+        val pickup = spec.pickupMs.coerceAtLeast(250L)
+        val gap = spec.silenceMs.coerceIn(400L, 3_200L)
+        val bpm = when {
+            spec.bpmA <= 20.0 -> 120.0
+            spec.bpmA < 85.0 -> spec.bpmA * 2.0
+            spec.bpmA > 168.0 -> spec.bpmA * 0.5
+            else -> spec.bpmA
+        }
+        val beat = 60_000.0 / bpm
+        // El eco repite el último beat antes del corte: cabe en lo que suena desde que empieza la mezcla.
+        val echoDelay = minOf(spec.echoDelayMs.toLong(), pickup - 120L).coerceIn(200L, 950L).toInt()
+        val breath = (beat * 0.9).toLong().coerceIn(200L, gap / 2)
+        val riser = beat.toLong().coerceIn(300L, 700L).coerceAtMost(gap / 2)
+        val fill = MixBands(echoWet = 0.001f, echoFeedback = 0.5f, echoDelayMs = echoDelay, reverbWet = 0.001f)
+        // Como el puente del móvil (`DjBridgeRenderer.renderEnergyDropCut`: 0,72 eco + 0,22 reverb): la cola, por debajo del seco.
+        val tail = MixBands(overall = 0f, echoWet = 0.6f, echoFeedback = 0.5f, echoDelayMs = echoDelay, reverbWet = 0.18f)
+        val ducked = tail.copy(echoWet = 0.02f, reverbWet = 0.01f)
+        val outgoing = listOf(
+            BandsCue(cut - pickup - 50L, fill),
+            BandsCue(cut, tail),
+            BandsCue(cut + gap - breath, tail),
+            BandsCue(cut + gap, ducked, ramp = true),
+            BandsCue(cut + gap + 300L, ducked.copy(echoWet = 0f, reverbWet = 0f), ramp = true),
+        )
+        val entry = spec.entryInMs
+        val riserFrom = entry - riser
+        val bStart = (riserFrom - 250L).coerceAtLeast(0L)
+        val incoming = buildList {
+            add(BandsCue(0L, MixBands(overall = 0f)))
+            if (riserFrom > bStart) {
+                add(BandsCue(riserFrom, MixBands(overall = 0.12f, low = 0.15f, mid = 0.35f, high = 0.1f)))
+                add(BandsCue(entry - 15L, MixBands(overall = 0.55f, low = 0.5f, mid = 1f, high = 1f), ramp = true))
+            }
+            add(BandsCue(entry, MixBands.NEUTRAL))
+        }
+        return DropCutScript(cut, gap, entry, bStart, outgoing, incoming)
+    }
+
     fun effectiveAdhdCrossfadeMs(configuredFadeSeconds: Int, ramSaver: Boolean): Long {
         if (ramSaver) return 0L
         val configured = configuredFadeSeconds.coerceAtLeast(0) * 1000L
@@ -85,7 +146,7 @@ internal object DesktopTransitionPlanner {
     /** Si la mezcla de [plan] puede empezar en [positionMs] sin que A suene dentro de un estribillo. */
     internal fun liveSafe(plan: DjTransitionPlan, positionMs: Long, outgoingSections: List<SongSection>): Boolean {
         val from = if (positionMs - plan.outgoingFadeStartMs in 0L..LATE_OK_MS) plan.outgoingFadeStartMs else positionMs
-        return ChorusSafety.allowsLive(from, ChorusSafety.outgoingSpanMs(plan), 1.0, outgoingSections)
+        return ChorusSafety.allowsLive(plan, from, 1.0, outgoingSections)
     }
 
     fun withFallback(

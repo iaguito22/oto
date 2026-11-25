@@ -74,6 +74,7 @@ import io.github.iaguito22.oto.dj.Kind
 import io.github.iaguito22.oto.dj.Memory
 import io.github.iaguito22.oto.dj.Play
 import io.github.iaguito22.oto.dj.Profile
+import io.github.iaguito22.oto.dj.RadioTempoOrder
 import io.github.iaguito22.oto.dj.SongSections
 import io.github.iaguito22.oto.dj.Track
 import io.github.iaguito22.oto.dj.adhdSegment
@@ -601,8 +602,10 @@ class PlaybackService : MediaLibraryService() {
                 if (isActive && analysisCache.get(id)?.coversWholeSong != true) {
                     runCatching { audioAnalyzer.analyzeIfCached(id, keyOf(id)) }
                 }
-                // Con el tempo de esta ya medido, el DJ puede cambiarla si no se podrá cuadrar con la de antes.
+                // Con el tempo de esta ya medido, el DJ puede cambiarla si no se podrá cuadrar con la de antes, y la radio
+                // reordenar lo que viene (como en el PC).
                 if (isActive && dj != null) withContext(Dispatchers.Main) { retuneDjTempo() }
+                else if (isActive && radio != null) withContext(Dispatchers.Main) { retuneRadioTempo() }
             }
             // Sin `writer = null` aquí: cada escritor se borra solo si sigue siendo el suyo (un trabajo cancelado que
             // sale tarde no puede quitar la referencia del nuevo).
@@ -1082,6 +1085,8 @@ class PlaybackService : MediaLibraryService() {
                     player.prepare()
                 }
                 Timber.d("radio: +%d", fresh.size)
+                // Lo nuevo puede tener ya el tempo medido (índice de tempo de otras veces).
+                retuneRadioTempo()
             }
             if (!session.needsRefill(kept.size + fresh.size, index)) return
             if (pagesRequested == RADIO_PAGES) {
@@ -1095,6 +1100,29 @@ class PlaybackService : MediaLibraryService() {
             page.onSuccess(session::offer).onFailure { Timber.w(it, "radio") }
             if (page.isFailure) delay(RADIO_RETRY_MS)
         }
+    }
+
+    /**
+     * Radio: reordena lo que viene detrás de la siguiente (nunca la siguiente, cuya mezcla ya se prepara, ni lo que pusiste
+     * tú) para que cada una se pueda cuadrar en tempo y tono con la de antes, igual que el PC ([RadioTempoOrder]; Iago,
+     * 25/11: «para la radio del móvil aplica los mismos cambios que en el PC»). Solo con tempos ya medidos; con el
+     * aleatorio puesto no se toca (el orden físico no es el de la cola).
+     */
+    private fun retuneRadioTempo() {
+        if (radio == null || dj != null || player.shuffleModeEnabled) return
+        val from = player.currentMediaItemIndex + 2
+        var end = from
+        while (end < player.mediaItemCount && end - from < RadioTempoOrder.LOOKAHEAD + 2 && !player.getMediaItemAt(end).isManual) end++
+        if (end - from < 2 || from - 1 !in 0 until player.mediaItemCount || player.getMediaItemAt(from - 1).isManual) return
+        val ids = (from until end).map { player.getMediaItemAt(it).mediaId }
+        if (ids.toSet().size != ids.size) return
+        val order = RadioTempoOrder.reorder(analysisCache, player.getMediaItemAt(from - 1).mediaId, ids)
+        if (order == ids) return
+        for ((i, id) in order.withIndex()) {
+            val at = (from + i until end).firstOrNull { player.getMediaItemAt(it).mediaId == id } ?: return
+            if (at != from + i) player.moveMediaItem(at, from + i)
+        }
+        Timber.tag("oto.mix").i("Radio: reordenada por tempo: %s", order.joinToString())
     }
 
     private fun insertManually(song: MediaItem, next: Boolean) {

@@ -17,12 +17,49 @@ internal data class MixBands(
     val echoWet: Float = 0f,
     val echoFeedback: Float = 0.45f,
     val echoDelayMs: Int = 320,
+    /** Retorno de la reverb (0: apagada). La reverb se alimenta siempre de lo que suena mientras está encendida. */
+    val reverbWet: Float = 0f,
 ) {
     val isNeutral: Boolean
-        get() = low == 1f && mid == 1f && high == 1f && highPassHz <= 0f && echoWet <= 0f
+        get() = low == 1f && mid == 1f && high == 1f && highPassHz <= 0f && echoWet <= 0f && reverbWet <= 0f
+
+    /** De esta a [to] en la proporción [t] (0..1): para las rampas programadas del corte. */
+    fun lerp(to: MixBands, t: Float): MixBands {
+        val u = t.coerceIn(0f, 1f)
+        fun f(a: Float, b: Float) = a + (b - a) * u
+        return MixBands(
+            overall = f(overall, to.overall), low = f(low, to.low), mid = f(mid, to.mid), high = f(high, to.high),
+            highPassHz = f(highPassHz, to.highPassHz), echoWet = f(echoWet, to.echoWet), echoFeedback = f(echoFeedback, to.echoFeedback),
+            echoDelayMs = if (u < 1f) echoDelayMs else to.echoDelayMs, reverbWet = f(reverbWet, to.reverbWet),
+        )
+    }
 
     companion object {
         val NEUTRAL = MixBands()
+    }
+}
+
+/**
+ * Un cambio de mezcla en una posición exacta de la canción (ms de la fuente), no del reloj: el reproductor lo aplica en
+ * el bloque de audio que la contiene (≈ 10 ms), aunque el bucle de la mezcla vaya a saltos de 16 ms y la tarjeta tenga
+ * 128 ms en cola. Con [ramp], se llega a [bands] poco a poco desde el anterior.
+ */
+internal data class BandsCue(val atSourceMs: Long, val bands: MixBands, val ramp: Boolean = false) {
+    companion object {
+        /** Lo que toca en [ms] y cuándo cambia (null: ya no cambia más). null si aún no ha llegado ninguno. */
+        fun at(cues: List<BandsCue>, ms: Long): Pair<MixBands, Long?>? {
+            val i = cues.indexOfLast { it.atSourceMs <= ms }
+            val next = cues.getOrNull(i + 1)
+            if (i < 0) return null
+            val cur = cues[i]
+            if (next != null && next.ramp && next.atSourceMs > cur.atSourceMs) {
+                val t = (ms - cur.atSourceMs).toFloat() / (next.atSourceMs - cur.atSourceMs)
+                return cur.bands.lerp(next.bands, t) to minOf(next.atSourceMs, ms + RAMP_STEP_MS)
+            }
+            return cur.bands to next?.atSourceMs
+        }
+
+        private const val RAMP_STEP_MS = 10L
     }
 }
 
@@ -212,8 +249,12 @@ internal class StereoBandFilter(
     private var echoWrite = 0
     private var echoLpL = 0f
     private var echoLpR = 0f
+    private var curReverbWet = 0f
+    private var reverb: SmallRoom? = null
 
     fun reset() {
+        curReverbWet = 0f
+        reverb?.clear()
         lowL.reset(); highL.reset()
         lowR.reset(); highR.reset()
         hpfL.reset(); hpfR.reset()
@@ -234,7 +275,8 @@ internal class StereoBandFilter(
         echoR?.fill(0f)
     }
 
-    fun processPcm16(buffer: ByteArray, byteCount: Int, bands: MixBands, masterGain: Float, inputScale: Float = 1f) {
+    /** Procesa `[startByte, byteCount)` de [buffer] (por tramos, para aplicar un cambio programado a mitad de bloque). */
+    fun processPcm16(buffer: ByteArray, byteCount: Int, bands: MixBands, masterGain: Float, inputScale: Float = 1f, startByte: Int = 0) {
         val targetMaster = if (masterGain.isFinite()) masterGain.coerceIn(0f, 2f) else 1f
         val targetOverall = if (bands.overall.isFinite()) bands.overall.coerceIn(0f, 1.5f) else 1f
         val targetLow = if (bands.low.isFinite()) bands.low.coerceIn(0f, 2f) else 1f
@@ -247,8 +289,10 @@ internal class StereoBandFilter(
         val targetHpfHz = if (rawHpfHz > 20f) rawHpfHz else curHpfHz
         val targetEchoWet = if (bands.echoWet.isFinite()) bands.echoWet.coerceIn(0f, 0.9f) else 0f
         val feedback = if (bands.echoFeedback.isFinite()) bands.echoFeedback.coerceIn(0f, 0.85f) else 0.45f
+        val targetReverbWet = if (bands.reverbWet.isFinite()) bands.reverbWet.coerceIn(0f, 1f) else 0f
 
         if (!initialized) {
+            curReverbWet = targetReverbWet
             curMaster = targetMaster
             curOverall = targetOverall
             curLow = targetLow
@@ -270,11 +314,14 @@ internal class StereoBandFilter(
         }
         val eL = echoL
         val eR = echoR
+        val needReverb = curReverbWet > 0.0005f || targetReverbWet > 0.0005f
+        val room = if (needReverb) reverb ?: SmallRoom(sampleRate).also { reverb = it } else null
 
         val limit = byteCount - (byteCount % 4)
-        var i = 0
+        var i = startByte - (startByte % 4)
         var frame = 0
         while (i < limit) {
+            curReverbWet += SMOOTH_ALPHA * (targetReverbWet - curReverbWet)
             curMaster += SMOOTH_ALPHA * (targetMaster - curMaster)
             curOverall += SMOOTH_ALPHA * (targetOverall - curOverall)
             curLow += SMOOTH_ALPHA * (targetLow - curLow)
@@ -320,8 +367,10 @@ internal class StereoBandFilter(
                 dryR = dryR * (1f - curHpfWet) + hpfR.high * curHpfWet
             }
 
-            var outL = dryL * curOverall
-            var outR = dryR * curOverall
+            val sendL = dryL * curOverall
+            val sendR = dryR * curOverall
+            var outL = sendL
+            var outR = sendR
 
             if (needEcho && eL != null && eR != null) {
                 var readPos = echoWrite - delaySamples
@@ -331,11 +380,18 @@ internal class StereoBandFilter(
                 // Amortiguación cálida de agudos en la realimentación del eco (~4.5 kHz).
                 echoLpL += 0.35f * (delL - echoLpL)
                 echoLpR += 0.35f * (delR - echoLpR)
-                eL[echoWrite] = (outL + echoLpL * feedback).coerceIn(-32768f, 32768f)
-                eR[echoWrite] = (outR + echoLpR * feedback).coerceIn(-32768f, 32768f)
+                eL[echoWrite] = (sendL + echoLpL * feedback).coerceIn(-32768f, 32768f)
+                eR[echoWrite] = (sendR + echoLpR * feedback).coerceIn(-32768f, 32768f)
                 echoWrite = if (echoWrite + 1 >= maxDelay) 0 else echoWrite + 1
                 outL += delL * curEchoWet
                 outR += delR * curEchoWet
+            }
+
+            // La reverb se alimenta del seco (con su volumen): al cortarlo, queda su cola.
+            if (room != null) {
+                room.step(sendL, sendR)
+                outL += room.outL * curReverbWet
+                outR += room.outR * curReverbWet
             }
 
             outL *= curMaster
@@ -355,6 +411,76 @@ internal class StereoBandFilter(
     private companion object {
         // Suavizado ~5 ms por muestra a 48 kHz: elimina saltos entre trozos sin retardar el fundido.
         const val SMOOTH_ALPHA = 0.004f
+    }
+}
+
+/**
+ * Reverb de sala pequeña (Schroeder/Freeverb: cuatro peines con amortiguación y dos pasatodo por canal) para la cola del
+ * corte en drop: lo último de la saliente sigue sonando un momento en el silencio, como en el puente del móvil
+ * (`DjDsp.stereoReverb`). Cola de ~1,5 s con [ROOM] 0,82.
+ */
+internal class SmallRoom(sampleRate: Float = 48_000f) {
+    private class Comb(size: Int) {
+        private val buf = FloatArray(size)
+        private var i = 0
+        private var store = 0f
+        fun step(x: Float, feedback: Float, damp: Float): Float {
+            val y = buf[i]
+            store = y * (1f - damp) + store * damp
+            buf[i] = x + store * feedback
+            i = if (i + 1 >= buf.size) 0 else i + 1
+            return y
+        }
+        fun clear() { buf.fill(0f); store = 0f; i = 0 }
+    }
+
+    private class AllPass(size: Int) {
+        private val buf = FloatArray(size)
+        private var i = 0
+        fun step(x: Float): Float {
+            val b = buf[i]
+            buf[i] = x + b * 0.5f
+            i = if (i + 1 >= buf.size) 0 else i + 1
+            return b - x
+        }
+        fun clear() { buf.fill(0f); i = 0 }
+    }
+
+    private val scale = sampleRate / 44_100f
+    private fun n(samples: Int) = (samples * scale).roundToInt().coerceAtLeast(1)
+    private val combsL = listOf(1116, 1188, 1277, 1356).map { Comb(n(it)) }
+    private val combsR = listOf(1116, 1188, 1277, 1356).map { Comb(n(it + 23)) }
+    private val apsL = listOf(556, 441).map { AllPass(n(it)) }
+    private val apsR = listOf(556, 441).map { AllPass(n(it + 23)) }
+
+    var outL = 0f
+        private set
+    var outR = 0f
+        private set
+
+    fun step(inL: Float, inR: Float) {
+        val x = (inL + inR) * INPUT_GAIN
+        var l = 0f
+        var r = 0f
+        for (c in combsL) l += c.step(x, ROOM, DAMP)
+        for (c in combsR) r += c.step(x, ROOM, DAMP)
+        for (a in apsL) l = a.step(l)
+        for (a in apsR) r = a.step(r)
+        outL = if (l.isFinite()) l * OUT_GAIN else 0f
+        outR = if (r.isFinite()) r * OUT_GAIN else 0f
+    }
+
+    fun clear() {
+        combsL.forEach { it.clear() }; combsR.forEach { it.clear() }
+        apsL.forEach { it.clear() }; apsR.forEach { it.clear() }
+        outL = 0f; outR = 0f
+    }
+
+    private companion object {
+        const val ROOM = 0.82f
+        const val DAMP = 0.3f
+        const val INPUT_GAIN = 0.015f
+        const val OUT_GAIN = 3f
     }
 }
 

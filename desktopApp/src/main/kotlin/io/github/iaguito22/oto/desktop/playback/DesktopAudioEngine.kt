@@ -201,7 +201,38 @@ class DesktopAudioEngine(
     }
 
     internal fun resetMixBands() {
+        cues = emptyList()
         mixBands = MixBands.NEUTRAL
+    }
+
+    /** Cambios de mezcla en posiciones exactas de la canción (ver [BandsCue]); mandan sobre [setMixBands] desde el primero. */
+    @Volatile private var cues: List<BandsCue> = emptyList()
+
+    internal fun scheduleBands(list: List<BandsCue>) {
+        cues = list.sortedBy { it.atSourceMs }
+    }
+
+    /**
+     * Procesa un bloque con los cambios programados: lo parte donde cae cada uno (en ms de la fuente: [startSourceMs] es
+     * el primer frame del bloque). Sin cambios programados, como siempre.
+     */
+    private fun processWithCues(pcm: ByteArray, len: Int, startSourceMs: Double) {
+        val list = cues
+        if (list.isEmpty()) {
+            bandFilter.processPcm16(pcm, len, mixBands, gainLinear, inputScale = 1f / PCM_DECODE_GAIN)
+            return
+        }
+        val frames = len / 4
+        var done = 0
+        while (done < frames) {
+            val ms = startSourceMs + done * 1000.0 / 48_000.0
+            val hit = BandsCue.at(list, ms.toLong())
+            val bands = hit?.first ?: mixBands
+            val nextMs = hit?.second ?: list.firstOrNull { it.atSourceMs > ms }?.atSourceMs
+            val until = nextMs?.let { ((it - startSourceMs) * 48.0).toInt().coerceIn(done + 1, frames) } ?: frames
+            bandFilter.processPcm16(pcm, until * 4, bands, gainLinear, inputScale = 1f / PCM_DECODE_GAIN, startByte = done * 4)
+            done = until
+        }
     }
 
     fun setTempo(tempo: Float) {
@@ -524,7 +555,9 @@ class DesktopAudioEngine(
                     applyMicroFadeIn(pcm, len, microFadeRemaining)
                     microFadeRemaining = (microFadeRemaining - len / 4).coerceAtLeast(0)
                 }
-                bandFilter.processPcm16(pcm, len, mixBands, gainLinear, inputScale = 1f / PCM_DECODE_GAIN)
+                // Primer frame del bloque en la fuente: a 1× (sin estirar) es exacto; estirando, aproximado.
+                val startSourceMs = offsetMs + (timeStretch.sourceFramesConsumed - len / 4) * 1000.0 / 48_000.0
+                processWithCues(pcm, len, startSourceMs)
                 AudioTap.write(line, pcm, len)   // fondo vivo: no hace nada si está apagado
                 line.write(pcm, 0, len)
                 emittedFrames += len / 4
@@ -699,6 +732,7 @@ class DesktopAudioEngine(
     }
 
     private fun stopInternal() {
+        cues = emptyList()
         mixBands = MixBands.NEUTRAL
         bandFilter.reset()
         timeStretch.reset(1f)

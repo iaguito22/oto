@@ -1,13 +1,11 @@
-package io.github.iaguito22.oto.desktop.playback
-
-import io.github.iaguito22.oto.dj.DjTempoMatch
+package io.github.iaguito22.oto.dj
 
 /**
  * Orden de lo que viene en la radio para que las mezclas puedan ir a tempo (Iago, 24/11: en la radio casi todo eran
  * fundidos; «se podría manipular como en DJ normal»). Son las mismas canciones y casi en el mismo orden: la radio va
  * ordenada por parecido a la canción de partida y ese estilo se conserva.
  */
-internal object RadioTempoOrder {
+object RadioTempoOrder {
     /** Cuántas de las siguientes se miran para adelantar una: más lejos ya se pierde el orden de la radio. */
     const val LOOKAHEAD = 4
 
@@ -28,6 +26,17 @@ internal object RadioTempoOrder {
      * Nuevo orden de [ids], que van detrás de [prevId]: en cada hueco, de las [LOOKAHEAD] siguientes la de mejor [rank]
      * respecto a la anterior; a igualdad, la que ya iba antes. Sin tempos medidos no cambia nada.
      */
+    /**
+     * Lo mismo con lo que ya sabe [cache] (índice de tempo y tono del análisis): lo usan el PC y el móvil (Iago, 25/11:
+     * «para la radio del móvil aplica los mismos cambios que en el PC»).
+     */
+    fun reorder(cache: AudioAnalysisCache, prevId: String, ids: List<String>): List<String> = reorder(prevId, ids) { prev, id ->
+        rankOf(
+            DjTempoMatch.tempoVerdict(cache.tempoProfile(prev), cache.tempoProfile(id)),
+            cache.get(prev)?.let { a -> cache.get(id)?.let { b -> DjHarmonic.harmonicCompatibility(a, b) } },
+        )
+    }
+
     fun reorder(prevId: String, ids: List<String>, rank: (prev: String, id: String) -> Int): List<String> {
         val left = ids.toMutableList()
         val out = ArrayList<String>(ids.size)

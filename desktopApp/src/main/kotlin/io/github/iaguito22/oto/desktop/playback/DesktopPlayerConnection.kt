@@ -829,12 +829,57 @@ class DesktopPlayerConnection(
             val (_, startInBands) = MixCurve.bands(0f, !simple && (smartMixEnabled || (plan?.useBassSwap == true)))
             deck.setMixBands(startInBands.copy(overall = 1f))
         }
-        deck.setGain(0f)
+        // Corte en drop: A se corta en su pico (en ms exactos de A) y suena su eco y reverb; B arranca justo a tiempo de
+        // entrar al acabar el silencio (ver [DropCutScript]). Solo si aún da tiempo a cortar en el sitio (si no, fundido).
+        val dropCut = if (simple || plan?.style != DjTransitionStyle.EnergyDropCut) null else
+            plan.bridgeSpec?.let(DesktopTransitionPlanner::dropCutScript)
+                ?.takeIf { old.state.value.positionMs + old.pendingOutputMs() < it.cutMs - DROP_CUT_MARGIN_MS }
+        // Si la mezcla se cancela (salto, pausa, otra cola) antes de pasar a B, A no se puede quedar cortada.
+        var dropCommitted = false
+        if (dropCut != null) {
+            deck.resetMixBands()
+            deck.scheduleBands(dropCut.incoming)
+            if (deck.state.value.positionMs != dropCut.bStartMs) deck.seekTo(dropCut.bStartMs)
+            old.scheduleBands(dropCut.outgoing)
+            currentCoroutineContext()[Job]?.invokeOnCompletion { if (!dropCommitted) old.resetMixBands() }
+            Timber.tag("oto.mix").i(
+                "Corte en drop %s -> %s: A corta en %d ms (va por %d), silencio con eco %d ms, B entra en %d ms",
+                next.currentId, next.next.id, dropCut.cutMs, old.state.value.positionMs, dropCut.gapMs, dropCut.entryMs,
+            )
+            // B arranca cuando A llega a su momento (B tarda en sonar lo que tardó la última vez).
+            val resumeAt = dropCut.resumeBAtMs(dropCutLagMs)
+            val waited = withTimeoutOrNull(dropCut.gapMs + DROP_CUT_WAIT_EXTRA_MS) {
+                while (old.state.value.positionMs < resumeAt) {
+                    if (engine !== old || !old.state.value.playing || nextMixIndex() != nextIndex || currentIndex != originalIndex) return@withTimeoutOrNull false
+                    delay(5)
+                }
+                true
+            } == true
+            if (!waited) {
+                Timber.tag("oto.mix").i("Corte en drop %s -> %s cancelado antes de entrar B", next.currentId, next.next.id)
+                old.resetMixBands()
+                deck.stop(); deck.resetMixBands(); deck.setTempo(1f); deck.setGain(volumeGain())
+                preparedNext = null; preparingKey = null
+                return
+            }
+            // B ya a su volumen final: lo que se oye lo deciden sus cambios programados (en silencio hasta su riser).
+            deck.setGain((volumeGain() * matchedIncomingGain(next.gain, plan?.incomingGainMatch ?: 1f, 1f) * transportGain).coerceIn(0f, 2f))
+        } else {
+            deck.setGain(0f)
+        }
+        val resumedAt = System.nanoTime()
         deck.resume()
 
         val started = withTimeoutOrNull(1500) { deck.state.first { it.playing && !it.buffering } } != null
+        if (dropCut != null && started) {
+            val lag = (System.nanoTime() - resumedAt) / 1_000_000L
+            Timber.tag("oto.mix").i("Corte en drop: B sonó a los %d ms (se esperaban %d)", lag, dropCutLagMs)
+            dropCutLagMs = ((dropCutLagMs * 2 + lag) / 3).coerceIn(60L, 900L)
+        }
         if (!started || nextMixIndex() != nextIndex || engine !== old || !old.state.value.playing || songQueue.getOrNull(nextIndex)?.id != next.next.id || currentIndex != originalIndex) {
             Timber.tag("oto.mix").i("Mezcla %s -> %s no arrancó (entrante lista: %s)", next.currentId, next.next.id, started)
+            // Corte en drop ya cortado: A vuelve a sonar (mejor eso que un silencio).
+            if (dropCut != null) old.resetMixBands()
             deck.stop()
             deck.resetMixBands()
             deck.setTempo(1f)
@@ -862,7 +907,8 @@ class DesktopPlayerConnection(
                 val latestSections = sectionsOf(next.currentId)
                 engine === old && currentIndex == originalIndex && old.state.value.playing &&
                     nextMixIndex() == nextIndex && songQueue.getOrNull(nextIndex)?.id == song.id && dj === activeDj &&
-                    (simple || ((plan == null || ChorusSafety.allows(plan, latestSections, sectionsOf(song.id))) &&
+                    // En el corte en drop A ya está cortada (el plan ya protegió su estribillo): aquí solo la cola.
+                    (simple || dropCut != null || ((plan == null || ChorusSafety.allows(plan, latestSections, sectionsOf(song.id))) &&
                         (if (plan != null) DesktopTransitionPlanner.liveSafe(plan, old.state.value.positionMs, latestSections)
                         else ChorusSafety.allowsLive(old.state.value.positionMs, length, 1.0, latestSections))))
             },
@@ -874,12 +920,13 @@ class DesktopPlayerConnection(
                 }
                 // Lo oído de la saliente: hasta la mitad de la mezcla que empieza ahora (no la canción entera).
                 recordPlayProgress(completed = false, mixOut = old.state.value.positionMs to length)
-                setOutgoing(old); outgoingGain = oldGain; fadeOut = 1f; fadeIn = 0f
+                // En el corte en drop las dos van a su volumen: lo que se oye lo deciden sus cambios programados.
+                setOutgoing(old); outgoingGain = oldGain; fadeOut = 1f; fadeIn = if (dropCut != null) 1f else 0f
                 preparedNext = null; preparation = null; preparingKey = null
                 currentIndex = nextIndex
                 // La igualación de volumen solo vale durante la mezcla (vuelve a `next.gain` al acabar) y nunca sube por
                 // encima de 1: antes se quedaba toda la canción, hasta ×1,45, y recortaba la salida en 16 bits.
-                currentLoudnessGain = matchedIncomingGain(next.gain, plan?.incomingGainMatch ?: 1f, 0f)
+                currentLoudnessGain = matchedIncomingGain(next.gain, plan?.incomingGainMatch ?: 1f, if (dropCut != null) 1f else 0f)
                 fullOnceTrackId = null
                 _djFullOnce.value = false
                 // B entró por la mezcla donde la puso el plan (hasta −8/+4 s del trozo): el trozo cuenta desde ahí.
@@ -917,10 +964,12 @@ class DesktopPlayerConnection(
             // Antes callaba: la mezcla se rehacía y, pasado su momento, la canción sonaba hasta el final (Battlecry, 24/11).
             Timber.tag("oto.mix").i("Mezcla %s -> %s cancelada al empezar (a %d ms): ya no era segura o cambió la cola",
                 next.currentId, song.id, old.state.value.positionMs)
+            if (dropCut != null) old.resetMixBands()
             deck.stop(); deck.resetMixBands(); deck.setTempo(1f); deck.setGain(volumeGain())
             preparedNext = null; preparingKey = null
             return
         }
+        dropCommitted = true
 
         // Ajustar duración al tiempo restante real de la saliente para que nunca llegue a EOF antes de p=1.
         val oldDur = old.state.value.durationMs
@@ -945,7 +994,24 @@ class DesktopPlayerConnection(
         var phaseCorrecting = false
         var lastPhaseAt = 0L
         try {
-            while (true) {
+            // Corte en drop: todo lo hacen los cambios programados de cada canción; aquí solo se espera a que B haya entrado
+            // y A haya acabado su cola, y se cierra A.
+            if (dropCut != null) {
+                applyDeckGains()
+                val deadline = System.nanoTime() + (dropCut.gapMs + DROP_CUT_WAIT_EXTRA_MS) * 1_000_000L
+                while (true) {
+                    val tailDone = old.state.value.positionMs >= dropCut.cutMs + dropCut.gapMs + 400L || !old.state.value.playing
+                    val bInside = deck.state.value.positionMs >= dropCut.entryMs + 300L
+                    if (tailDone && bInside) { completedCleanly = true; break }
+                    if (System.nanoTime() > deadline || engine !== deck || !deck.state.value.playing) break
+                    delay(16)
+                }
+                Timber.tag("oto.mix").i(
+                    "Corte en drop %s -> %s finalizado: clean=%s elapsed=%d ms (A en %d, B en %d)", next.currentId, song.id,
+                    completedCleanly, (System.nanoTime() - start) / 1_000_000L, old.state.value.positionMs, deck.state.value.positionMs,
+                )
+            }
+            while (dropCut == null) {
                 val p = ((System.nanoTime() - start) / 1_000_000.0 / safeLength).toFloat().coerceIn(0f, 1f)
                 if (phaseLock && plan != null && !phaseLocked && System.nanoTime() - lastPhaseAt >= 150_000_000L) {
                     lastPhaseAt = System.nanoTime()
@@ -1358,7 +1424,7 @@ class DesktopPlayerConnection(
             preparingKey?.second?.let(::add)
         }
         val upcoming = activeDj?.nextUp()?.map { it.track.id }
-            ?: djIndexGate.locked { songQueue.drop(currentIndex + 1).take(RadioTempoOrder.LOOKAHEAD + 2).map { it.id } }
+            ?: djIndexGate.locked { songQueue.drop(currentIndex + 1).take(io.github.iaguito22.oto.dj.RadioTempoOrder.LOOKAHEAD + 2).map { it.id } }
         val target = DjScout.pick(
             upcoming = upcoming,
             skip = skip,
@@ -1415,17 +1481,12 @@ class DesktopPlayerConnection(
         if (radio == null || dj != null) return@locked
         val from = currentIndex + 2
         var end = from
-        while (end < songQueue.size && end - from < RadioTempoOrder.LOOKAHEAD + 2 && songQueue[end] !in manualQueueEntries) end++
+        while (end < songQueue.size && end - from < io.github.iaguito22.oto.dj.RadioTempoOrder.LOOKAHEAD + 2 && songQueue[end] !in manualQueueEntries) end++
         if (end - from < 2 || from - 1 !in songQueue.indices || songQueue[from - 1] in manualQueueEntries) return@locked
         val slice = songQueue.subList(from, end).toList()
         val ids = slice.map { it.id }
         if (ids.toSet().size != ids.size) return@locked
-        val order = RadioTempoOrder.reorder(songQueue[from - 1].id, ids) { prev, id ->
-            RadioTempoOrder.rankOf(
-                DjTempoMatch.tempoVerdict(analysisCache.tempoProfile(prev), analysisCache.tempoProfile(id)),
-                analysisCache.get(prev)?.let { a -> analysisCache.get(id)?.let { b -> io.github.iaguito22.oto.dj.DjHarmonic.harmonicCompatibility(a, b) } },
-            )
-        }
+        val order = io.github.iaguito22.oto.dj.RadioTempoOrder.reorder(analysisCache, songQueue[from - 1].id, ids)
         if (order == ids) return@locked
         val byId = slice.associateBy { it.id }
         order.forEachIndexed { i, id -> songQueue[from + i] = byId.getValue(id) }
@@ -2553,7 +2614,14 @@ class DesktopPlayerConnection(
         const val RADIO_RETRY_MS = 8_000L
         const val DJ_NEXT_UP_COUNT = 3
         private const val DJ_TEMPO_RETRY_MS = 300L
+        /** Corte en drop: lo que tiene que faltar para el corte al empezar (si no, la mezcla va como fundido). */
+        const val DROP_CUT_MARGIN_MS = 60L
+        /** Corte en drop: margen sobre el silencio para esperar a B antes de darlo por perdido. */
+        const val DROP_CUT_WAIT_EXTRA_MS = 4_000L
     }
+
+    /** Lo que tarda B en sonar desde que se arranca (medido en cada corte en drop; ver [DropCutScript.resumeBAtMs]). */
+    @Volatile private var dropCutLagMs = 220L
 }
 
 /**

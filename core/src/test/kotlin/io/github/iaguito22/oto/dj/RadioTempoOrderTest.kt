@@ -1,6 +1,5 @@
-package io.github.iaguito22.oto.desktop.playback
+package io.github.iaguito22.oto.dj
 
-import io.github.iaguito22.oto.dj.DjTempoMatch
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
