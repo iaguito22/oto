@@ -485,6 +485,38 @@ class DjTempoQueueTest {
         assertTrue("con un tercio medido: $third ($far lejanas)", third >= 0.9)
     }
 
+    /**
+     * Escucha del 25/11: «el DJ cambia mucho de género o pone canciones muy diferentes». El tempo filtraba antes que el
+     * estilo: si solo encajaba en tempo una canción de otro género de la tanda, salía esa. Aquí tras un tema de trap a 128
+     * solo encajan en tempo las de electrónica (128); las de trap (tres artistas) van a 100. Tiene que seguir el trap.
+     */
+    @Test
+    fun theStyleComesBeforeTheTempo() = runBlocking {
+        val trapArtists = listOf("duki", "quevedo", "bzrp")
+        val trap = trapArtists.flatMap { a -> (1..6).map { Heard("$a-$it", "$a $it", a, null, a) } }
+        val edm = (1..6).map { Heard("edm-$it", "Edm $it", "edm", null, "edm") }
+        val pl = listOf(LocalPlaylist("mix", "Mix", trap + edm))
+        val genre = { t: Track -> if (t.artist == "edm") "Electrónica" else "Trap" }
+        var otherStyle = 0
+        var picks = 0
+        repeat(20) { seed ->
+            val cache = AudioAnalysisCache(file = null)
+            trap.forEach { cache.put(metrics(it.id, if (it.id == "duki-1") 128.0 else 100.0)) }
+            edm.forEach { cache.put(metrics(it.id, 128.0)) }
+            val dj = Dj(Profile(pl, emptyList(), emptyList(), emptyList(), now, utc), noCatalog, Memory(null), this, Random(seed),
+                analysisCache = cache, genreOf = genre)
+            dj.startFrom(Track("duki-1", "duki 1", listOf("duki"), listOf("duki")))
+            // La primera tras la semilla: la única que encaja en tempo es de electrónica.
+            val t = dj.next() ?: return@repeat
+            // Solo dentro de la tanda de trap: cambiar de tanda (y de estilo) al acabarla es lo esperado.
+            if (dj.tandaOf(t.id) != "Trap") return@repeat
+            picks++
+            if (t.artist == "edm") otherStyle++
+        }
+        assertTrue("sin elecciones en la tanda", picks >= 15)
+        assertTrue("de otro estilo dentro de la tanda: $otherStyle de $picks", otherStyle <= picks / 5)
+    }
+
     @Test
     fun theKickKeepsImprovingAsMoreOfTheSongIsHeard() {
         val dir = Files.createTempDirectory("oto-tempo-kick").toFile()

@@ -416,6 +416,18 @@ class Dj(
     }
 
     /**
+     * Con «Todo», cuánto pesa dentro de la tanda un artista suyo de otro estilo que el centro. Antes solo se miraba el
+     * género de cada canción, después de elegir artista: si salía un artista de otro estilo, todas sus canciones lo eran y
+     * una salía igual (escucha del 25/11: «el DJ cambia mucho de género o pone canciones muy diferentes»).
+     */
+    private fun looseArtistGenreFit(a: Profile.Artist): Double {
+        if (genre != null || !::anchor.isInitialized || a.key == anchor.key) return 1.0
+        val tandaGenre = mainGenre(anchor) ?: return 1.0
+        val g = mainGenre(a) ?: return LOOSE_UNKNOWN_GENRE_FIT
+        return if (g == tandaGenre) 1.0 else LOOSE_OTHER_ARTIST_FIT
+    }
+
+    /**
      * Con «Todo», cuánto pesa [a] como centro de la siguiente tanda según el género de la que acaba ([fromGenre]). Cuanto
      * más se lleva en ese género, más fácil es cambiar: variedad poco a poco, no un salto a cada tanda (en una hora de
      * DJ rápido, sin esto, 4 de cada 6 sesiones de prueba no cambiaban nunca de estilo).
@@ -677,6 +689,12 @@ class Dj(
                 } else null
                 if (tandaLabel != null) trackTandas[cand.track.id] = tandaLabel else trackTandas.remove(cand.track.id)
                 trackReasons[cand.track.id] = reason
+                // Para revisar una sesión escuchada: también las que se preparan por adelantado (antes solo se apuntaba la
+                // primera de cada sesión y el 25/11 no se podía saber por qué salía cada una).
+                log(
+                    "preparada: ${cand.track.artist} — ${cand.track.title} (${cand.kind.name.lowercase()}, $reason, tanda ${tandaLabel ?: "?"}, " +
+                        "género ${genreOf(cand.track) ?: "?"}, tempo ${tempoVerdictOf(cand.track)?.fit?.name ?: "no cuenta"})",
+                )
                 upcoming.addLast(StagedPick(cand, tandaLabel, reason, seg, before, after))
                 block++
             }
@@ -1109,7 +1127,7 @@ class Dj(
                 ) to baseW
             }
         }
-        return weighted(tempoGate(candidates) { it.first.track }) { it.second }?.first
+        return styleThenTempo(candidates, { it.second }) { it.first.track }?.first
     }
 
     /** Regula la proporción objetivo (~90 % conocida / ~10 % descubrimiento en modos normales; invertida en Descubrir). */
@@ -1361,21 +1379,21 @@ class Dj(
             .filter { it.songs.isNotEmpty() && allowed(it.key) }
             .toMutableList()
         while (artists.isNotEmpty()) {
-            val a = weighted(artists) { artist ->
-                val valid = artist.songs.values.filter(::ok)
-                if (valid.isEmpty()) return@weighted 0.0
-                val tempoBias = artistTempoBias(valid)
-                val base = (region[artist.key] ?: 0.0).coerceAtLeast(0.05) *
+            val bases = artists.associateWith { artist ->
+                if (artist.songs.values.none(::ok)) 0.0 else (region[artist.key] ?: 0.0).coerceAtLeast(0.05) *
                     artist.affinity.pow(0.45) *
                     artistRepeatWeight(artist.key) *
                     branchMultiplier(artist.key, setOf(artist.key), artist.vibe) *
                     artistGenreShare(artist) *
-                    tempoBias
-                base
+                    looseArtistGenreFit(artist)
+            }
+            val topBase = bases.values.maxOrNull() ?: 0.0
+            val a = weighted(artists) { artist ->
+                val base = bases[artist] ?: 0.0
+                if (base <= 0.0) 0.0 else base * artistTempoBias(artist.songs.values.filter(::ok), plausible = base >= STYLE_PLAUSIBLE * topBase)
             } ?: return null
-            val validTracks = tempoGate(a.songs.values.filter(::ok)) { it }
-            val t = weighted(validTracks) { track ->
-                val w = (profile.weight[track.key] ?: 1.0).pow(0.65) *
+            val t = styleThenTempo(a.songs.values.filter(::ok), { track ->
+                (profile.weight[track.key] ?: 1.0).pow(0.65) *
                     forgotten(track) *
                     moodFit(track, setOf(a.key)) *
                     energyArcFit(track, setOf(a.key)) *
@@ -1384,12 +1402,24 @@ class Dj(
                     branchMultiplier(track.who, setOf(a.key), effectiveVibe(track, setOf(a.key))) *
                     (if (track.key in inRadio) 1.55 else 1.0) *
                     genreFit(track, setOf(a.key))
-                w
-            }
+            }) { it }
             if (t != null) return Candidate(t, Kind.FAMILIAR, setOf(a.key), 1.0)
             artists -= a
         }
         return null
+    }
+
+    /**
+     * Primero el estilo, luego el tempo (escucha del 25/11: «el DJ cambia mucho de género o pone canciones muy
+     * diferentes»). Antes el tempo filtraba antes de pesar género, ánimo, energía y continuidad: si solo una canción
+     * encajaba en tempo, salía esa aunque fuera de otro estilo. Ahora solo cuentan las que pesan al menos
+     * [STYLE_PLAUSIBLE] de la mejor y, entre ellas, el tempo manda como antes ([tempoGate]).
+     */
+    private fun <T> styleThenTempo(items: List<T>, weight: (T) -> Double, track: (T) -> Track): T? {
+        val scored = items.map { it to weight(it) }.filter { it.second > 0.0 }
+        val top = scored.maxOfOrNull { it.second } ?: return null
+        val plausible = scored.filter { it.second >= STYLE_PLAUSIBLE * top }
+        return weighted(tempoGate(plausible) { track(it.first) }) { it.second }?.first
     }
 
     private fun eligible(kind: Kind) = pool.values.filter { it.kind == kind && ok(it.track) && near(it) > 0 }
@@ -1401,14 +1431,15 @@ class Dj(
     private fun pickDiscoveryCandidate(items: List<Candidate>): Candidate? {
         if (items.isEmpty()) return null
         val topCount = if (mood == DjMood.Descubrir) 6 else 3
-        val ranked = tempoGate(items) { it.track }.asSequence()
+        // Las mejores por estilo y afinidad, y entre ellas el tempo (antes el tempo filtraba primero: ver [styleThenTempo]).
+        val ranked = items.asSequence()
             .map { it to score(it) }
             .filter { it.second > 0.0 }
             .sortedByDescending { it.second }
             .take(topCount)
             .toList()
         if (ranked.isEmpty()) return null
-        return weighted(ranked) { it.second.pow(2.2) }?.first
+        return weighted(tempoGate(ranked) { it.first.track }) { it.second.pow(2.2) }?.first
     }
 
     private fun score(c: Candidate): Double {
@@ -1627,14 +1658,18 @@ class Dj(
         return verdicts.filter { it.second?.fit == DjTempoMatch.TempoFit.Unknown || it.second == null }.map { it.first }.ifEmpty { items }
     }
 
-    /** Peso de un artista según lo que puede poner a tempo: con alguna que encaja, mucho más; con todas lejanas, casi nada. */
-    private fun artistTempoBias(valid: List<Track>): Double {
+    /**
+     * Peso de un artista según lo que puede poner a tempo: con alguna que encaja, más; con todas lejanas, menos. Solo
+     * sube a los que ya pesan en la tanda ([plausible]): antes ×2,6 frente a ×0,12 hacía que mandaran los artistas del
+     * borde de la tanda con una canción a tempo y salían «canciones muy diferentes» (escucha del 25/11).
+     */
+    private fun artistTempoBias(valid: List<Track>, plausible: Boolean): Double {
         val fits = valid.map { tempoVerdictOf(it) }
         return when {
             fits.all { it == null } -> 1.0
-            fits.any { it?.fit == DjTempoMatch.TempoFit.Fits } -> 2.6
+            fits.any { it?.fit == DjTempoMatch.TempoFit.Fits } -> if (plausible) 1.8 else 1.0
             fits.any { it == null || it.fit == DjTempoMatch.TempoFit.Unknown } -> 1.0
-            else -> 0.12
+            else -> 0.45
         }
     }
 
@@ -1743,6 +1778,8 @@ class Dj(
         val seg = precomputedAdhd ?: if (mode == DjMode.Adhd && c.track.id !in fullTrackIds) adhdSegment(c.track) else null
         val tandaLabel = precomputedTanda ?: if (::anchor.isInitialized) formatTanda(anchor) else null
         val reason = precomputedReason ?: buildReason(c)
+        // Frente a la anterior: después de añadirla a [picks] se comparaba consigo misma y siempre salía «Fits».
+        val tempoNote = if (precomputedReason == null) tempoVerdictOf(c.track)?.fit?.name ?: "no cuenta" else null
         val p = Pick(
             track = c.track,
             kind = c.kind,
@@ -1756,9 +1793,8 @@ class Dj(
         if (tandaLabel != null) trackTandas[c.track.id] = tandaLabel
         trackReasons[c.track.id] = reason
         // Para revisar luego una sesión escuchada: por qué salió cada una (tipo, motivo, género y tempo frente a la anterior).
-        if (precomputedReason == null) log(
-            "elegida: ${c.track.artist} — ${c.track.title} (${c.kind.name.lowercase()}, $reason, género ${genreOf(c.track) ?: "?"}, " +
-                "tempo ${tempoVerdictOf(c.track)?.fit?.name ?: "no cuenta"})",
+        if (tempoNote != null) log(
+            "elegida: ${c.track.artist} — ${c.track.title} (${c.kind.name.lowercase()}, $reason, género ${genreOf(c.track) ?: "?"}, tempo $tempoNote)",
         )
         keys += c.track.key
         keys += c.track.id
@@ -2427,6 +2463,10 @@ class Dj(
         // Bunny en DJ normal); el cambio de estilo va por los cambios de tanda.
         private const val LOOSE_OTHER_GENRE_FIT = 0.12
         private const val LOOSE_UNKNOWN_GENRE_FIT = 0.7
+        // Ver [styleThenTempo]: lo que tiene que pesar una candidata frente a la mejor para que el tempo pueda elegirla.
+        private const val STYLE_PLAUSIBLE = 0.35
+        // Ver [looseArtistGenreFit]: un artista de la tanda de otro estilo que su centro.
+        private const val LOOSE_OTHER_ARTIST_FIT = 0.15
         private const val LOOSE_OTHER_ANCHOR_FIT = 0.2
         private const val LOOSE_UNKNOWN_ANCHOR_FIT = 0.6
         // Llevando muchas seguidas del mismo género, cambiar de estilo cuesta menos (≈ 3 tandas) y luego nada (≈ 4–5).
