@@ -15,6 +15,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -93,6 +94,9 @@ import io.github.iaguito22.oto.lyrics.Lyrics
 import io.github.iaguito22.oto.lyrics.LyricsQuery
 import io.github.iaguito22.oto.lyrics.LyricsSource
 import io.github.iaguito22.oto.lyrics.Word
+import io.github.iaguito22.oto.lyrics.LYRICS_OFFSET_MAX_MS
+import io.github.iaguito22.oto.lyrics.LYRICS_OFFSET_STEP_MS
+import io.github.iaguito22.oto.lyrics.lyricsOffsetLabel
 import io.github.iaguito22.oto.playback.NowPlaying
 import io.github.iaguito22.oto.playback.PlayerConnection
 import io.github.iaguito22.oto.ui.menu.Skeleton
@@ -245,15 +249,19 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
         }
     }
 
+    // El ajuste a mano de esta canción (positivo: la letra va más tarde), ver [LyricsStore.offsets].
+    val offsets by app.lyrics.offsets.collectAsStateWithLifecycle()
+    val offset = offsets[id] ?: 0L
+    val lead = LEAD_MS - offset
     val clock = remember { LyricsClock() }
     val covered = LocalCovered.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(id, playing, lifecycle) {
+    LaunchedEffect(id, playing, lifecycle, lead) {
         // Se ancla a la posición y avanza con el tiempo del fotograma; si el reproductor se separa mucho (un salto,
         // un corte), se vuelve a anclar, y si se separa poco se le acerca sin que se note.
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             if (!playing) {
-                while (true) { clock.ms = connection.position() + LEAD_MS; delay(200) }
+                while (true) { clock.ms = connection.position() + lead; delay(200) }
             }
             var anchorPos = connection.position().toDouble()
             var anchorT = -1L
@@ -271,7 +279,7 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
                     val real = connection.position().toDouble()
                     val diff = real - est
                     if (abs(diff) > 180) { anchorPos = real; anchorT = now } else anchorPos += diff * 0.08
-                    clock.ms = (anchorPos + (now - anchorT) / 1e6).toLong() + LEAD_MS
+                    clock.ms = (anchorPos + (now - anchorT) / 1e6).toLong() + lead
                 }
             }
         }
@@ -334,12 +342,20 @@ private fun SyncedLyrics(id: String, l: Lyrics.Synced, playing: Boolean, connect
                 is Row.Gap -> Box(Modifier.padding(horizontal = EDGE)) { GapDots(row, dist == 0, clock) }
                 is Row.Sung -> SungLine(row.line, dist, if (cascade) i - max(firstActive, 0) else null, fetched?.get(row.line.text), romanize, clock, toggleRom) {
                     haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                    connection.seekTo((row.line.start - LEAD_MS).coerceAtLeast(0))
+                    connection.seekTo((row.line.start - lead).coerceAtLeast(0))
                     userAt = 0
                 }
             }
         }
-        item { Box(Modifier.padding(horizontal = EDGE)) { Source(l.source, synced = l.wordByWord) } }
+        item {
+            Box(Modifier.padding(horizontal = EDGE)) {
+                Source(l.source, synced = l.wordByWord, offset = offset) { step ->
+                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    userAt = System.currentTimeMillis()
+                    scope.launch { app.lyrics.setOffset(id, (offset + step).coerceIn(-LYRICS_OFFSET_MAX_MS, LYRICS_OFFSET_MAX_MS)) }
+                }
+            }
+        }
     }
 }
 
@@ -350,6 +366,27 @@ private fun Source(source: String, synced: Boolean) {
         style = OtoType.label.copy(fontSize = 11.sp), color = Oto.colors.textFaint,
         modifier = Modifier.padding(top = 36.dp),
     )
+}
+
+/** La fuente y, debajo, el ajuste a mano de la sincronía de esta canción: «Antes» / «Después», de 0,1 en 0,1 s. */
+@Composable
+private fun Source(source: String, synced: Boolean, offset: Long, nudge: (Long) -> Unit) {
+    Column {
+        Source(source, synced)
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            @Composable fun Step(label: String, step: Long) = Text(
+                label, style = OtoType.label.copy(fontSize = 12.sp), color = Oto.colors.textFaint,
+                modifier = Modifier.clip(CircleShape).background(Oto.colors.textFaint.copy(alpha = .12f))
+                    .clickable { nudge(step) }.padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+            Step("Antes", -LYRICS_OFFSET_STEP_MS)
+            Text(
+                lyricsOffsetLabel(offset), style = OtoType.label.copy(fontSize = 12.sp), color = Oto.colors.textFaint,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+            Step("Después", LYRICS_OFFSET_STEP_MS)
+        }
+    }
 }
 
 /**

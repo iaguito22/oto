@@ -1269,8 +1269,8 @@ class PlaybackService : MediaLibraryService() {
                 autoLength = true,
                 incomingFromStart = true,
                 incomingDurationMs = nonDjInDur,
-                outgoingLyrics = app.lyrics.peek(outgoing.mediaId) as? Lyrics.Synced,
-                incomingLyrics = app.lyrics.peek(incoming.mediaId) as? Lyrics.Synced,
+                outgoingLyrics = app.lyrics.peekAligned(outgoing.mediaId) as? Lyrics.Synced,
+                incomingLyrics = app.lyrics.peekAligned(incoming.mediaId) as? Lyrics.Synced,
                 djMode = DjMode.Normal,
                 isDjSession = false,
                 recentStyles = recentStyles,
@@ -1300,8 +1300,8 @@ class PlaybackService : MediaLibraryService() {
             incomingVocals = inVocals,
             autoLength = smartMix,
             incomingDurationMs = inDur ?: 0L,
-            outgoingLyrics = app.lyrics.peek(outgoing.mediaId) as? Lyrics.Synced,
-            incomingLyrics = app.lyrics.peek(incoming.mediaId) as? Lyrics.Synced,
+            outgoingLyrics = app.lyrics.peekAligned(outgoing.mediaId) as? Lyrics.Synced,
+            incomingLyrics = app.lyrics.peekAligned(incoming.mediaId) as? Lyrics.Synced,
             recentStyles = recentStyles,
         )
     }
@@ -1310,7 +1310,7 @@ class PlaybackService : MediaLibraryService() {
     private val sectionsMemo = HashMap<String, Pair<Lyrics.Synced, List<io.github.iaguito22.oto.dj.SongSection>>>()
 
     private fun sectionsOf(id: String): List<io.github.iaguito22.oto.dj.SongSection>? {
-        val lyrics = app.lyrics.peek(id) as? Lyrics.Synced ?: return null
+        val lyrics = app.lyrics.peekAligned(id) as? Lyrics.Synced ?: return null
         sectionsMemo[id]?.takeIf { it.first === lyrics }?.let { return it.second }
         return SongSections.of(lyrics.lines).also {
             if (sectionsMemo.size > 64) sectionsMemo.clear()
@@ -1616,7 +1616,7 @@ class PlaybackService : MediaLibraryService() {
                 genre = resolveGenre(djGenreName),
                 genreOf = { t -> genres.genreOf(t, profile) },
                 analysisCache = analysisCache,
-                lyricsPeek = { app.lyrics.peek(it) },
+                lyricsPeek = { app.lyrics.peekAligned(it) },
             )
         }
         // Los géneros que falten, poco a poco y sin prisa (iTunes limita las consultas).

@@ -153,6 +153,9 @@ class DesktopPlayerConnection(
     private val _lyrics = MutableStateFlow<Lyrics?>(null)
     val lyrics: StateFlow<Lyrics?> = _lyrics.asStateFlow()
 
+    /** El ajuste a mano de la sincronía de cada letra (ver [LyricsStore.offsets]). */
+    val lyricsOffsets: StateFlow<Map<String, Long>> get() = lyricsStore.offsets
+
     private val _lyricsLoading = MutableStateFlow(false)
     val lyricsLoading: StateFlow<Boolean> = _lyricsLoading.asStateFlow()
 
@@ -568,8 +571,8 @@ class DesktopPlayerConnection(
                         incomingDurationMs = oldCandidate.deck.state.value.durationMs,
                         configuredFadeMs = length,
                         outgoingAudio = analysisCache.get(current.id), incomingAudio = analysisCache.get(oldCandidate.next.id),
-                        outgoingLyrics = lyricsStore.peek(current.id) as? Lyrics.Synced,
-                        incomingLyrics = lyricsStore.peek(oldCandidate.next.id) as? Lyrics.Synced,
+                        outgoingLyrics = lyricsStore.peekAligned(current.id) as? Lyrics.Synced,
+                        incomingLyrics = lyricsStore.peekAligned(oldCandidate.next.id) as? Lyrics.Synced,
                         outgoingVocals = outSections, incomingVocals = inSections,
                         outgoingAdhd = activeAdhd, incomingAdhd = oldCandidate.adhdSegment,
                         autoLength = true, djMode = dj?.mode ?: DjMode.Normal,
@@ -745,8 +748,8 @@ class DesktopPlayerConnection(
                             incomingAdhd = nextSeg,
                             outgoingVocals = sectionsOf(current.id),
                             incomingVocals = sectionsOf(next.id),
-                            outgoingLyrics = lyricsStore.peek(current.id) as? Lyrics.Synced,
-                            incomingLyrics = lyricsStore.peek(next.id) as? Lyrics.Synced,
+                            outgoingLyrics = lyricsStore.peekAligned(current.id) as? Lyrics.Synced,
+                            incomingLyrics = lyricsStore.peekAligned(next.id) as? Lyrics.Synced,
                             incomingDurationMs = actualNextDur,
                             autoLength = smartMixEnabled,
                         )
@@ -762,8 +765,8 @@ class DesktopPlayerConnection(
                     incomingAdhd = null,
                     outgoingVocals = sectionsOf(current.id),
                     incomingVocals = sectionsOf(next.id),
-                    outgoingLyrics = lyricsStore.peek(current.id) as? Lyrics.Synced,
-                    incomingLyrics = lyricsStore.peek(next.id) as? Lyrics.Synced,
+                    outgoingLyrics = lyricsStore.peekAligned(current.id) as? Lyrics.Synced,
+                    incomingLyrics = lyricsStore.peekAligned(next.id) as? Lyrics.Synced,
                     incomingDurationMs = actualNextDur,
                     autoLength = true,
                     incomingFromStart = true,
@@ -1300,7 +1303,7 @@ class DesktopPlayerConnection(
                     genreOf = { t -> known.genreOf(t, profile) },
                     analysisCache = analysisCache,
                     // Con la letra sabe si la entrante entra sin voz (y entonces se puede estirar hasta el 8 %).
-                    lyricsPeek = { lyricsStore.peek(it) },
+                    lyricsPeek = { lyricsStore.peekAligned(it) },
                 )
             }
             if (djGeneration.get() != gen) return@launch
@@ -1614,7 +1617,7 @@ class DesktopPlayerConnection(
     }
 
     private fun sectionsOf(id: String): List<SongSection> =
-        (lyricsStore.peek(id) as? Lyrics.Synced)?.let { SongSections.of(it.lines) }.orEmpty()
+        (lyricsStore.peekAligned(id) as? Lyrics.Synced)?.let { SongSections.of(it.lines) }.orEmpty()
 
     /** El género tuyo con ese nombre, de los ya conocidos (null: todo, o aún no se sabe). */
     private fun resolveGenre(name: String?): DjGenre? {

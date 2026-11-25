@@ -38,14 +38,18 @@ import kotlin.math.*
 internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playing: Boolean, position: () -> Long, seek: (Long) -> Unit, store: LyricsStore, prefs: Prefs, fontScale:Float = 1f, bottomInset:Dp = 0.dp) {
     val clock = remember(id) { LyricsClock() }
     val leadMs = if(lyrics is Lyrics.Synced && !lyrics.wordByWord) 100L else 250L
+    // El ajuste a mano de esta canción (positivo: la letra va más tarde), ver [LyricsStore.offsets].
+    val offsets by store.offsets.collectAsState()
+    val offset = id?.let { offsets[it] } ?: 0L
+    val lead = leadMs - offset
     val romanize by prefs.romanize.collectAsState(initial = true)
     var rom by remember(id) { mutableStateOf<Map<String,String>?>(null) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(id, lyrics) { rom = if (id != null && lyrics is Lyrics.Synced) store.romanized(id, lyrics) else null }
-    LaunchedEffect(id, playing, leadMs, lyrics is Lyrics.Synced) {
+    LaunchedEffect(id, playing, lead, lyrics is Lyrics.Synced) {
         if (lyrics !is Lyrics.Synced) return@LaunchedEffect
         if (!playing) {
-            while (true) { clock.ms = position() + leadMs; delay(150) }
+            while (true) { clock.ms = position() + lead; delay(150) }
         }
         var anchorPos = position().toDouble()
         var anchorTime = -1L
@@ -59,7 +63,7 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
                 val estimate = anchorPos + (now-anchorTime)/1e6
                 val difference = position().toDouble()-estimate
                 if (abs(difference)>180) { anchorPos=position().toDouble();anchorTime=now; trace?.let { it.resyncs++ } } else anchorPos+=difference*.08
-                clock.ms=(anchorPos+(now-anchorTime)/1e6).toLong()+leadMs
+                clock.ms=(anchorPos+(now-anchorTime)/1e6).toLong()+lead
             }
             if (io.github.iaguito22.oto.desktop.LYRICS_FRAME_GAP_MS > 0) delay(io.github.iaguito22.oto.desktop.LYRICS_FRAME_GAP_MS)
         }
@@ -109,11 +113,16 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
                     itemsIndexed(rows) { i, row -> when(row) {
                         is Row.Sung -> {
                             val cascade = remember { System.nanoTime() - openedAt < 400_000_000L }
-                            SungLine(row.line, if(active < 0) i+1 else i-active, if(cascade) i-max(firstActive,0) else null, rom?.get(row.line.text), romanize, clock, !following, fontScale, { scope.launch { prefs.setRomanize(!romanize) } }, { following=true; syncRequest++; seek((row.start - leadMs).coerceAtLeast(0)) })
+                            SungLine(row.line, if(active < 0) i+1 else i-active, if(cascade) i-max(firstActive,0) else null, rom?.get(row.line.text), romanize, clock, !following, fontScale, { scope.launch { prefs.setRomanize(!romanize) } }, { following=true; syncRequest++; seek((row.start - lead).coerceAtLeast(0)) })
                         }
                         is Row.Gap -> GapDots(row, i == active, clock)
                     } }
-                    item(key = "source") { LyricsSource(lyrics.source, synced = lyrics.wordByWord) }
+                    item(key = "source") {
+                        LyricsSource(lyrics.source, synced = lyrics.wordByWord, offset = offset) { step ->
+                            userAt = System.currentTimeMillis(); following = false
+                            if (id != null) scope.launch { store.setOffset(id, (offset + step).coerceIn(-LYRICS_OFFSET_MAX_MS, LYRICS_OFFSET_MAX_MS)) }
+                        }
+                    }
                 }
                 if (!following) {
                     Row(Modifier.align(Alignment.BottomCenter).padding(bottom=maxOf(46.dp, bottomInset + 12.dp)).clip(androidx.compose.foundation.shape.RoundedCornerShape(50)).background(Color(0xEE343936)).clickable { following=true; syncRequest++ }.padding(horizontal=16.dp,vertical=10.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -136,6 +145,32 @@ internal fun MobileLyrics(id: String?, lyrics: Lyrics?, loading: Boolean, playin
         modifier = Modifier.padding(start = EDGE, end = EDGE, top = 36.dp),
     )
 }
+
+/** La fuente y, debajo, el ajuste a mano de la sincronía de esta canción: «Antes» / «Después», de 0,1 en 0,1 s. */
+@Composable private fun LyricsSource(source: String, synced: Boolean, offset: Long, nudge: (Long) -> Unit) {
+    Column {
+        LyricsSource(source, synced)
+        Row(Modifier.padding(start = EDGE - 8.dp, end = EDGE, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            @Composable fun Step(label: String, step: Long) {
+                val hover = remember { MutableInteractionSource() }
+                val hovered by hover.collectIsHoveredAsState()
+                Text(
+                    label, style = OtoType.label.copy(fontSize = 11.sp), color = Color.White.copy(alpha = if (hovered) .9f else .5f),
+                    modifier = Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(50))
+                        .hoverable(hover).clickable { nudge(step) }
+                        .background(Color.White.copy(alpha = if (hovered) .12f else .06f)).padding(horizontal = 10.dp, vertical = 5.dp),
+                )
+            }
+            Step("Antes", -LYRICS_OFFSET_STEP_MS)
+            Text(
+                lyricsOffsetLabel(offset), style = OtoType.label.copy(fontSize = 11.sp), color = Color.White.copy(alpha = .5f),
+                modifier = Modifier.padding(horizontal = 10.dp),
+            )
+            Step("Después", LYRICS_OFFSET_STEP_MS)
+        }
+    }
+}
+
 
 private const val USER_HOLD_MS = 2500L
 

@@ -33,6 +33,7 @@
 
 - Fuentes en `core/.../lyrics/LyricsSource.kt`; cada aparato tiene su caché (PC: `%LOCALAPPDATA%\oto\Cache\lyrics`). Subir `LyricsStore.MATCH_VERSION` invalida lo guardado.
 - LRCLIB: las letras las sube cualquiera y la exacta puede ir desplazada. `pickLrclib` usa el consenso de las versiones (medido: «Faint», exacta 1,5 s tarde). Si Iago dice que una letra va atrasada o adelantada, mirar primero la caché y comparar versiones en `lrclib.net/api/search` antes de tocar el reloj.
+- Letras palabra a palabra desplazadas (Iago, 25/11): hay letras hechas para otra versión del audio (en el audio de YouTube, «In the End» va 1,1 s tarde y «Can You Feel My Heart» 0,9 s antes, con NetEase y LRCLIB de acuerdo entre sí). Ninguna fuente lo sabe. Medirlo contra el audio (correlación de la voz centrada con los inicios de palabra) acertó esas dos pero se equivocó en 2 de 4 comprobadas («bloodline», «Aurora»): no usarlo sin algo mejor. Por eso hay ajuste a mano por canción («Antes» / «Después» al final de la letra, `LyricsStore.offsets`, en `desfases.json` de la caché de letras), que usan la letra, el fondo vivo y el DJ (`peekAligned`). NetEase a veces parte la línea en trozos iguales (3 % de sus líneas): `LyricsSource.fixEvenLines` las reparte a ritmo de canto.
 - El reloj del PC (`MobileLyrics.kt`) sigue la posición del motor, que ya descuenta el búfer de Java Sound; no incluye la latencia del dispositivo de salida.
 
 ## Diagnóstico

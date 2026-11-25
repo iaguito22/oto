@@ -173,7 +173,9 @@ private fun WallpaperContent(player: DesktopPlayerConnection, monitor: Monitor, 
     val lyrics by player.lyrics.collectAsState()
     // El mismo adelanto que la letra de Oto (MobileLyrics.leadMs): 250 ms palabra a palabra y 100 ms línea a línea.
     // Sin él la letra buena (palabra a palabra) iba ~250 ms tarde respecto a la de la app.
-    val leadMs by rememberUpdatedState((lyrics as? Lyrics.Synced)?.let { if (it.wordByWord) 250L else 100L } ?: 250L)
+    // Menos el ajuste a mano de la canción (positivo: la letra va más tarde).
+    val offsets by player.lyricsOffsets.collectAsState()
+    val leadMs by rememberUpdatedState(((lyrics as? Lyrics.Synced)?.let { if (it.wordByWord) 250L else 100L } ?: 250L) - (np.id?.let { offsets[it] } ?: 0L))
     val scene = remember { WallpaperScene().apply { audio = WallpaperAudio.spectrum } }
     val lyr = remember { WallpaperLyrics() }
     LaunchedEffect(lyrics) { lyr.set(demoLyrics ?: lyricLines(lyrics)) }

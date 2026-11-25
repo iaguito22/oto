@@ -3,6 +3,9 @@ package io.github.iaguito22.oto.lyrics
 import io.github.iaguito22.oto.MemCache
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -23,6 +26,9 @@ class LyricsStore(private val dir: File) {
 
     /** Lo que ya está en memoria, sin esperar a nada. */
     fun peek(id: String): Lyrics? = memory.get(id)
+
+    /** Como [peek], con el ajuste a mano de la canción ya aplicado: para el DJ, que mira dónde se canta de verdad. */
+    fun peekAligned(id: String): Lyrics? = peek(id).let { if (it is Lyrics.Synced) it.shifted(offsetMs(id)) else it }
 
     fun peekRomanized(id: String): Map<String, String>? = romMemory.get(id)
 
@@ -93,7 +99,9 @@ class LyricsStore(private val dir: File) {
                 "missing" -> Cached(Lyrics.Missing).takeIf { System.currentTimeMillis() - file.lastModified() < MISSING_MS }
                 "plain" -> Cached(Lyrics.Plain(o.getJSONArray("l").strings(), o.getString("src")))
                 else -> {
-                    val lyrics = Lyrics.Synced(o.getJSONArray("l").objects().map(::line), o.getString("src"), o.optString("lang").ifEmpty { null })
+                    val src = o.getString("src")
+                    val lines = o.getJSONArray("l").objects().map(::line).let { if (src == "NetEase") LyricsSource.fixEvenLines(it) else it }
+                    val lyrics = Lyrics.Synced(lines, src, o.optString("lang").ifEmpty { null })
                     Cached(lyrics, o.optLong("retrySpacingAt") <= System.currentTimeMillis() && missingLatinWordSpaces(lyrics))
                 }
             }
@@ -127,9 +135,34 @@ class LyricsStore(private val dir: File) {
         return lines.size >= 3 && lines.count { line -> line.words.dropLast(1).none { it.space } } * 3 >= lines.size * 2
     }
 
-    /** Las más viejas fuera cuando pasan de [MAX_FILES]: unos pocos MB como mucho. */
+    /**
+     * Cuánto se retrasa la letra de cada canción (negativo: se adelanta), puesto a mano. Hay letras hechas para otra
+     * versión del audio (Iago, 25/11: «In the End» 1,1 s tarde, «Can You Feel My Heart» 0,9 s antes) y ninguna fuente
+     * lo puede saber; medirlo contra el audio falló en 2 de 4 canciones comprobadas.
+     */
+    private val _offsets = MutableStateFlow(readOffsets())
+    val offsets: StateFlow<Map<String, Long>> = _offsets
+
+    fun offsetMs(id: String?): Long = id?.let { _offsets.value[it] } ?: 0L
+
+    suspend fun setOffset(id: String, ms: Long) {
+        val next = _offsets.updateAndGet { if (ms == 0L) it - id else it + (id to ms) }
+        withContext(Dispatchers.IO) {
+            runCatching {
+                dir.mkdirs()
+                File(dir, OFFSETS_FILE).writeText(JSONObject(next as Map<*, *>).toString())
+            }.onFailure { Timber.w(it, "No se pudo guardar el desfase de la letra") }
+        }
+    }
+
+    private fun readOffsets(): Map<String, Long> = runCatching {
+        val o = JSONObject(File(dir, OFFSETS_FILE).readText())
+        o.keys().asSequence().associateWith { o.getLong(it) }
+    }.getOrDefault(emptyMap())
+
+    /** Las más viejas fuera cuando pasan de [MAX_FILES]: unos pocos MB como mucho. Los desfases no se tocan. */
     private fun trim() {
-        val files = dir.listFiles() ?: return
+        val files = dir.listFiles()?.filter { it.name != OFFSETS_FILE }?.toTypedArray() ?: return
         if (files.size <= MAX_FILES) return
         files.sortedBy { it.lastModified() }.take(files.size - MAX_FILES).forEach { it.delete() }
     }
@@ -160,5 +193,6 @@ class LyricsStore(private val dir: File) {
         const val SPACING_RETRY_MS = 24 * 3600_000L
         const val MATCH_VERSION = 3
         const val MAX_FILES = 1500
+        const val OFFSETS_FILE = "desfases.json"
     }
 }

@@ -28,6 +28,12 @@ sealed interface Lyrics {
     /** [source] es de dónde salió, para decirlo al final de la letra. */
     data class Synced(val lines: List<Line>, val source: String, val language: String? = null) : Lyrics {
         val wordByWord get() = lines.any { it.real }
+
+        /** La misma letra movida [ms] (positivo: más tarde). */
+        fun shifted(ms: Long): Synced = if (ms == 0L) this else copy(lines = lines.map { l ->
+            fun List<Word>.move() = map { it.copy(start = it.start + ms, end = it.end + ms) }
+            l.copy(start = l.start + ms, end = l.end + ms, words = l.words.move(), bg = l.bg.move())
+        })
     }
 
     data class Plain(val lines: List<String>, val source: String) : Lyrics
@@ -35,3 +41,12 @@ sealed interface Lyrics {
 
 /** Lo que se busca: el título y el artista tal como los da YouTube, y la duración para no equivocarse de versión. */
 data class LyricsQuery(val id: String, val title: String, val artist: String, val album: String?, val durationMs: Long)
+
+/** El ajuste a mano de una letra, para la vista: «Sincronía: tal cual», «Letra +0,9 s» (más tarde) o «Letra −0,3 s». */
+fun lyricsOffsetLabel(ms: Long): String =
+    if (ms == 0L) "Sincronía: tal cual"
+    else "Letra " + (if (ms > 0) "+" else "−") + "${kotlin.math.abs(ms) / 1000},${kotlin.math.abs(ms) % 1000 / 100}" + " s"
+
+/** De cuánto en cuánto se ajusta y hasta dónde. */
+const val LYRICS_OFFSET_STEP_MS = 100L
+const val LYRICS_OFFSET_MAX_MS = 5_000L

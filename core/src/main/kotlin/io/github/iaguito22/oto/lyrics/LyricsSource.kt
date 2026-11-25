@@ -216,6 +216,16 @@ object LyricsSource {
         }
         val (main, bg) = splitParens(words)
         Line(m.groupValues[1].toLong(), m.groupValues[1].toLong() + m.groupValues[2].toLong(), main, bg, real = true)
+    }.let(::fixEvenLines)
+
+    /**
+     * NetEase a veces no mide las palabras: parte la línea en trozos iguales (el 3 % de sus líneas, medido el 25/11).
+     * Así la última palabra se encendía al final de la nota larga y la letra iba atrasada («What I've Done»). Esas
+     * líneas se reparten a ritmo de canto, como las que solo traen el tiempo de la línea.
+     */
+    internal fun fixEvenLines(lines: List<Line>): List<Line> = lines.map { l ->
+        if (!l.real || l.words.size < 3 || l.words.distinctBy { it.end - it.start }.size > 1) l
+        else estimate(l.words.joinText(), l.start, l.end).copy(bg = l.bg, duet = l.duet)
     }
 
     /** Lo que va entre paréntesis es coro, salvo que la línea entera lo sea: entonces es la voz. */
