@@ -272,8 +272,9 @@ class DesktopPlayerConnection(
                             if (durationMs > 0L && it.durationMs <= 0L) it.copy(durationMs = durationMs) else it
                         }
                         analysisCache.put(metrics, persist = true)
-                        // Con su tempo ya medido, el DJ puede revisar la cola (la de después de esta).
-                        scope.launch { if (dj != null) retuneDjTempo() }
+                        // Con su tempo ya medido, el DJ puede revisar la cola (la de después de esta); la radio, analizar
+                        // por adelantado lo que viene y reordenarlo.
+                        scope.launch { if (dj != null) retuneDjTempo() else if (radio != null) { retuneRadioTempo(); scoutDjQueue() } }
                     }
                 }
             }
@@ -1341,7 +1342,10 @@ class DesktopPlayerConnection(
      * vuelve a llamar aquí: así se van analizando también las que entren por un cambio.
      */
     private fun scoutDjQueue() {
-        val activeDj = dj ?: return
+        val activeDj = dj
+        // La radio también: para poder reordenar lo que viene por tempo ([retuneRadioTempo]).
+        val activeRadio = if (activeDj == null) radio else null
+        if (activeDj == null && activeRadio == null) return
         if (scoutJob?.isActive == true || resolveFailuresInARow > 0 || !_state.value.playing) return
         val currentId = _state.value.id ?: return
         if (scoutTrackId != currentId) {
@@ -1353,8 +1357,10 @@ class DesktopPlayerConnection(
             songQueue.getOrNull(nextMixIndex())?.id?.let(::add)
             preparingKey?.second?.let(::add)
         }
+        val upcoming = activeDj?.nextUp()?.map { it.track.id }
+            ?: djIndexGate.locked { songQueue.drop(currentIndex + 1).take(RadioTempoOrder.LOOKAHEAD + 2).map { it.id } }
         val target = DjScout.pick(
-            upcoming = activeDj.nextUp().map { it.track.id },
+            upcoming = upcoming,
             skip = skip,
             known = { analysisCache.get(it) != null || analysisCache.tempoProfile(it) != null },
             local = { downloads.localFile(it) != null },
@@ -1380,7 +1386,7 @@ class DesktopPlayerConnection(
                 }
                 val metrics = analyzeFile(file, target) ?: return@launch
                 Timber.tag("oto.mix").i(
-                    "DJ: analizada por adelantado %s (%.0f BPM, %s, %.1f LUFS)",
+                    "%s: analizada por adelantado %s (%.0f BPM, %s, %.1f LUFS)", if (activeDj != null) "DJ" else "Radio",
                     target, metrics.bpm ?: 0.0, metrics.camelot.ifEmpty { "tono ?" }, metrics.integratedLufs,
                 )
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -1390,8 +1396,41 @@ class DesktopPlayerConnection(
             } finally {
                 temp?.delete()
             }
-            if (dj === activeDj) retuneDjTempo()
+            if (activeDj != null && dj === activeDj) retuneDjTempo()
+            if (activeRadio != null && radio === activeRadio) {
+                retuneRadioTempo()
+                // La siguiente por analizar, cuando este trabajo ya haya acabado.
+                val self = coroutineContext[Job]
+                scope.launch { self?.join(); scoutDjQueue() }
+            }
         }
+    }
+
+    /**
+     * Radio: reordena lo que viene detrás de la siguiente (nunca la siguiente, cuya mezcla ya se prepara, ni lo que pusiste
+     * tú) para que cada una se pueda cuadrar en tempo y tono con la de antes ([RadioTempoOrder]). Solo cambia algo con
+     * tempos medidos: lo de la radio se analiza por adelantado ([scoutDjQueue]).
+     */
+    private fun retuneRadioTempo() = djIndexGate.locked {
+        if (radio == null || dj != null) return@locked
+        val from = currentIndex + 2
+        var end = from
+        while (end < songQueue.size && end - from < RadioTempoOrder.LOOKAHEAD + 2 && songQueue[end] !in manualQueueEntries) end++
+        if (end - from < 2 || from - 1 !in songQueue.indices || songQueue[from - 1] in manualQueueEntries) return@locked
+        val slice = songQueue.subList(from, end).toList()
+        val ids = slice.map { it.id }
+        if (ids.toSet().size != ids.size) return@locked
+        val order = RadioTempoOrder.reorder(songQueue[from - 1].id, ids) { prev, id ->
+            RadioTempoOrder.rankOf(
+                DjTempoMatch.tempoVerdict(analysisCache.tempoProfile(prev), analysisCache.tempoProfile(id)),
+                analysisCache.get(prev)?.let { a -> analysisCache.get(id)?.let { b -> io.github.iaguito22.oto.dj.DjHarmonic.harmonicCompatibility(a, b) } },
+            )
+        }
+        if (order == ids) return@locked
+        val byId = slice.associateBy { it.id }
+        order.forEachIndexed { i, id -> songQueue[from + i] = byId.getValue(id) }
+        Timber.tag("oto.mix").i("Radio: reordenada por tempo: %s", order.joinToString { id -> byId.getValue(id).title })
+        syncQueueFlow()
     }
 
     /** Analiza [file] entero (tempo, tono, volumen, secciones) y lo guarda en la caché del DJ. */
