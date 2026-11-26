@@ -37,7 +37,7 @@ No eran bugs: el DJ normal sale hasta 75 s antes del final porque así lo pidió
 
 ## Mejoras
 
-- CI más rápida: probar solo los módulos cambiados (como `tools/check`) y no instalar FFmpeg con apt.
+- CI más rápida: probar solo los módulos cambiados (como `tools/check`). El paso de FFmpeg ya evita apt: usa los binarios del runner o descarga el respaldo estático con tiempos limitados; pendiente de validar en la CI.
 - Vincular el móvil habitual con el PC (Dispositivos/QR) y comprobar la sincronización con los perfiles reales; probado solo con datos aislados.
 - Medir el ahorro de RAM con tres ventanas y audio.
 - Duplicados de YouTube: quedan grupos sin auditar (`../playlist-audit.json`). No borrar solo por nombre.

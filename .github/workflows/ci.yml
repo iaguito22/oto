@@ -21,16 +21,22 @@ jobs:
           distribution: temurin
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
-      - name: Instalar FFmpeg
-        # Los espejos de Ubuntu a veces dan 503: se reintenta y, si no, FFmpeg estático.
+      - name: Preparar FFmpeg
+        # Evita apt y sus espejos: usa el del runner o el mismo respaldo estático de antes.
+        timeout-minutes: 5
         run: |
-          for attempt in 1 2 3; do
-            if sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg; then exit 0; fi
-            sleep 20
-          done
-          curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz
-          mkdir -p "$RUNNER_TEMP/ffmpeg" && tar -xJf /tmp/ffmpeg.tar.xz -C "$RUNNER_TEMP/ffmpeg" --strip-components=1
-          echo "$RUNNER_TEMP/ffmpeg" >> "$GITHUB_PATH"
+          if command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; then
+            ffmpeg -version
+            ffprobe -version
+          else
+            curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 \
+              https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o "$RUNNER_TEMP/ffmpeg.tar.xz"
+            mkdir -p "$RUNNER_TEMP/ffmpeg"
+            tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP/ffmpeg" --strip-components=1
+            "$RUNNER_TEMP/ffmpeg/ffmpeg" -version
+            "$RUNNER_TEMP/ffmpeg/ffprobe" -version
+            echo "$RUNNER_TEMP/ffmpeg" >> "$GITHUB_PATH"
+          fi
       - name: Tests de core, escritorio y Android
         run: ./gradlew :core:test :desktopApp:test :app:testDebugUnitTest --continue
       - name: Informes de tests
