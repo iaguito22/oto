@@ -81,6 +81,12 @@ class OtoApp : Application(), SingletonImageLoader.Factory {
         TraceHooks.begin = { android.os.Trace.beginSection(it) }
         TraceHooks.end = { android.os.Trace.endSection() }
         if (BuildConfig.DEBUG) Timber.plant(Timber.DebugTree())
+        // Red nueva: las carátulas que no llegaron se vuelven a pedir ya (ver [ArtworkRetry]).
+        runCatching {
+            getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) = io.github.iaguito22.oto.playback.ArtworkRetry.networkBack()
+            })
+        }
         initInnerTube()
 
         val system = Locale.getDefault()

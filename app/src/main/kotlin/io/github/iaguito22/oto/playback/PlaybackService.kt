@@ -327,6 +327,7 @@ class PlaybackService : MediaLibraryService() {
             }
         }
         session = MediaLibrarySession.Builder(this, sessionPlayer, callback)
+            .setBitmapLoader(ArtworkBitmapLoader(this))
             .setSessionActivity(
                 PendingIntent.getActivity(
                     this, 0,

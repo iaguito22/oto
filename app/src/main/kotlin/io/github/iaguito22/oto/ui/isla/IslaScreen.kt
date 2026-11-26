@@ -121,7 +121,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil3.compose.AsyncImage
+import io.github.iaguito22.oto.ui.RetryingImage
 import coil3.imageLoader
 import coil3.request.ImageRequest
 import io.github.iaguito22.oto.DropStyle
@@ -421,7 +421,7 @@ private fun RemoteBanner(now: RemoteNow?, onOpen: () -> Unit, modifier: Modifier
             AnimatedContent(s, contentKey = { it.id }, transitionSpec = {
                 (fadeIn(tween(220)) + scaleIn(spring(dampingRatio = 0.7f, stiffness = 380f), 0.8f)) togetherWith fadeOut(tween(140))
             }, label = "remoteArt") { song ->
-                AsyncImage(song.artwork, null, Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(c.field), contentScale = ContentScale.Crop)
+                RetryingImage(song.artwork, null, Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(c.field), contentScale = ContentScale.Crop)
             }
             Column(Modifier.weight(1f)) {
                 Text(if (s.buffering) "Preparando en el ordenador" else if (s.playing) "Sonando en el ordenador" else "En pausa en el ordenador", style = OtoType.label, color = c.accent, maxLines = 1)
@@ -730,7 +730,7 @@ private fun Peek(artwork: String?, side: Dp, drop: DropState, gate: PeekGate, to
     if (artwork == null) return
     val screen = LocalConfiguration.current.screenWidthDp.dp
     val peekSide = side * PEEK_SCALE
-    AsyncImage(
+    RetryingImage(
         model = artwork,
         contentDescription = null,
         contentScale = ContentScale.Crop,
@@ -799,7 +799,7 @@ private fun Cover(artwork: String?, side: Dp, paused: Float, saved: Saved, onSav
         if (artwork == null) {
             Text("音", style = OtoType.display.copy(fontSize = 96.sp, fontWeight = FontWeight.Normal), color = c.textFaint)
         } else {
-            AsyncImage(
+            RetryingImage(
                 model = artwork,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,

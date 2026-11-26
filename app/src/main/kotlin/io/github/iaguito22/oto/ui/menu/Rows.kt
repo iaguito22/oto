@@ -55,7 +55,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import io.github.iaguito22.oto.ui.RetryingImage
 import com.metrolist.innertube.models.SongItem
 import io.github.iaguito22.oto.playback.resize
 import io.github.iaguito22.oto.ui.theme.Motion
@@ -161,7 +161,7 @@ fun NowBars(playing: Boolean, color: Color, modifier: Modifier = Modifier) {
 @Composable
 fun Art(url: String?, size: Dp, radius: Dp, modifier: Modifier = Modifier) {
     val c = Oto.colors
-    AsyncImage(
+    RetryingImage(
         model = url?.resize((size.value * 3).toInt()),
         contentDescription = null,
         contentScale = ContentScale.Crop,

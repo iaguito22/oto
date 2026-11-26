@@ -44,7 +44,7 @@ class ConnectionService : Service() {
         startForeground(NOTIFICATION, idle())
         val devices = (application as OtoApp).devices
         player = PcPlayer { command -> scope.launch { runCatching { devices.link.command(command) }.onFailure { timber.log.Timber.w(it, "No se pudo controlar el ordenador") } } }
-        session = MediaSession.Builder(this, player).setId("oto-ordenador")
+        session = MediaSession.Builder(this, player).setId("oto-ordenador").setBitmapLoader(io.github.iaguito22.oto.playback.ArtworkBitmapLoader(this))
             .setSessionActivity(PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)).build()
         scope.launch {
             combine(devices.following, devices.link.remote) { following, remote -> if (following != null) remote else null }.collect { state ->

@@ -199,7 +199,7 @@ internal fun ContinueListening(song: String?, where: String, action: String, sen
 @Composable private fun RemoteArtwork(url: String?, modifier: Modifier) {
     Box(modifier.background(MaterialTheme.colorScheme.onSurface.copy(alpha=.05f)), contentAlignment=Alignment.Center) {
         Icon(ImageVector.vectorResource(R.drawable.ic_library_music), null, tint=MaterialTheme.colorScheme.onSurface.copy(alpha=.15f))
-        coil3.compose.AsyncImage(model=url, contentDescription=null, modifier=Modifier.fillMaxSize(), contentScale=androidx.compose.ui.layout.ContentScale.Crop)
+        io.github.iaguito22.oto.ui.RetryingImage(model=url, contentDescription=null, modifier=Modifier.fillMaxSize(), contentScale=androidx.compose.ui.layout.ContentScale.Crop)
     }
 }
 @Composable private fun RemoteSlider(value:Float,onValueChange:(Float)->Unit,onValueChangeFinished:()->Unit,label:String) {
