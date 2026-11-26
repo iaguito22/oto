@@ -4,8 +4,6 @@
 
 ## Tras la 2.3.0
 
-- CI en Linux (26/11, run 45786446979): pendiente de volver a ejecutar con las correcciones locales. `ExtrasSpaceUiTest` esperaba encender una función exclusiva de Windows: ahora comprueba que en Linux permanece apagada y que se puede volver a Ajustes. `DesktopDjConnectionTest.vetoDjNextUp…` leía `djNextUp` y `queue` entre sus emisiones: ahora espera una instantánea coherente, también al saltar de tanda. Los tests de escritorio pasan en Windows; aún sin validar estos cambios en Linux.
-- `DesktopDownloadsTest` en esa misma CI: «la descarga no empezó» en 30 s. No reproducido con los tests de escritorio en Windows; causa sin confirmar. Se añaden el estado de las entradas y las excepciones de las corrutinas al fallo, y se espera su cancelación antes de borrar el perfil de prueba. No darlo por arreglado hasta reproducirlo o verificarlo en Linux. Informes originales en el artefacto `informes-tests` del run.
 - Actualizador: la 2.3.0 es la primera que lo lleva. Falta probar la actualización real por MSI con la 2.3.1. `DesktopUpdatesTest` ejecuta en Windows el script real, espera a que termine un proceso y comprueba la limpieza del MSI y la reapertura con instalador y lanzador simulados; no instala nada. Sí está comprobado con red: consulta, elección del archivo, descarga por la redirección de GitHub y SHA-256 (`OTO_UPDATE_LIVE=1`, `OtoUpdatesLiveTest`).
 
 ## Bugs (noche de pruebas 23/11)
@@ -37,7 +35,7 @@ No eran bugs: el DJ normal sale hasta 75 s antes del final porque así lo pidió
 
 ## Mejoras
 
-- CI más rápida: probar solo los módulos cambiados (como `tools/check`). El paso de FFmpeg ya evita apt: usa los binarios del runner o descarga el respaldo estático con tiempos limitados; pendiente de validar en la CI.
+- CI más rápida: probar solo los módulos cambiados (como `tools/check`). FFmpeg ya evita apt: usa los binarios del runner o descarga el respaldo estático con tiempos limitados; comprobado en la CI 45793257788.
 - Vincular el móvil habitual con el PC (Dispositivos/QR) y comprobar la sincronización con los perfiles reales; probado solo con datos aislados.
 - Medir el ahorro de RAM con tres ventanas y audio.
 - Duplicados de YouTube: quedan grupos sin auditar (`../playlist-audit.json`). No borrar solo por nombre.
