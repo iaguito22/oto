@@ -2,6 +2,12 @@
 
 Índice en `AGENTS.md`. Estados de 03–05/11/2026; contrastar con `git log` y GitHub.
 
+## Release 2.3.0 — 26/11/2026
+
+- https://github.com/iaguito22/oto/releases/tag/v2.3.0, etiqueta → `dbc7ff2` en `main`. `Oto-2.3.0-Setup.exe`, `Oto-2.3.0-windows-x64.msi` (con CDS), DEB, Arch, APK pública (`io.github.iaguito22.oto`, firma 4043c8…, versionCode 17), Android 12 (`.android12`, misma firma; rama local `android12` rebasada, `f397a8c`) y SHA256SUMS. Sin APK phone.
+- SHA-256: Setup `eb00c582…cd46`, MSI `2953b5d8…3eff`, DEB `e1c82c94…9a12`, Arch `d77e8b11…8385`, APK `bc56587d…ce1d`, Android 12 `5fac0a9e…624d`; los `digest` de GitHub coinciden. Copias y notas: `C:\Users\iago\Documents\Codex\2026-11-24\release-2.3.0`.
+- Pruebas locales: core 309 (10 omitidas), escritorio 228 (16), Android 124 (1), 0 fallos. Actions: «Comprobar paquetes Linux» 45786538012 y «Comprobar paquete Arch» 45786542580, correctas. «Tests» 45786446979 falló en 3 tests del escritorio en Linux (ver `pendientes.md`); Iago aceptó publicar y arreglarlos después.
+
 ## Release 2.2.0 — 18/11/2026
 
 - https://github.com/iaguito22/oto/releases/tag/v2.2.0, etiqueta → `9c79677` en `main`. Instalador `Oto-2.2.0-Setup.exe`, `Oto-2.2.0-windows-x64.msi` (con CDS), DEB, Arch, APK pública (`io.github.iaguito22.oto`, firma 4043c8…, versionCode 16), Android 12 (`.android12`, misma firma) y SHA256SUMS. Sin APK phone.

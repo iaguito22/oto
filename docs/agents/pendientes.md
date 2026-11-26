@@ -2,12 +2,11 @@
 
 Índice en `AGENTS.md`. Lo que queda por hacer, de más a menos urgente. Al arreglar algo, quitarlo de aquí en el mismo commit. Detalle histórico en `docs/historico/bitacora.md`.
 
-## Próxima release (2.3.0)
+## Tras la 2.3.0
 
-- Versión subida a 2.3.0 (versionCode 17) en `main`. Notas en borrador: `C:\Users\iago\Documents\Codex\2026-11-24\release-2.3.0\notas-borrador.md`.
-- Rehacer la captura del README (`docs/escritorio-una-ventana.png`) con un perfil de prueba: aún sale el «+» de «Crear lista» y se ven las listas reales de Iago. Al publicar, poner 2.3.0 en los nombres de archivo del README.
-- Rebasar la rama `android12` sobre `main` antes de compilar la variante (con `merge-tree`, sin conflictos el 24/11).
-- Actualizador: la 2.3.0 es la primera que lo lleva, así que la 2.2.0 no avisará. En Windows no está probado de verdad lo que pasa tras descargar (cerrar Oto, abrir el MSI y volver a abrir Oto): no se puede sin tocar la instalación de Iago. Probarlo con la 2.3.1. Sí está comprobado con red: consulta, elección del archivo, descarga por la redirección de GitHub y SHA-256 (`OTO_UPDATE_LIVE=1`, `OtoUpdatesLiveTest`).
+- CI en Linux (26/11, run 45786446979): fallan 3 tests del escritorio que en Windows pasan. `ExtrasSpaceUiTest` («el clic enciende el fondo»: ¿la fila cae en otra posición con las fuentes de Linux?), `DesktopDownloadsTest` («la descarga no empezó» en 30 s) y `DesktopDjConnectionTest.vetoDjNextUp…` (sale `[chill-2, chill-6, rock-9]`, se esperaba `[chill-2, rock-7, rock-8]`). Informes en el artefacto `informes-tests` del run.
+- Rehacer la captura del README (`docs/escritorio-una-ventana.png`) con un perfil de prueba: aún sale el «+» de «Crear lista» y se ven las listas reales de Iago.
+- Actualizador: la 2.3.0 es la primera que lo lleva. En Windows no está probado de verdad lo que pasa tras descargar (cerrar Oto, abrir el MSI y volver a abrir Oto): probarlo con la 2.3.1. Sí está comprobado con red: consulta, elección del archivo, descarga por la redirección de GitHub y SHA-256 (`OTO_UPDATE_LIVE=1`, `OtoUpdatesLiveTest`).
 
 ## Bugs (noche de pruebas 23/11)
 
