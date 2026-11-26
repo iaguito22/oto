@@ -14,15 +14,15 @@ Reproductor de música para Android y escritorio sobre YouTube Music. En el móv
 
 ## Instalar
 
-Descargas de [Oto 2.2.0](https://github.com/iaguito22/oto/releases/tag/v2.2.0):
+Descargas de [Oto 2.3.0](https://github.com/iaguito22/oto/releases/tag/v2.3.0):
 
 | Sistema | Paquete |
 |---|---|
-| Windows x64 | `Oto-2.2.0-Setup.exe` (instalador de Oto) o el MSI para instalación administrada |
-| Ubuntu/Debian amd64 | DEB; instalar con `sudo apt install ./oto_2.2.0_amd64.deb` |
-| Arch Linux x86_64 | Paquete nativo; instalar con `sudo pacman -U ./oto-2.2.0-1-x86_64.pkg.tar.zst` |
-| Android 13 o superior | `Oto-2.2.0-android.apk`, paquete público `io.github.iaguito22.oto` |
-| Android 12 | `Oto-2.2.0-android12.apk`, paquete aparte `io.github.iaguito22.oto.android12`, para móviles con Android 12 o 12L |
+| Windows x64 | `Oto-2.3.0-Setup.exe` (instalador de Oto) o el MSI para instalación administrada |
+| Ubuntu/Debian amd64 | DEB; instalar con `sudo apt install ./oto_2.3.0_amd64.deb` |
+| Arch Linux x86_64 | Paquete nativo; instalar con `sudo pacman -U ./oto-2.3.0-1-x86_64.pkg.tar.zst` |
+| Android 13 o superior | `Oto-2.3.0-android.apk`, paquete público `io.github.iaguito22.oto` |
+| Android 12 | `Oto-2.3.0-android12.apk`, paquete aparte `io.github.iaguito22.oto.android12`, para móviles con Android 12 o 12L |
 
 El APK público actualiza las versiones públicas anteriores. No está en Play Store.
 
