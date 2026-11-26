@@ -7,6 +7,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.FileDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -694,7 +695,7 @@ class Crossfade(
     ) {
         val simple = fallbackEndMs != null
         val outGain = gain()
-        val index = player.currentMediaItemIndex
+        val slots = BridgeHandoff.QueueSlots(outgoing = player.currentMediaItemIndex, incoming = expectedNextIndex)
         var interrupted = false
         var ownSeek = false
         val listener = object : Player.Listener {
@@ -705,6 +706,11 @@ class Crossfade(
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (!playWhenReady) interrupted = true
             }
+
+            // La radio quita historial por delante al empezar cada canción: la cola se corre, pero suenan las mismas.
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                slots.follow(player.currentMediaItemIndex, player.currentMediaItem?.mediaId, pair.first, pair.second)
+            }
         }
         fun seekSession(atIndex: Int, positionMs: Long) {
             ownSeek = true
@@ -713,9 +719,9 @@ class Crossfade(
         fun sessionCancelled(expectedIndex: Int, expectedId: String) =
             interrupted || !player.playWhenReady || player.currentMediaItemIndex != expectedIndex ||
                 player.currentMediaItem?.mediaId != expectedId || t.playerError != null
-        fun cancelled() = sessionCancelled(index, pair.first) || !player.isPlaying ||
-            player.nextMediaItemIndex != expectedNextIndex ||
-            player.getMediaItemAt(expectedNextIndex).mediaId != pair.second
+        fun cancelled() = sessionCancelled(slots.outgoing, pair.first) || !player.isPlaying ||
+            player.nextMediaItemIndex != slots.incoming ||
+            player.getMediaItemAt(slots.incoming).mediaId != pair.second
         handingOver = true
         player.addListener(listener)
         try {
@@ -876,7 +882,7 @@ class Crossfade(
             val currentItem = player.currentMediaItem
             val nextItem = if (nextIndex in 0 until player.mediaItemCount) player.getMediaItemAt(nextIndex) else null
             if (cancelled() || nextItem?.mediaId != pair.second ||
-                !mixNext(index, player.nextMediaItemIndex)) return
+                !mixNext(slots.outgoing, player.nextMediaItemIndex)) return
             val smart = smartMix() && !simple
             val nextStartMs = (plan?.incomingStartMs ?: nextItem?.let(nextStartPosition) ?: 0L).coerceAtLeast(0L)
             // Sin mezcla inteligente, fundido clásico aunque haya plan del DJ.
@@ -907,7 +913,8 @@ class Crossfade(
 
             val fallbackRemainingMs = fallbackEndMs?.let { (it - player.currentPosition).coerceAtLeast(MIN_ABORT_FADE_MS) }
             seekSession(nextIndex, nextStartMs.takeIf { it > 0L } ?: C.TIME_UNSET)
-            val next = nextIndex
+            slots.incoming = nextIndex
+            slots.onIncoming = true
             preparedFor = null
 
             // Esperar a que [player] esté realmente reproduciendo (tras buscar nextStartMs o llenar colchón) manteniendo
@@ -916,7 +923,7 @@ class Crossfade(
             val waitStart = System.nanoTime()
             fun tailLeftMs(): Long? = outDurationMs.takeIf { it != C.TIME_UNSET }
                 ?.let { ((it - t.currentPosition - OUT_MARGIN_MS) / t.playbackParameters.speed).toLong() }
-            while (!sessionCancelled(next, pair.second) &&
+            while (!sessionCancelled(slots.incoming, pair.second) &&
                 (player.playbackState != Player.STATE_READY || !player.isPlaying)
             ) {
                 rampTail(System.nanoTime())
@@ -927,7 +934,7 @@ class Crossfade(
                 delay(FRAME_MS)
             }
 
-            if (sessionCancelled(next, pair.second)) {
+            if (sessionCancelled(slots.incoming, pair.second)) {
                 return
             }
 
@@ -935,7 +942,7 @@ class Crossfade(
             // Para el estribillo solo cuenta lo que aún suena de A (en un corte en drop, hasta el corte).
             val outgoingSpan = plan?.takeIf { it.fadeDurationMs > 0L }?.let(ChorusSafety::outgoingSpanMs) ?: targetFade
             var deferredForChorus = false
-            while (!sessionCancelled(next, pair.second) && t.playbackState != Player.STATE_ENDED) {
+            while (!sessionCancelled(slots.incoming, pair.second) && t.playbackState != Player.STATE_ENDED) {
                 val sourceNow = t.currentPosition
                 val spans = sectionsFor(currentItem?.mediaId.orEmpty())
                 val maxSourceSpeed = maxOf(t.playbackParameters.speed, tailSpeed, 1f).toDouble()
@@ -945,9 +952,9 @@ class Crossfade(
                 if (simple || liveOk) {
                     if (!deferredForChorus) break
                     // Restore B's entry after holding A, then recheck after B's seek/buffer delay.
-                    seekSession(next, nextStartMs)
+                    seekSession(slots.incoming, nextStartMs)
                     val reseekAt = System.nanoTime()
-                    while (!sessionCancelled(next, pair.second) &&
+                    while (!sessionCancelled(slots.incoming, pair.second) &&
                         (!player.isPlaying || player.playbackState != Player.STATE_READY) &&
                         System.nanoTime() - reseekAt < MAX_INCOMING_WAIT_MS * 1_000_000L) delay(FRAME_MS)
                     deferredForChorus = false
@@ -962,8 +969,8 @@ class Crossfade(
                 onFadeIn(0f)
                 delay(FRAME_MS)
             }
-            if (sessionCancelled(next, pair.second)) return
-            if (deferredForChorus) seekSession(next, nextStartMs)
+            if (sessionCancelled(slots.incoming, pair.second)) return
+            if (deferredForChorus) seekSession(slots.incoming, nextStartMs)
             val outLeft = tailLeftMs()
             // Nunca alargar el fundido por encima del audio real que le queda a [tail]; si no, [tail] se corta en seco.
             val length = if (outLeft != null) targetFade.coerceAtMost(outLeft.coerceAtLeast(MIN_ABORT_FADE_MS)) else targetFade.coerceAtLeast(MIN_ABORT_FADE_MS)
@@ -1007,7 +1014,7 @@ class Crossfade(
             var lastPhaseAt = 0L
             var phaseLogs = 0
             var locked = false
-            while (!sessionCancelled(next, pair.second)) {
+            while (!sessionCancelled(slots.incoming, pair.second)) {
                 val now = System.nanoTime()
                 if (!heardIn && player.isPlaying) {
                     heardIn = true
@@ -1345,8 +1352,8 @@ class Crossfade(
         }
     }
 
-    private suspend fun handOverBridge(t: ExoPlayer, bridge: PreparedBridge, initialWavOffsetMs: Long, nextIndex: Int) {
-        val index = player.currentMediaItemIndex
+    private suspend fun handOverBridge(t: ExoPlayer, bridge: PreparedBridge, initialWavOffsetMs: Long, nextAt: Int) {
+        val slots = BridgeHandoff.QueueSlots(outgoing = player.currentMediaItemIndex, incoming = nextAt)
         val outGainNow = gain()
         val tailScale = (outGainNow / bridge.bakedGainA.coerceAtLeast(0.05f)).coerceIn(0.5f, 1.5f)
         // Media3 entrega los listeners dentro de seekTo en el hilo de aplicación (Main.immediate).
@@ -1374,6 +1381,10 @@ class Crossfade(
                 if (!playWhenReady) interrupted = true
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) { sessionClock.update(isPlaying, nowMs()) }
+            // La radio quita historial por delante al empezar cada canción: la cola se corre, pero suenan las mismas.
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                slots.follow(player.currentMediaItemIndex, player.currentMediaItem?.mediaId, bridge.outgoingId, bridge.incomingId)
+            }
             override fun onPlaybackStateChanged(state: Int) {
                 // Cualquier estado que no sea READY (carga, fin, parada) suelta el «estable» enclavado.
                 sessionClock.update(state == Player.STATE_READY && player.isPlaying, nowMs())
@@ -1388,7 +1399,7 @@ class Crossfade(
         }
         fun sessionCancelled(atIndex: Int) = !player.playWhenReady || interrupted ||
             player.currentMediaItemIndex != atIndex ||
-            player.currentMediaItem?.mediaId != (if (atIndex == index) bridge.outgoingId else bridge.incomingId) ||
+            player.currentMediaItem?.mediaId != (if (atIndex == slots.outgoing) bridge.outgoingId else bridge.incomingId) ||
             t.playerError != null
         // Para el registro: por qué se canceló un puente ya en marcha (pausa, búsqueda, cambio de canción o error).
         fun whyCancel(stage: String, atIndex: Int): String {
@@ -1427,14 +1438,14 @@ class Crossfade(
             val tPosAtPlay = t.currentPosition
             t.play()
 
-            fun cancelledPre() = sessionCancelled(index) || player.playerError != null || !safeBridge(bridge) ||
-                player.nextMediaItemIndex != nextIndex || player.getMediaItemAt(nextIndex).mediaId != bridge.incomingId
+            fun cancelledPre() = sessionCancelled(slots.outgoing) || player.playerError != null || !safeBridge(bridge) ||
+                player.nextMediaItemIndex != slots.incoming || player.getMediaItemAt(slots.incoming).mediaId != bridge.incomingId
             // Por qué se deja el puente antes del relevo (antes salía sin registro y no había forma de saberlo).
             fun whyPre(stage: String): String {
                 val why = when {
                     !player.playWhenReady -> "pausa"
                     interrupted -> "búsqueda o pausa"
-                    player.currentMediaItemIndex != index -> "cambió de canción"
+                    player.currentMediaItemIndex != slots.outgoing -> "cambió de canción"
                     t.playerError != null || player.playerError != null -> "error de reproducción"
                     !safeBridge(bridge) -> "estribillo protegido"
                     !player.isPlaying -> "la sesión no suena (${player.playbackState})"
@@ -1605,7 +1616,7 @@ class Crossfade(
             sessionGate?.open = false
 
             // Saltar el reproductor de sesión silenciado a la canción B cerca de la entrega en seco.
-            if (player.nextMediaItemIndex != nextIndex || nextIndex !in 0 until player.mediaItemCount) {
+            if (player.nextMediaItemIndex != slots.incoming || slots.incoming !in 0 until player.mediaItemCount) {
                 onFadeIn(1f)
                 stopTail()
                 MixLog.i("puente ${bridge.spec.style.id}: no hay siguiente en la cola, sigue A")
@@ -1622,17 +1633,17 @@ class Crossfade(
                     MixLog.i("puente ${bridge.spec.style.id}: se deja en el tramo seco (llegó letra que protege un estribillo)")
                     return
                 }
-                if (sessionCancelled(index)) {
+                if (sessionCancelled(slots.outgoing)) {
                     onFadeIn(1f)
                     stopTail()
-                    MixLog.i(whyCancel("puente seco", index))
+                    MixLog.i(whyCancel("puente seco", slots.outgoing))
                     return
                 }
                 // Si la que se va (callada) está a punto de acabarse, se salta ya: que no pase sola a la siguiente.
                 if (player.duration != C.TIME_UNSET && player.duration - player.currentPosition < 700L) break
                 delay(FRAME_MS)
             }
-            if (sessionCancelled(index) || player.nextMediaItemIndex != nextIndex || !mixNext(index, nextIndex) || player.getMediaItemAt(nextIndex).mediaId != bridge.incomingId
+            if (sessionCancelled(slots.outgoing) || player.nextMediaItemIndex != slots.incoming || !mixNext(slots.outgoing, slots.incoming) || player.getMediaItemAt(slots.incoming).mediaId != bridge.incomingId
             ) {
                 MixLog.i("puente ${bridge.spec.style.id}: cancelado antes de saltar a B (búsqueda, pausa o cambió la cola)")
                 return
@@ -1641,14 +1652,15 @@ class Crossfade(
             val priorShiftB = lookupTrackShift(bridge.incomingId) ?: 0L
             val initialBSeek = (bridge.handoffBTrackMs - remainingBeforeDryB - priorShiftB + bSeekLeadMs).coerceAtLeast(0L)
             if (player.playbackParameters.speed != 1f) player.setPlaybackSpeed(1f)
-            seekSession(nextIndex, initialBSeek)
+            seekSession(slots.incoming, initialBSeek)
             val bSeekAtNs = System.nanoTime()
-            val next = player.currentMediaItemIndex
+            slots.incoming = player.currentMediaItemIndex
+            slots.onIncoming = true
             preparedFor = null
             preparedBridgeWav = null
 
             fun abortedDuringBridge(): Boolean =
-                sessionCancelled(next) || t.playbackState == Player.STATE_ENDED
+                sessionCancelled(slots.incoming) || t.playbackState == Player.STATE_ENDED
 
             // Etapa 2: reproducir la transición DSP íntegra desde el WAV mientras B se amortigua y medimos su desfase de códec.
             var measuredShiftB: Long? = null
@@ -1674,8 +1686,8 @@ class Crossfade(
                 }
                 delay(FRAME_MS)
             }
-            if (sessionCancelled(next)) {
-                MixLog.i(whyCancel("saltando a B", next))
+            if (sessionCancelled(slots.incoming)) {
+                MixLog.i(whyCancel("saltando a B", slots.incoming))
                 return
             }
 
@@ -1685,8 +1697,8 @@ class Crossfade(
             ) {
                 delay(FRAME_MS)
             }
-            if (sessionCancelled(next)) {
-                MixLog.i(whyCancel("esperando a B", next))
+            if (sessionCancelled(slots.incoming)) {
+                MixLog.i(whyCancel("esperando a B", slots.incoming))
                 return
             }
 
@@ -1711,13 +1723,13 @@ class Crossfade(
             }
             suspend fun awaitPostClocks() = BridgeHandoff.awaitStablePlayback(
                 stable = ::stableClocks, roomLeft = ::postAlignRoom,
-                cancelled = { sessionCancelled(next) || player.playerError != null },
+                cancelled = { sessionCancelled(slots.incoming) || player.playerError != null },
                 nowMs = { System.nanoTime() / 1_000_000L }, waitFrame = { delay(FRAME_MS) },
             )
 
             var postAligned: Long? = null
             if (awaitPostClocks()) {
-                val coarseB = steadyError({ targetTrackBMs() - player.currentPosition }, { sessionCancelled(next) })
+                val coarseB = steadyError({ targetTrackBMs() - player.currentPosition }, { sessionCancelled(slots.incoming) })
                     ?: (targetTrackBMs() - player.currentPosition)
                 if (measuredShiftB != null || abs(coarseB) < 600L) {
                     val oldLead = bSeekLeadMs
@@ -1727,7 +1739,7 @@ class Crossfade(
                 if (abs(coarseB) > BRIDGE_COARSE_SEEK_MS) {
                     val seekTargetB = (targetTrackBMs() + reseekLeadMs)
                         .coerceAtMost((bridge.endBTrackMs - 260L).coerceAtLeast(bridge.handoffBTrackMs - shiftB))
-                    seekSession(next, seekTargetB)
+                    seekSession(slots.incoming, seekTargetB)
                     val waitBStart = System.nanoTime()
                     while (!abortedDuringBridge() && t.currentPosition < bridge.totalMs - 180L &&
                         (player.playbackState != Player.STATE_READY || !player.isPlaying) &&
@@ -1744,12 +1756,12 @@ class Crossfade(
 
                 // Alinear player SILENCIADO al WAV audible mediante pulsos calibrados (1.0× fijo tras drenar búfer).
                 if (awaitPostClocks()) {
-                    postAligned = alignPlayerToBridge(t, bridge, shiftB) { sessionCancelled(next) || !stableClocks() }
+                    postAligned = alignPlayerToBridge(t, bridge, shiftB) { sessionCancelled(slots.incoming) || !stableClocks() }
                 }
             }
 
-            if (sessionCancelled(next)) {
-                MixLog.i(whyCancel("antes de WAV→B", next))
+            if (sessionCancelled(slots.incoming)) {
+                MixLog.i(whyCancel("antes de WAV→B", slots.incoming))
                 return
             }
 
@@ -1764,7 +1776,7 @@ class Crossfade(
                         gateReady = openGateAhead(
                             sessionGate, player, AudioLevels.pendingMs(),
                             { t.currentPosition < bridge.totalMs - BridgeHandoff.CHECK_RESERVE_MS && t.playbackState != Player.STATE_ENDED },
-                            { sessionCancelled(next) },
+                            { sessionCancelled(slots.incoming) },
                         )
                         // Medido de nuevo tras drenar la puerta: con margen para otro pulso solo se releva bien cuadrado
                         // (si no, `exitWhileRoom` cierra la puerta, reajusta y reintenta).
@@ -1772,7 +1784,7 @@ class Crossfade(
                         BridgeHandoff.transfer(
                             snapshot = { BridgeHandoff.Snapshot(gateReady && readyToSwap(), targetTrackBMs() - player.currentPosition,
                                 bridge.totalMs - t.currentPosition) },
-                            cancelled = { sessionCancelled(next) },
+                            cancelled = { sessionCancelled(slots.incoming) },
                             nowMs = { System.nanoTime() / 1_000_000L },
                             waitFrame = { delay(2L) }, waitSample = { delay(BridgeHandoff.SAMPLE_GAP_MS) },
                             durationMs = ::swapMsFor,
@@ -1786,7 +1798,7 @@ class Crossfade(
                 restoreBridge = {
                     MixLog.i("puente: reintentar WAV→B (${lastExit}), quedan ${bridge.totalMs - t.currentPosition} ms")
                     BridgeHandoff.restoreOutgoing((tailMixGain / exitWavScale.coerceAtLeast(0.001f)).coerceAtLeast(0f), exitBGain,
-                        cancelled = { sessionCancelled(next) }, nowMs = { System.nanoTime() / 1_000_000L }, waitFrame = { delay(2L) },
+                        cancelled = { sessionCancelled(slots.incoming) }, nowMs = { System.nanoTime() / 1_000_000L }, waitFrame = { delay(2L) },
                         setGains = { wav, b -> setTailGain(t, exitWavScale * wav); exitBGain = b; onFadeIn(b) },
                     )
                     sessionGate?.open = false
@@ -1794,12 +1806,12 @@ class Crossfade(
                 },
                 prepareRetry = {
                     if (awaitPostClocks()) {
-                        postAligned = alignPlayerToBridge(t, bridge, shiftB, retry = true) { sessionCancelled(next) || !stableClocks() }
+                        postAligned = alignPlayerToBridge(t, bridge, shiftB, retry = true) { sessionCancelled(slots.incoming) || !stableClocks() }
                     }
                 },
-                cancelled = { sessionCancelled(next) }, nowMs = { System.nanoTime() / 1_000_000L }, waitFrame = { delay(FRAME_MS) },
+                cancelled = { sessionCancelled(slots.incoming) }, nowMs = { System.nanoTime() / 1_000_000L }, waitFrame = { delay(FRAME_MS) },
             )
-            if (exitResult == BridgeHandoff.Result.Cancelled) { MixLog.i(whyCancel("relevo WAV→B", next)); return }
+            if (exitResult == BridgeHandoff.Result.Cancelled) { MixLog.i(whyCancel("relevo WAV→B", slots.incoming)); return }
             if (exitResult != BridgeHandoff.Result.Complete) {
                 MixLog.i("puente: recuperar WAV→B ($exitResult, err=${targetTrackBMs() - player.currentPosition} ms, alineador=$postAligned, audio verificado=${knownShiftB != null})")
                 val recovery = BridgeHandoff.recover(
@@ -1821,14 +1833,14 @@ class Crossfade(
                         sessionGate?.fadeInAfterFlush(BridgeHandoff.RECOVERY_FADE_MS)
                         player.setPlaybackSpeed(1f)
                         val mustPrepare = player.playerError != null
-                        seekSession(next, at)
+                        seekSession(slots.incoming, at)
                         if (mustPrepare) player.prepare()
                     },
                     destinationReady = { player.playbackState == Player.STATE_READY && player.isPlaying },
                     destinationRevision = { sessionClock.revision },
                     destinationPositionMs = { player.currentPosition },
                     destinationEnded = { player.playbackState == Player.STATE_ENDED },
-                    cancelled = { sessionCancelled(next) },
+                    cancelled = { sessionCancelled(slots.incoming) },
                     nowMs = { System.nanoTime() / 1_000_000L },
                     waitFrame = { delay(FRAME_MS) },
                     setGains = { wav, b -> setTailGain(t, exitWavScale * wav); onFadeIn(b) },
@@ -1858,8 +1870,8 @@ class Crossfade(
             val tailFailed = t.playerError != null
             stopTail()
             val pairKey = Triple(bridge.outgoingId, bridge.outgoingKey.second, bridge.incomingId)
-            val failedBeforeNext = !interrupted && player.playWhenReady && player.currentMediaItemIndex == index &&
-                player.currentMediaItem?.mediaId == bridge.outgoingId && player.nextMediaItemIndex == nextIndex &&
+            val failedBeforeNext = !interrupted && player.playWhenReady && player.currentMediaItemIndex == slots.outgoing &&
+                player.currentMediaItem?.mediaId == bridge.outgoingId && player.nextMediaItemIndex == slots.incoming &&
                 (relayStarted || tailFailed)
             if (failedBeforeNext) preparedBridgeFailedFor = pairKey
             if (relayStarted || preparedBridgeFailedFor == pairKey || !safeBridge(bridge)) {

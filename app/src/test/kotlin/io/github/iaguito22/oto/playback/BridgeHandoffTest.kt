@@ -36,6 +36,31 @@ class BridgeHandoffTest {
         )
     }
 
+    // Iago, 25/11: cortes en muchas transiciones de la radio del móvil. Con más de 15 canciones de historial, la radio
+    // quita la más vieja al empezar cada una y la cola se corre un puesto: el puente lo tomaba por «cambió de canción».
+    @Test fun radioDroppingHistoryDuringTheJumpToBIsNotASongChange() {
+        val slots = BridgeHandoff.QueueSlots(outgoing = 15, incoming = 16)
+        slots.onIncoming = true
+        slots.follow(currentIndex = 15, currentId = "B", outgoingId = "A", incomingId = "B")
+        assertEquals(14, slots.outgoing)
+        assertEquals(15, slots.incoming)
+    }
+
+    @Test fun radioDroppingHistoryBeforeTheJumpMovesBothSongs() {
+        val slots = BridgeHandoff.QueueSlots(outgoing = 15, incoming = 16)
+        slots.follow(currentIndex = 14, currentId = "A", outgoingId = "A", incomingId = "B")
+        assertEquals(14, slots.outgoing)
+        assertEquals(15, slots.incoming)
+    }
+
+    @Test fun anotherSongInPlaceIsStillAChange() {
+        val slots = BridgeHandoff.QueueSlots(outgoing = 15, incoming = 16)
+        slots.onIncoming = true
+        slots.follow(currentIndex = 15, currentId = "C", outgoingId = "A", incomingId = "B")
+        assertEquals(15, slots.outgoing)
+        assertEquals(16, slots.incoming)
+    }
+
     @Test fun failedEntryReturnsSmoothlyFromItsActualGains() = runBlocking {
         val r = Rig()
         BridgeHandoff.restoreOutgoing(0.6f, 0.8f, { r.cancelled }, { r.time }, r::tick) { a, b -> r.gains += a to b }

@@ -71,6 +71,23 @@ internal object BridgeHandoff {
         }
     }
 
+    /**
+     * Dónde están la que se va y la que entra durante un puente. Si la cola se corre entera (la radio quita historial
+     * por delante al empezar cada canción), las dos se mueven a la vez: no es «cambió de canción». [onIncoming]: la
+     * sesión ya saltó a la que entra.
+     */
+    class QueueSlots(var outgoing: Int, var incoming: Int) {
+        var onIncoming = false
+
+        fun follow(currentIndex: Int, currentId: String?, outgoingId: String, incomingId: String) {
+            val expected = if (onIncoming) incoming else outgoing
+            if (currentIndex == expected || currentId != (if (onIncoming) incomingId else outgoingId)) return
+            val shift = currentIndex - expected
+            outgoing += shift
+            incoming += shift
+        }
+    }
+
     /** Lo cambia el listener incluso si BUFFERING -> READY sucede entre dos pasos de la corrutina. */
     class ContinuousPlayback {
         private var playing = false
