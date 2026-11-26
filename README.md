@@ -3,7 +3,7 @@
 Reproductor de música para Android y escritorio sobre YouTube Music. En el móvil se maneja con una gota y gestos. En el ordenador puedes usar una sola ventana o acoplar varias. Los dos se vinculan y comparten tus listas.
 
 <p align="center">
-  <img src="docs/escritorio-una-ventana.png" width="960" alt="Oto en modo Una ventana, con la biblioteca a la izquierda, las canciones al centro, la cola a la derecha y el reproductor flotante abajo">
+  <img src="docs/escritorio-una-ventana.png" width="960" alt="Oto en modo Una ventana con datos ficticios: biblioteca a la izquierda, listas al centro, cola a la derecha y reproductor flotante abajo">
 </p>
 
 - [Instalar](#instalar)

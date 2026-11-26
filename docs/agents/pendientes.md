@@ -4,9 +4,9 @@
 
 ## Tras la 2.3.0
 
-- CI en Linux (26/11, run 45786446979): fallan 3 tests del escritorio que en Windows pasan. `ExtrasSpaceUiTest` («el clic enciende el fondo»: ¿la fila cae en otra posición con las fuentes de Linux?), `DesktopDownloadsTest` («la descarga no empezó» en 30 s) y `DesktopDjConnectionTest.vetoDjNextUp…` (sale `[chill-2, chill-6, rock-9]`, se esperaba `[chill-2, rock-7, rock-8]`). Informes en el artefacto `informes-tests` del run.
-- Rehacer la captura del README (`docs/escritorio-una-ventana.png`) con un perfil de prueba: aún sale el «+» de «Crear lista» y se ven las listas reales de Iago.
-- Actualizador: la 2.3.0 es la primera que lo lleva. En Windows no está probado de verdad lo que pasa tras descargar (cerrar Oto, abrir el MSI y volver a abrir Oto): probarlo con la 2.3.1. Sí está comprobado con red: consulta, elección del archivo, descarga por la redirección de GitHub y SHA-256 (`OTO_UPDATE_LIVE=1`, `OtoUpdatesLiveTest`).
+- CI en Linux (26/11, run 45786446979): pendiente de volver a ejecutar con las correcciones locales. `ExtrasSpaceUiTest` esperaba encender una función exclusiva de Windows: ahora comprueba que en Linux permanece apagada y que se puede volver a Ajustes. `DesktopDjConnectionTest.vetoDjNextUp…` leía `djNextUp` y `queue` entre sus emisiones: ahora espera una instantánea coherente, también al saltar de tanda. Los tests de escritorio pasan en Windows; aún sin validar estos cambios en Linux.
+- `DesktopDownloadsTest` en esa misma CI: «la descarga no empezó» en 30 s. No reproducido con los tests de escritorio en Windows; causa sin confirmar. Se añaden el estado de las entradas y las excepciones de las corrutinas al fallo, y se espera su cancelación antes de borrar el perfil de prueba. No darlo por arreglado hasta reproducirlo o verificarlo en Linux. Informes originales en el artefacto `informes-tests` del run.
+- Actualizador: la 2.3.0 es la primera que lo lleva. Falta probar la actualización real por MSI con la 2.3.1. `DesktopUpdatesTest` ejecuta en Windows el script real, espera a que termine un proceso y comprueba la limpieza del MSI y la reapertura con instalador y lanzador simulados; no instala nada. Sí está comprobado con red: consulta, elección del archivo, descarga por la redirección de GitHub y SHA-256 (`OTO_UPDATE_LIVE=1`, `OtoUpdatesLiveTest`).
 
 ## Bugs (noche de pruebas 23/11)
 
@@ -32,6 +32,7 @@ No eran bugs: el DJ normal sale hasta 75 s antes del final porque así lo pidió
 - Enlace: «si cambias, la cola vuelve a empezar» (24/11). Causa probable, arreglada: con el PC mostrando el móvil, el panel «Cola» listaba la cola del móvil desde la primera canción (ya sonadas incluidas) y no desde la que suena (`remoteUpcoming`, `RemoteQueueTest`). En el código, el traspaso (índice, posición, cola manual) es correcto; sin probar con el móvil real.
 - Luces: en el PC de Iago, `%APPDATA%\oto\laboratorio-visual` es un enlace (junction) a `scratchpad/laboratorio-visual` para que la fila salga en Extras. Si se mueve el laboratorio, rehacer el enlace.
 - Fondo vivo: espectro nuevo (graves con FFT de 8192 y menos barras por nota; agudos compensados 6 dB por octava solo por encima de 1 kHz; punto muerto del 20 %, 24/11 tras «el bajo sube poco y los agudos casi siempre activos»). Probado con señales; falta que Iago lo vea con música.
+- Convivencia del fondo vivo, la hora y los controles con Wallpaper Engine: sin probar. Oto pinta una imagen estática del fondo de Windows y coloca sus ventanas en Progman/WorkerW; podría tapar la animación o dejar recuadros estáticos en los widgets. No afirmar compatibilidad sin probar ambos a la vez.
 - Escucha de las mezclas del DJ en general (el agente no oye). Confirmado por Iago el 19/11: «Faint» va a tiempo y no hay distorsión tras un cuadre de beats.
 
 ## Mejoras

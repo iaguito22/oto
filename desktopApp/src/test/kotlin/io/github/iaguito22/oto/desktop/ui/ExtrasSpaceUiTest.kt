@@ -12,6 +12,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.unit.Density
 import io.github.iaguito22.oto.OtoDirs
 import io.github.iaguito22.oto.desktop.wallpaper.WallpaperStore
+import io.github.iaguito22.oto.desktop.wallpaper.wallpaperSupported
 import org.jetbrains.skia.EncodedImageFormat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -44,19 +45,24 @@ class ExtrasSpaceUiTest {
         val scene = ImageComposeScene(760, 1500, Density(1f)) {
             Box(Modifier.fillMaxSize().background(Color(0xFF151A18))) { ExtrasSpace(Color(0xFF8FD0C6), onBack = { back = true }) }
         }
-        scene.shot("1-inicio")
-        // fila «Fondo de escritorio vivo»: debajo de la cabecera
-        scene.click(380f, Y_TOGGLE)
-        scene.shot("2-encendido")
-        assertTrue("el clic enciende el fondo", WallpaperStore.enabled.value)
-        scene.click(380f, Y_TOGGLE)
-        assertEquals("y lo apaga", false, WallpaperStore.enabled.value)
-        // apartado «Fondo» (plegado) → se abre y se elige «Negro»
-        scene.click(380f, Y_FONDO)
-        scene.shot("3-fondo-abierto")
-        scene.click(30f, 30f)
-        assertTrue("la cabecera vuelve a Ajustes", back)
-        scene.close()
+        try {
+            scene.shot("1-inicio")
+            // fila «Fondo de escritorio vivo»: debajo de la cabecera
+            scene.click(380f, Y_TOGGLE)
+            scene.shot("2-tras-clic")
+            assertEquals("solo Windows permite encender el fondo", wallpaperSupported, WallpaperStore.enabled.value)
+            scene.click(380f, Y_TOGGLE)
+            assertEquals("y lo apaga", false, WallpaperStore.enabled.value)
+            // apartado «Fondo» (plegado) → se abre
+            scene.click(380f, Y_FONDO)
+            scene.shot("3-fondo-abierto")
+            scene.click(30f, 30f)
+            assertTrue("la cabecera vuelve a Ajustes", back)
+        } finally {
+            scene.close()
+            WallpaperStore.setEnabled(false)
+            dir.deleteRecursively()
+        }
     }
 
     companion object { const val Y_TOGGLE = 120f; const val Y_FONDO = 1248f }

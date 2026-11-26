@@ -17,7 +17,9 @@ import io.github.iaguito22.oto.lyrics.LyricsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -117,7 +119,7 @@ class DesktopDjConnectionTest {
                 test(player, songs)
             }
         } finally {
-            scope.cancel()
+            runBlocking { scope.coroutineContext[Job]!!.cancelAndJoin() }
             root.deleteRecursively()
         }
     }
@@ -168,32 +170,39 @@ class DesktopDjConnectionTest {
 
         val vetoedId = player.djNextUp.value[1].track.id
         player.vetoDjNextUp(vetoedId)
-        withTimeout(10_000L) {
-            player.djNextUp.first { picks -> picks.size >= 3 && picks.none { it.track.id == vetoedId } }
+        // Son dos StateFlow distintos: observar nextUp no implica que queue ya haya emitido.
+        val (nextUpIds, futureQueueIds) = withTimeout(10_000L) {
+            combine(player.djNextUp, player.queue) { picks, queue ->
+                picks.map { it.track.id } to queue.drop(player.state.value.index + 1).map { it.id }
+            }.first { (picks, queue) -> picks.size >= 3 && vetoedId !in picks && queue.startsWith(picks) }
         }
-        val nextUpIds = player.djNextUp.value.map { it.track.id }
         assertFalse("El tema vetado no debe seguir en djNextUp", vetoedId in nextUpIds)
-        val futureQueueIds = player.queue.value.drop(player.state.value.index + 1).map { it.id }
         assertEquals(nextUpIds, futureQueueIds.take(nextUpIds.size))
 
         val beforeTrackId = player.state.value.id
         val tandaBefore = player.djTanda.value
         player.skipDjTanda()
-        withTimeout(10_000L) {
-            player.state.first { it.id != null && it.id != beforeTrackId }
-            player.djNextUp.first { it.size >= 2 }
+        val after = withTimeout(10_000L) {
+            combine(player.state, player.djNextUp, player.queue, player.djTanda) { now, picks, queue, tanda ->
+                DjQueueSnapshot(now.id, tanda, picks.map { it.track.id }, queue.drop(now.index + 1).map { it.id })
+            }.first { snapshot ->
+                snapshot.id != null && snapshot.id != beforeTrackId && snapshot.tanda != null &&
+                    snapshot.tanda != tandaBefore && snapshot.picks.size >= 2 && snapshot.queue.startsWith(snapshot.picks)
+            }
         }
-        val newTrackId = player.state.value.id
+        val newTrackId = after.id
         assertNotNull(newTrackId)
-        assertNotNull("djTanda debe actualizarse con el género de la nueva tanda", player.djTanda.value)
-        assertNotEquals("djTanda debe cambiar de género al saltar ambiente", tandaBefore, player.djTanda.value)
-        assertFalse("djTanda no debe incluir 'Como ...'", player.djTanda.value!!.contains("como", ignoreCase = true))
+        assertNotNull("djTanda debe actualizarse con el género de la nueva tanda", after.tanda)
+        assertNotEquals("djTanda debe cambiar de género al saltar ambiente", tandaBefore, after.tanda)
+        assertFalse("djTanda no debe incluir 'Como ...'", after.tanda!!.contains("como", ignoreCase = true))
         assertTrue(
             "La cola futura tras skipDjTanda debe reflejar los nuevos nextUp",
-            player.queue.value.drop(player.state.value.index + 1).map { it.id }.startsWith(player.djNextUp.value.map { it.track.id }),
+            after.queue.startsWith(after.picks),
         )
     }
 
     private fun <T> List<T>.startsWith(prefix: List<T>): Boolean =
         size >= prefix.size && subList(0, prefix.size) == prefix
+
+    private data class DjQueueSnapshot(val id: String?, val tanda: String?, val picks: List<String>, val queue: List<String>)
 }

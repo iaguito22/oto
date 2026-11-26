@@ -8,12 +8,14 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CopyOnWriteArrayList
 
 class DesktopDownloadsTest {
     @Test fun removingActiveDownloadCancelsWorkBeforeDeletingWindowsFiles(): Unit = runBlocking {
         val root = Files.createTempDirectory("oto-download-cancel").toFile()
         OtoDirs.init(root, File(root, "cache"))
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val errors = CopyOnWriteArrayList<Throwable>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, error -> errors += error })
         val prefs = Prefs(
             PreferenceDataStoreFactory.create(scope = scope, produceFile = { File(root, "prefs.preferences_pb") }),
             PreferenceDataStoreFactory.create(scope = scope, produceFile = { File(root, "lists.preferences_pb") }),
@@ -31,12 +33,18 @@ class DesktopDownloadsTest {
             val song = Heard("test", "Prueba", "Codex", null)
             prefs.setDownloadSong(song, true)
             // Márgenes amplios: en la CI o con otra compilación a la vez, 5 s no llegaban (no es una prueba de velocidad).
-            assertNotNull("la descarga no empezó", withTimeoutOrNull(30_000) { started.await() })
+            val begun = withTimeoutOrNull(30_000) { started.await() }
+            assertNotNull("la descarga no empezó; entradas=${downloads.entries.value}; errores=${errors.joinToString { it.stackTraceToString() }}", begun)
             prefs.setDownloadSong(song, false)
             assertNotNull("no se canceló la descarga en curso", withTimeoutOrNull(30_000) { cancelled.await() })
             assertNotNull("la entrada siguió en la lista", withTimeoutOrNull(30_000) { downloads.entries.first { "test" !in it } })
             assertFalse(part.exists())
             assertFalse(downloads.has("test"))
-        } finally { downloads.stop(); scope.cancel(); root.deleteRecursively() }
+            assertTrue("errores en las corrutinas: $errors", errors.isEmpty())
+        } finally {
+            downloads.stop()
+            scope.coroutineContext[Job]!!.cancelAndJoin()
+            root.deleteRecursively()
+        }
     }
 }

@@ -58,6 +58,7 @@
 
 - Apagado por defecto; solo Windows. Se enciende en Extras o en la bandeja («Poner / Quitar fondo vivo»). Código en `desktop/wallpaper/`.
 - Son elementos encima del fondo de pantalla de siempre, no un fondo nuevo: la ventana va dentro de Progman, justo debajo de los iconos (Windows 11 24H2+) o en el WorkerW clásico, y pinta el fondo actual (registro `WallPaper` o `TranscodedWallpaper`) debajo. Al apagarlo se repinta el fondo de Windows.
+- Esto reproduce el fondo estático de Windows. La convivencia con Wallpaper Engine u otros fondos animados externos no está probada: la ventana completa puede taparlos y los widgets independientes pueden dejar recuadros estáticos. No presentar «tu fondo actual» como garantía de compatibilidad con esos programas.
 - Valores por defecto (los que eligió Iago en el laboratorio): estilo «Barras en anillo» (cambiado por Iago el 23/11; antes NCS), intensidad del aro NCS 85 %, resplandor 60 %, carátula dentro, «Tu fondo actual», sombra 50 %, partículas apagadas, letra donde haya sitio, 120 fps (Iago, 23/11; nunca más que la pantalla), ahorro sin música y sin pintar mientras algo tapa el escritorio (pantalla completa o cualquier ventana maximizada en ese monitor, `WallpaperHost.desktopHidden`).
 - El audio sale de `AudioTap` (copia de lo que va a la línea, solo con el fondo encendido) y se analiza en vivo (`Spectrum`); no hay análisis previo de la canción.
 - La letra del fondo usa el mismo adelanto que la de la app (`MobileLyrics.leadMs`: 250 ms palabra a palabra, 100 ms línea a línea); sin él iba tarde.
