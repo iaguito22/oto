@@ -184,7 +184,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     val nextMix by player.nextMix.collectAsState()
     val lyrics by player.lyrics.collectAsState()
     val lyricsLoading by player.lyricsLoading.collectAsState()
-    val volume by player.volume.collectAsState()
+    val localVolume by player.volume.collectAsState()
     val likedIds by prefs.likedIds.collectAsState(initial = emptySet())
     val likedList by prefs.likedList.collectAsState(initial = LocalPlaylist(LIKED_ID, "Me gusta", emptyList()))
     val playlists by prefs.playlists.collectAsState(initial = emptyList())
@@ -195,6 +195,20 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         runCatching { devices.link.command(org.json.JSONObject().put("action", action).also(fill)) }
             .onFailure { timber.log.Timber.w(it, "No se pudo enviar %s al móvil", action) }
     }
+    // El volumen, como en «Una ventana»: con el móvil a la vista, el del móvil. Lo movido se ve al momento y se manda
+    // agrupado (110 ms); al segundo vuelve a mandar lo que diga el móvil.
+    val remoteState by devices.link.remote.collectAsState()
+    var mobileVolume by remember(devices, mirrored != null) { mutableStateOf<Float?>(null) }
+    val volume = if (mirrored == null) localVolume else mobileVolume ?: remoteState?.optDouble("volume", .5)?.toFloat()?.coerceIn(0f, 1f) ?: .5f
+    LaunchedEffect(mobileVolume, devices) {
+        val target = mobileVolume ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(110)
+        toMobile("volume") { it.put("value", target.toDouble()) }
+        kotlinx.coroutines.delay(1000)
+        mobileVolume = null
+    }
+    fun setVolume(value: Float) { if (mirrored != null) mobileVolume = value.coerceIn(0f, 1f) else player.setVolume(value) }
+    fun adjustVolume(delta: Float) = setVolume(volume + delta)
     fun playPause() { if (mirrored != null) toMobile("toggle") else player.toggle() }
     fun skipNext() { if (mirrored != null) toMobile("next") else player.next() }
     fun skipPrevious() { if (mirrored != null) toMobile("previous") else player.previous() }
@@ -276,8 +290,8 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
             event.key == Key.MediaPlayPause -> { playPause();true }
             event.isCtrlPressed && event.key == Key.DirectionRight -> { skipNext();true }
             event.isCtrlPressed && event.key == Key.DirectionLeft -> { skipPrevious();true }
-            event.isCtrlPressed && event.key == Key.DirectionUp -> { player.adjustVolume(.04f);true }
-            event.isCtrlPressed && event.key == Key.DirectionDown -> { player.adjustVolume(-.04f);true }
+            event.isCtrlPressed && event.key == Key.DirectionUp -> { adjustVolume(.04f);true }
+            event.isCtrlPressed && event.key == Key.DirectionDown -> { adjustVolume(-.04f);true }
             else -> false
         }
     }
@@ -295,7 +309,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
     @Composable fun WindowOptions(open: Boolean, setOpen: (Boolean) -> Unit) {
         Box {
             SmallAction(Icons.Rounded.MoreHoriz,"Opciones") { setOpen(!open); docking.trace("options=${!open}") }
-            PlayerOptions(open,{setOpen(false)},form,::changeForm,volume,{player.adjustVolume(it-volume)},
+            PlayerOptions(open,{setOpen(false)},form,::changeForm,volume,{ setVolume(it) },
                 {setOpen(false);devicesOpen=true},
                 {setOpen(false);docking.layout.organize(desktopArea())},quit, { playerFrame?.bounds }, welcome = {setOpen(false);welcomeOpen=true},
                 canStartDjHere = mirrored == null && nowPlaying.id != null,
@@ -321,7 +335,7 @@ fun ApplicationScope.ModularDesktop(player: DesktopPlayerConnection, prefs: Pref
         lyrics={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; lyricsOpen=true},
         queue={windowsHidden=false; if(!playerOpen && !menuOpen) playerOpen=true; queueOpen=true}, quit=quit,
         playing=nowPlaying.playing, hasSong=nowPlaying.id != null, previous=::skipPrevious, playPause=::playPause, next=::skipNext,
-        volume=volume, setVolume=player::setVolume, title=nowPlaying.title, artist=nowPlaying.artist, artwork=nowPlaying.artwork)
+        volume=volume, setVolume=::setVolume, title=nowPlaying.title, artist=nowPlaying.artist, artwork=nowPlaying.artwork)
     val taskbarPlayback = TaskbarPlayback(nowPlaying.id != null, nowPlaying.playing, ::skipPrevious, ::playPause, ::skipNext)
     WindowsMediaTransport(SystemMedia(nowPlaying.id != null, nowPlaying.playing, nowPlaying.title, nowPlaying.artist, nowPlaying.artwork), taskbarPlayback)
     ModuleWindow("Reproductor", playerWindow, playerOpen && !windowsHidden, { closePrimary(DockId.Player) }, pinned && playerSolo, accent = palette.primary, dock=docking, dockId=DockId.Player, taskbarPlayback = taskbarPlayback,

@@ -9,10 +9,6 @@
 - Rebasar la rama `android12` sobre `main` antes de compilar la variante (con `merge-tree`, sin conflictos el 24/11).
 - Actualizador: la 2.3.0 es la primera que lo lleva, así que la 2.2.0 no avisará. En Windows no está probado de verdad lo que pasa tras descargar (cerrar Oto, abrir el MSI y volver a abrir Oto): no se puede sin tocar la instalación de Iago. Probarlo con la 2.3.1. Sí está comprobado con red: consulta, elección del archivo, descarga por la redirección de GitHub y SHA-256 (`OTO_UPDATE_LIVE=1`, `OtoUpdatesLiveTest`).
 
-## Por mirar
-
-- Letra del PC con tirones en «K-391 — Aurora» (Iago, 25/11: «como cortes o lag, bajones de fps»). Sin medir; ver `docs/agents/rendimiento.md`.
-
 ## Bugs (noche de pruebas 23/11)
 
 Evidencia en `scratchpad/noche-2026-11-23/resultados/` (fuera de Git). Arreglados y en `main` desde el 24/11 (`6caba97`), sin oír y sin probar en la app:

@@ -47,6 +47,7 @@ Monitor del portátil a 120 Hz. `OTO_MOTION_TRACE=1` escribe `lyrics-frames.json
   - Skiko elige por defecto la AMD Radeon (driver 31.0.21925.1001). Con `-Dskiko.gpu.priority=discrete` (RTX 3050): 0 parones en 90 s (Skiko mínimo) y en 70 s (Oto real, `run-lyrics-probe.ps1 -Gpu discrete`); con `auto`, 4 parones en el mismo tiempo.
   - Decidido con Iago: Ajustes › «Gráfica dedicada» (solo Windows, apagada por defecto por batería). `DesktopGraphics.kt` la guarda en `desktop_graphics.json` (`{"gpu":"discrete"}`, lectura síncrona) y `main()` fija `skiko.gpu.priority=discrete` antes de crear ventanas; un `-D` explícito manda. Se aplica al volver a abrir Oto. Probado de punta a punta en perfil aislado (`run-lyrics-probe.ps1 -GpuSetting`): 0 parones en 70 s, 120 fps. Interfaz del ajuste sin revisar visualmente.
   - Otras vías no probadas: otro driver AMD; ventanas opacas (cambio visual grande).
+  - 25/11: tirones de la letra en «Aurora» con la gráfica dedicada apagada y el fondo vivo encendido. Al activar «Gráfica dedicada» desaparecieron (Iago). Si vuelve a decir «tirones», mirar primero este ajuste.
 - El latido de la carátula (`rememberCoverPulse`) mantiene su `delay(10)`: en 120 Hz tendrá la misma cadencia irregular.
 
 ## Arranque: CDS (06/11)

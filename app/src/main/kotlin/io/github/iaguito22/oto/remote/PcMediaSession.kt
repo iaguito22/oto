@@ -3,6 +3,7 @@ package io.github.iaguito22.oto.remote
 import android.os.Looper
 import androidx.core.net.toUri
 import androidx.media3.common.C
+import androidx.media3.common.DeviceInfo
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -13,6 +14,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import io.github.iaguito22.oto.playback.ARTWORK_PX
 import io.github.iaguito22.oto.playback.resize
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 /**
  * Lo que suena en el ordenador como un reproductor más del sistema: notificación, pantalla de bloqueo y
@@ -25,13 +27,22 @@ internal class PcPlayer(private val send: (JSONObject) -> Unit) : SimpleBasePlay
     private var window = 0..-1
     private var current = 0
 
-    fun show(state: JSONObject?) { remote = state; invalidateState() }
+    // Lo último que se pidió con las teclas: hasta que el ordenador lo confirma (su estado llega cada medio segundo), manda
+    // esto, para que pulsar varias veces seguidas no salte atrás.
+    private var asked: Pair<Double, Long>? = null
+
+    fun show(state: JSONObject?) {
+        val hold = asked?.takeIf { System.currentTimeMillis() - it.second < VOLUME_HOLD_MS }
+        remote = if (state != null && hold != null) JSONObject(state.toString()).put("volume", hold.first) else state
+        invalidateState()
+    }
 
     override fun getState(): State {
         val commands = Player.Commands.Builder().addAll(
             COMMAND_PLAY_PAUSE, COMMAND_GET_CURRENT_MEDIA_ITEM, COMMAND_GET_METADATA, COMMAND_GET_TIMELINE,
             COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, COMMAND_SEEK_TO_PREVIOUS, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
             COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
+            COMMAND_GET_DEVICE_VOLUME, COMMAND_SET_DEVICE_VOLUME_WITH_FLAGS, COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS,
         ).build()
         val s = remote ?: return State.Builder().setAvailableCommands(commands).setPlaybackState(STATE_IDLE).build()
         fun JSONObject.text(key: String) = optString(key).takeUnless { it == "null" }.orEmpty()
@@ -60,6 +71,7 @@ internal class PcPlayer(private val send: (JSONObject) -> Unit) : SimpleBasePlay
         val playing = s.optBoolean("playing")
         val buffering = s.optBoolean("buffering")
         return State.Builder().setAvailableCommands(commands).setPlaylist(items).setCurrentMediaItemIndex(current)
+            .setDeviceInfo(PC_DEVICE).setDeviceVolume(steps(s))
             .setRepeatMode(if (loop) REPEAT_MODE_ALL else REPEAT_MODE_OFF)
             .setPlayWhenReady(playing, PLAY_WHEN_READY_CHANGE_REASON_REMOTE)
             .setPlaybackState(if (buffering) STATE_BUFFERING else STATE_READY)
@@ -88,5 +100,27 @@ internal class PcPlayer(private val send: (JSONObject) -> Unit) : SimpleBasePlay
             remote = remote?.let { JSONObject(it.toString()).put("position", ms) }
             order("seek") { it.put("position", ms) }
         }
+    }
+
+    // El volumen del ordenador, en pasos del 4 % (como Ctrl+flechas allí): con la sesión «remota», Android manda aquí
+    // las teclas de volumen del móvil mientras suena en el ordenador (como Spotify Connect).
+    private fun steps(s: JSONObject) = (s.optDouble("volume", .5).coerceIn(0.0, 1.0) * VOLUME_STEPS).roundToInt()
+
+    private fun setVolume(step: Int): ListenableFuture<*> {
+        val s = remote ?: return Futures.immediateVoidFuture()
+        val value = step.coerceIn(0, VOLUME_STEPS).toDouble() / VOLUME_STEPS
+        remote = JSONObject(s.toString()).put("volume", value)
+        asked = value to System.currentTimeMillis()
+        return order("volume") { it.put("value", value) }
+    }
+
+    override fun handleSetDeviceVolume(deviceVolume: Int, flags: Int): ListenableFuture<*> = setVolume(deviceVolume)
+    override fun handleIncreaseDeviceVolume(flags: Int): ListenableFuture<*> = setVolume(remote?.let(::steps)?.plus(1) ?: 0)
+    override fun handleDecreaseDeviceVolume(flags: Int): ListenableFuture<*> = setVolume(remote?.let(::steps)?.minus(1) ?: 0)
+
+    private companion object {
+        const val VOLUME_STEPS = 25
+        const val VOLUME_HOLD_MS = 1_500L
+        val PC_DEVICE: DeviceInfo = DeviceInfo.Builder(DeviceInfo.PLAYBACK_TYPE_REMOTE).setMinVolume(0).setMaxVolume(VOLUME_STEPS).build()
     }
 }
